@@ -16,8 +16,7 @@ const DEFAULT_USER_AGENT: &str = concat!(
     " (Headless Markdown Browser; +https://github.com/yingkitw/browsedown)"
 );
 
-/// Initialize global defaults (tracing, etc.)
+/// Initialize global defaults.
 pub fn init() -> Result<()> {
-    tracing_subscriber::fmt::init();
     Ok(())
 }

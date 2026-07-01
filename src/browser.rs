@@ -49,7 +49,6 @@ impl Browser {
             .timeout(options.timeout)
             .user_agent(&options.user_agent)
             .redirect(reqwest::redirect::Policy::default())
-            .cookie_store(true)
             .build()
             .context("Failed to build HTTP client")?;
 
