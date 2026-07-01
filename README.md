@@ -1,0 +1,53 @@
+# BrowseDown
+
+A headless browser that returns web pages as Markdown. Designed to minimize token usage when invoked via MCP (Model Context Protocol).
+
+## Why?
+
+Raw HTML is noisy: scripts, styles, ads, and markup bloat consume LLM context window. BrowseDown fetches a page and converts it to clean Markdown, preserving content hierarchy while stripping everything non-essential.
+
+## Quick Start
+
+```bash
+# Interactive terminal browser (default — Lynx-like)
+cargo run -- https://example.com
+# [1-20] follow numbered link  [b]ack  [f]orward  [u] enter URL  [q]uit
+
+# Fetch a page as Markdown (one-shot)
+cargo run -- fetch https://example.com
+
+# Limit output length
+cargo run -- fetch https://example.com --max-length 4000
+
+# Render with ANSI colors in the terminal (bold headings, underlined links)
+cargo run -- fetch https://example.com --render
+
+# Interactive terminal browser (explicit)
+cargo run -- browse https://example.com
+
+# Run as MCP server (stdio JSON-RPC)
+cargo run -- mcp
+```
+
+## Features
+
+- **Interactive terminal browser** (`browse`): Lynx-like navigation with numbered links, back/forward history
+- **ANSI rendering** (`--render`): Bold headings, underlined cyan links, colored code blocks in terminal output
+- **Table rendering**: Markdown tables drawn with box-drawing characters (`┌─┬─┐`)
+- **Iframe inlining**: Fetches `<iframe src="...">` content and embeds it into the parent page
+- **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, ads, and excessive whitespace
+- **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
+- **MCP server**: stdio JSON-RPC transport for LLM tool integration
+
+## Architecture
+
+- **Browser** (`browser.rs`): Minimal HTTP client with iframe inlining. No rendering engine—intentionally lightweight.
+- **PageToMarkdown** (`markdown.rs`): HTML-to-Markdown conversion. Strips scripts, styles, iframes, images (optional).
+- **McpServer** (`mcp.rs`): JSON-RPC server wrapper exposing a `fetch` tool.
+- **CLI** (`main.rs`): `fetch` (one-shot), `browse` (interactive), `mcp` (server). Default mode is `browse`.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
+
+## Project Status
+
+See [TODO.md](TODO.md) for remaining work and [SPEC.md](SPEC.md) for protocol contracts.
