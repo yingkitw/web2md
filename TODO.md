@@ -30,6 +30,9 @@
 - [x] Competitive intelligence: compared html2md vs htmd, html-to-markdown, Readability.js
 - [x] Code language detection: `<code class="language-xxx">` → ` ```xxx ` fenced blocks
 - [x] Deploy release binaries: optimized release profile + GitHub Actions CI/release workflows
+- [x] Metadata extraction: meta description, Open Graph description, author in MCP response
+- [x] `<header>` tag stripping with `--keep-header` opt-out flag
+- [x] Caching layer: in-memory cache with TTL (`--cache-ttl` flag)
 
 ## In Progress
 
@@ -38,9 +41,6 @@
 ## Brainstorming
 
 - Optional JavaScript execution via headless Chrome bridge (behind feature flag)
-- Caching layer for repeated fetches
 - Content hash deduplication
 - Readability-style content extraction (score-based main content detection)
-- Metadata extraction (Open Graph, JSON-LD, Twitter cards)
 - Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
-- `<header>` tag stripping (needs opt-out since some pages use it for article headers)

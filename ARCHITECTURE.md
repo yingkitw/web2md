@@ -10,9 +10,9 @@ main.rs
   └── mcp command     → McpServer → Browser → inline_iframes → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content
+  ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL
   ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; images)
-  └── mcp.rs       : JSON-RPC server wrapper
+  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author)
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)
@@ -33,7 +33,7 @@ URL ──► Browser.fetch() ──► raw HTML
                           PageToMarkdown.convert()
                                   │
                                   ├── strips <script>, <style>, <iframe>
-                                  ├── strips <nav>, <footer>, <aside>, <noscript>, <form>
+                                  ├── strips <nav>, <footer>, <aside>, <noscript>, <form>, <header> (unless keep_header)
                                   ├── strips HTML comments
                                   ├── extracts code languages from <code class="language-xxx">
                                   ├── strips <img> (unless include_images)

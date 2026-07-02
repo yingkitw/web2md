@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::{Client, ClientBuilder};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -23,6 +24,8 @@ pub struct BrowserOptions {
     pub headers: Vec<String>,
     /// Minimum delay between consecutive requests to the same host
     pub request_delay: Duration,
+    /// Cache TTL for fetched pages (zero = caching disabled)
+    pub cache_ttl: Duration,
 }
 
 impl Default for BrowserOptions {
@@ -35,6 +38,7 @@ impl Default for BrowserOptions {
             cookies: Vec::new(),
             headers: Vec::new(),
             request_delay: Duration::from_millis(0),
+            cache_ttl: Duration::from_secs(0),
         }
     }
 }
@@ -45,6 +49,7 @@ pub struct Browser {
     client: Client,
     options: BrowserOptions,
     last_request: Mutex<Option<Instant>>,
+    cache: Mutex<HashMap<String, (String, Instant)>>,
 }
 
 impl Browser {
@@ -61,6 +66,7 @@ impl Browser {
             client,
             options,
             last_request: Mutex::new(None),
+            cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -87,6 +93,13 @@ impl Browser {
 
     /// Fetch raw HTML from a URL
     pub async fn fetch(&self, url: &str) -> Result<String> {
+        // Check cache first
+        if !self.options.cache_ttl.is_zero() {
+            if let Some(cached) = self.lookup_cache(url) {
+                return Ok(cached);
+            }
+        }
+
         self.enforce_delay().await;
 
         let parsed = Url::parse(url).context("Invalid URL")?;
@@ -112,7 +125,26 @@ impl Browser {
         }
 
         let body = resp.text().await.context("Failed to read response body")?;
+
+        // Store in cache if enabled
+        if !self.options.cache_ttl.is_zero() {
+            let mut cache = self.cache.lock().unwrap();
+            cache.insert(url.to_string(), (body.clone(), Instant::now()));
+        }
+
         Ok(body)
+    }
+
+    /// Look up a URL in the cache, returning the body if not expired.
+    fn lookup_cache(&self, url: &str) -> Option<String> {
+        let mut cache = self.cache.lock().unwrap();
+        if let Some((body, fetched_at)) = cache.get(url) {
+            if fetched_at.elapsed() < self.options.cache_ttl {
+                return Some(body.clone());
+            }
+            cache.remove(url);
+        }
+        None
     }
 
     /// Replace `<iframe>` tags with the content fetched from their `src` attribute.
@@ -416,6 +448,76 @@ mod tests {
             "expected delay between requests, got {:?}",
             elapsed
         );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_cache_hit_avoids_second_request() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/cached")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Cached content</body></html>")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.cache_ttl = Duration::from_secs(60);
+        let browser = Browser::new(opts).unwrap();
+
+        let url = format!("{}/cached", server.url());
+        let html1 = browser.fetch(&url).await.unwrap();
+        let html2 = browser.fetch(&url).await.unwrap();
+
+        assert_eq!(html1, html2);
+        assert!(html1.contains("Cached content"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_cache_disabled_by_default() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/nocache")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Content</body></html>")
+            .expect(2)
+            .create_async()
+            .await;
+
+        let browser = Browser::new(BrowserOptions::default()).unwrap();
+
+        let url = format!("{}/nocache", server.url());
+        let _ = browser.fetch(&url).await.unwrap();
+        let _ = browser.fetch(&url).await.unwrap();
+
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_cache_expires_after_ttl() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/expiry")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Content</body></html>")
+            .expect(2)
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.cache_ttl = Duration::from_millis(50);
+        let browser = Browser::new(opts).unwrap();
+
+        let url = format!("{}/expiry", server.url());
+        let _ = browser.fetch(&url).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = browser.fetch(&url).await.unwrap();
+
         mock.assert_async().await;
     }
 }

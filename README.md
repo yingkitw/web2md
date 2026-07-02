@@ -38,11 +38,13 @@ cargo run -- mcp
 - **ANSI rendering** (`--render`): Bold headings, underlined cyan links, colored code blocks in terminal output
 - **Table rendering**: Markdown tables drawn with box-drawing characters (`┌─┬─┐`)
 - **Iframe inlining**: Fetches `<iframe src="...">` content and embeds it into the parent page
-- **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, HTML comments, and excessive whitespace
+- **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>`, HTML comments, and excessive whitespace (use `--keep-header` to preserve `<header>`)
 - **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)
 - **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
+- **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
+- **Metadata extraction**: Title, meta description, Open Graph description, and author returned in MCP response
 
 ## Architecture
 

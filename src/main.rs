@@ -54,6 +54,12 @@ enum Commands {
         /// Polite delay between consecutive requests in milliseconds
         #[arg(long)]
         delay: Option<u64>,
+        /// Keep <header> tags in output (stripped by default)
+        #[arg(long)]
+        keep_header: bool,
+        /// Cache TTL in seconds (0 = disabled, default: 0)
+        #[arg(long)]
+        cache_ttl: Option<u64>,
     },
     /// Interactive terminal browser (Lynx-like)
     Browse {
@@ -74,6 +80,12 @@ enum Commands {
         /// Polite delay between consecutive requests in milliseconds
         #[arg(long)]
         delay: Option<u64>,
+        /// Keep <header> tags in output (stripped by default)
+        #[arg(long)]
+        keep_header: bool,
+        /// Cache TTL in seconds (0 = disabled, default: 0)
+        #[arg(long)]
+        cache_ttl: Option<u64>,
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
@@ -88,7 +100,7 @@ async fn main() -> Result<()> {
         None => {
             if let Some(url) = cli.url {
                 let options = BrowserOptions::default();
-                browse_loop(url, options, false).await?;
+                browse_loop(url, options, false, false).await?;
             } else {
                 Cli::parse_from(["browsedown", "--help"]);
             }
@@ -103,6 +115,8 @@ async fn main() -> Result<()> {
             format,
             render,
             delay,
+            keep_header,
+            cache_ttl,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -110,6 +124,9 @@ async fn main() -> Result<()> {
             }
             if let Some(ms) = delay {
                 options.request_delay = Duration::from_millis(ms);
+            }
+            if let Some(secs) = cache_ttl {
+                options.cache_ttl = Duration::from_secs(secs);
             }
             options.cookies = cookie;
             options.headers = header;
@@ -119,7 +136,7 @@ async fn main() -> Result<()> {
 
             let mut output = match format {
                 OutputFormat::Markdown => {
-                    let md = PageToMarkdown::convert(&html, include_images)?;
+                    let md = PageToMarkdown::convert(&html, include_images, keep_header)?;
                     if render {
                         render_markdown_ansi(&md, false).0
                     } else {
@@ -144,6 +161,8 @@ async fn main() -> Result<()> {
             cookie,
             header,
             delay,
+            keep_header,
+            cache_ttl,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -152,9 +171,12 @@ async fn main() -> Result<()> {
             if let Some(ms) = delay {
                 options.request_delay = Duration::from_millis(ms);
             }
+            if let Some(secs) = cache_ttl {
+                options.cache_ttl = Duration::from_secs(secs);
+            }
             options.cookies = cookie;
             options.headers = header;
-            browse_loop(url, options, include_images).await?;
+            browse_loop(url, options, include_images, keep_header).await?;
         }
         Some(Commands::Mcp) => {
             let server = McpServer::new()?;
@@ -166,7 +188,7 @@ async fn main() -> Result<()> {
 }
 
 /// Interactive Lynx-like browser loop.
-async fn browse_loop(start_url: String, options: BrowserOptions, include_images: bool) -> Result<()> {
+async fn browse_loop(start_url: String, options: BrowserOptions, include_images: bool, keep_header: bool) -> Result<()> {
     let mut history = vec![start_url];
     let mut current = 0;
     let stdin = io::stdin();
@@ -195,7 +217,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
             }
         };
 
-        let md = PageToMarkdown::convert(&html, include_images)?;
+        let md = PageToMarkdown::convert(&html, include_images, keep_header)?;
         let (rendered, links) = render_markdown_ansi(&md, true);
         println!("{}", rendered);
 

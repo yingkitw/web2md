@@ -27,6 +27,9 @@ browsedown fetch <URL> [FLAGS]
   --format markdown    Output as Markdown (default)
   --format html        Output raw HTML
   --render             ANSI colors: bold headings, underlined links, colored code
+  --delay MS           Polite delay between requests in milliseconds
+  --keep-header        Preserve <header> tags (stripped by default)
+  --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
 
 # MCP server (stdio JSON-RPC)
 browsedown mcp
@@ -38,6 +41,7 @@ browsedown mcp
 {
   "url": "https://example.com/article",
   "include_images": false,
+  "keep_header": false,
   "max_length": 4000
 }
 ```
@@ -48,9 +52,13 @@ browsedown mcp
 {
   "url": "https://example.com/article",
   "markdown": "# Article Title\n\nBody content...",
-  "title": "Article Title"
+  "title": "Article Title",
+  "description": "A summary of the article",
+  "author": "Jane Doe"
 }
 ```
+
+`description` and `author` are optional — omitted when the page has no corresponding meta tags.
 
 ## HTML Processing Pipeline
 
@@ -58,7 +66,7 @@ browsedown mcp
 2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content
 3. **PageToMarkdown.convert()** → Markdown
    - Strip `<script>`, `<style>`, `<iframe>`
-   - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, HTML comments
+   - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
    - Extract code languages from `<code class="language-xxx">`
    - Strip `<img>` unless `include_images` is true
    - Inject languages into fenced code blocks (` ```rust `)
