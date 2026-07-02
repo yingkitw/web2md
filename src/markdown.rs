@@ -297,7 +297,142 @@ impl PageToMarkdown {
             }
             break;
         }
-        html.to_string()
+        // Readability fallback: score top-level <div> elements by text density
+        Self::readability_extract(html)
+    }
+
+    /// Readability-based content extraction.
+    /// Scores top-level `<div>` and `<section>` blocks by text density and link density.
+    /// Returns the inner HTML of the highest-scoring block, or the full HTML if no suitable block is found.
+    fn readability_extract(html: &str) -> String {
+        let candidates = Self::find_top_level_blocks(html);
+        if candidates.is_empty() {
+            return html.to_string();
+        }
+
+        let mut best_score = 0i64;
+        let mut best_html = None;
+
+        for (content, _tag) in &candidates {
+            let text_len = Self::count_text_chars(content) as i64;
+            let link_text_len = Self::count_link_text_chars(content) as i64;
+            // Score: text content minus link text (navigation penalized)
+            let score = text_len - link_text_len;
+            if score > best_score {
+                best_score = score;
+                best_html = Some(content.clone());
+            }
+        }
+
+        // Only use readability result if the best block has meaningful content (>100 chars of non-link text)
+        if best_score > 100 {
+            best_html.unwrap_or_else(|| html.to_string())
+        } else {
+            html.to_string()
+        }
+    }
+
+    /// Find top-level `<div>` and `<section>` blocks in HTML.
+    /// Returns a list of (inner_html, tag_name) pairs, respecting nesting depth.
+    fn find_top_level_blocks(html: &str) -> Vec<(String, &'static str)> {
+        let mut blocks = Vec::new();
+        for tag in &["div", "section"] {
+            let open = format!("<{}", tag);
+            let close = format!("</{}>", tag);
+            let mut i = 0;
+            while i < html.len() {
+                if let Some(pos) = find_ci(&html[i..], &open) {
+                    let pos = i + pos;
+                    if let Some(gt) = html[pos..].find('>') {
+                        let content_start = pos + gt + 1;
+                        // Find matching close tag, respecting nesting
+                        if let Some(end) = Self::find_matching_close(html, content_start, &open, &close) {
+                            blocks.push((html[content_start..end].to_string(), *tag));
+                            i = end + close.len();
+                            continue;
+                        }
+                    }
+                    i = pos + 1;
+                } else {
+                    break;
+                }
+            }
+        }
+        blocks
+    }
+
+    /// Find the matching close tag for an HTML block, respecting nesting depth.
+    fn find_matching_close(html: &str, start: usize, open: &str, close: &str) -> Option<usize> {
+        let mut depth = 1;
+        let mut i = start;
+        while i < html.len() {
+            let rest = &html[i..];
+            let next_open = find_ci(rest, open).map(|p| i + p);
+            let next_close = find_ci(rest, close).map(|p| i + p);
+            match (next_open, next_close) {
+                (Some(o), Some(c)) if o < c => {
+                    depth += 1;
+                    i = o + open.len();
+                }
+                (_, Some(c)) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(c);
+                    }
+                    i = c + close.len();
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    /// Count visible text characters in HTML (excluding tag content and whitespace).
+    fn count_text_chars(html: &str) -> usize {
+        let mut count = 0;
+        let mut in_tag = false;
+        for c in html.chars() {
+            if c == '<' {
+                in_tag = true;
+            } else if c == '>' {
+                in_tag = false;
+            } else if !in_tag && !c.is_ascii_whitespace() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Count text characters inside `<a>` tags (used as a proxy for link/navigation density).
+    fn count_link_text_chars(html: &str) -> usize {
+        let mut count = 0;
+        let mut i = 0;
+        while i < html.len() {
+            if let Some(pos) = find_ci(&html[i..], "<a") {
+                let pos = i + pos;
+                // Ensure this is an <a> tag, not <article>, <aside>, etc.
+                let after = &html[pos + 2..];
+                let next_char = after.chars().next();
+                if next_char != Some(' ') && next_char != Some('>') && next_char != Some('\t') && next_char != Some('\n') && next_char != Some('\r') {
+                    i = pos + 2;
+                    continue;
+                }
+                if let Some(gt) = html[pos..].find('>') {
+                    let content_start = pos + gt + 1;
+                    if let Some(end) = find_ci(&html[content_start..], "</a>") {
+                        let end_abs = content_start + end;
+                        let link_text = &html[content_start..end_abs];
+                        count += Self::count_text_chars(link_text);
+                        i = end_abs + "</a>".len();
+                        continue;
+                    }
+                }
+                i = pos + 1;
+            } else {
+                break;
+            }
+        }
+        count
     }
 
     /// Remove duplicate paragraph-level blocks from Markdown.
@@ -634,5 +769,48 @@ mod tests {
         let html = r#"<nav>Navigation</nav><article><p>Article content here.</p></article><footer>Footer</footer>"#;
         let md = PageToMarkdown::convert(html, false, false, false).unwrap();
         assert!(md.contains("Article content"));
+    }
+
+    #[test]
+    fn readability_extracts_content_div_from_layout() {
+        let html = r#"<div><a href="/">Home</a><a href="/about">About</a><a href="/contact">Contact</a><a href="/blog">Blog</a><a href="/shop">Shop</a></div><div><h2>Article Title</h2><p>This is a substantial article body with enough text content to score well in the readability algorithm. It contains meaningful paragraphs of text that should be extracted as the main content of the page, far exceeding the navigation links above.</p><p>Another paragraph with additional content to further increase the text density score of this content block compared to the navigation block which consists mostly of short link texts.</p></div>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        assert!(md.contains("substantial article body"));
+        assert!(!md.contains("Shop"));
+    }
+
+    #[test]
+    fn readability_falls_back_when_no_semantic_tags() {
+        let html = r#"<div><a href="/">Home</a><a href="/about">About</a></div><div><p>This is the main content paragraph with enough text to exceed the readability threshold for extraction. It has substantial body text that should be identified as the primary content block by the scoring algorithm.</p></div>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        assert!(md.contains("main content paragraph"));
+        assert!(!md.contains("About"));
+    }
+
+    #[test]
+    fn readability_returns_full_html_when_no_good_candidate() {
+        let html = r#"<div><p>Short.</p></div><div><p>Brief.</p></div>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        assert!(md.contains("Short") || md.contains("Brief"));
+    }
+
+    #[test]
+    fn readability_prefers_text_over_navigation() {
+        let nav_html = r#"<div><a href="/a">Link A</a><a href="/b">Link B</a><a href="/c">Link C</a></div>"#;
+        let content_html = r#"<div><p>This block has substantial text content that should score higher than the navigation block which only contains short link texts. The readability algorithm should correctly identify this as the main content area of the page.</p></div>"#;
+        let html = format!("{}{}", nav_html, content_html);
+        let md = PageToMarkdown::convert(&html, false, false, true).unwrap();
+        assert!(md.contains("substantial text content"));
+        assert!(!md.contains("Link A"));
+        assert!(!md.contains("Link B"));
+        assert!(!md.contains("Link C"));
+    }
+
+    #[test]
+    fn readability_section_tag_supported() {
+        let html = r#"<section><a href="/x">Short</a><a href="/y">Short2</a></section><section><p>This section contains the primary article content with enough text to be identified by the readability scoring algorithm as the main content block on the page, exceeding the navigation section in text density.</p></section>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        assert!(md.contains("primary article content"));
+        assert!(!md.contains("Short2"));
     }
 }

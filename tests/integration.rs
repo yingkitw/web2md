@@ -203,3 +203,28 @@ fn cli_render_adds_ansi_codes() {
     // ANSI escape codes should be present when --render is used
     assert!(stdout.contains('\x1b'), "expected ANSI escape codes in rendered output");
 }
+
+#[tokio::test]
+async fn readability_main_content_extracts_from_div_layout() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/layout")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"<html><body>
+            <div><a href="/">Home</a><a href="/about">About</a><a href="/contact">Contact</a></div>
+            <div><h2>Real Article</h2><p>This is the main article content with enough text to be extracted by the readability scoring algorithm. It contains substantial paragraphs that should score higher than the navigation div above.</p></div>
+            </body></html>"#,
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let html = browser.fetch(&format!("{}/layout", server.url())).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, true).unwrap();
+
+    assert!(md.contains("main article content"));
+    assert!(!md.contains("Contact"));
+    mock.assert_async().await;
+}

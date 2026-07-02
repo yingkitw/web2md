@@ -67,7 +67,7 @@ web2md mcp
 1. **Browser.fetch()** → raw HTML
 2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content
 3. **PageToMarkdown.convert()** → Markdown
-   - Extract main content if `main_content` is true (`<article>`, `<main>`, `[role="main"]`)
+   - Extract main content if `main_content` is true (`<article>`, `<main>`, `[role="main"]`, or readability fallback: text-density scoring of top-level `<div>`/`<section>` blocks)
    - Strip `<script>`, `<style>`, `<iframe>`
    - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
    - Extract code languages from `<code class="language-xxx">`

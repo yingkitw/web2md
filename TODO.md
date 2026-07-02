@@ -35,6 +35,7 @@
 - [x] Caching layer: in-memory cache with TTL (`--cache-ttl` flag)
 - [x] Content hash deduplication: removes duplicate paragraph-level blocks in Markdown output
 - [x] Main content extraction: extracts `<article>`, `<main>`, or `[role="main"]` content (`--main-content` flag)
+- [x] Readability scoring: text-density and link-density scoring fallback for pages without semantic tags
 
 ## In Progress
 
@@ -44,4 +45,10 @@
 
 - Optional JavaScript execution via headless Chrome bridge (behind feature flag)
 - Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
-- Full readability scoring algorithm (text density, link density, paragraph scoring) for pages without semantic tags
+- Paragraph-level readability scoring (text density per paragraph, not just per div/section)
+- Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
+- Publication date extraction: `<time>`, `<meta property="article:published_time">`, JSON-LD `datePublished`
+- JSON-LD structured data extraction: article schema, author, date, image
+- Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags
+- Comments extraction for forum pages (Reddit, vBulletin) via Trafilatura-style algorithm
+- `--output json` flag: emit structured JSON (markdown + metadata) from CLI, not just MCP

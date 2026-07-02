@@ -40,7 +40,7 @@ cargo run -- mcp
 - **Iframe inlining**: Fetches `<iframe src="...">` content and embeds it into the parent page
 - **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>`, HTML comments, and excessive whitespace (use `--keep-header` to preserve `<header>`)
 - **Content deduplication**: Removes duplicate paragraph-level blocks to further reduce token output
-- **Main content extraction** (`--main-content`): Extracts only `<article>`, `<main>`, or `[role="main"]` content, discarding sidebars and navigation
+- **Main content extraction** (`--main-content`): Extracts `<article>`, `<main>`, or `[role="main"]` content; falls back to readability scoring (text-density vs link-density) on `<div>`/`<section>` blocks for pages without semantic tags
 - **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)
 - **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers

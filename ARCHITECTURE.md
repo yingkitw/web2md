@@ -11,7 +11,7 @@ main.rs
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL
-  ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction; dedup; images)
+  ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback; dedup; images)
   └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author)
 
 main.rs (helpers)
@@ -32,7 +32,7 @@ URL ──► Browser.fetch() ──► raw HTML
                                   ▼
                           PageToMarkdown.convert()
                                   │
-                                  ├── extracts main content (if --main-content: <article>, <main>, [role=main])
+                                  ├── extracts main content (if --main-content: <article>, <main>, [role=main], or readability fallback scoring top-level <div>/<section> by text density vs link density)
                                   ├── strips <script>, <style>, <iframe>
                                   ├── strips <nav>, <footer>, <aside>, <noscript>, <form>, <header> (unless keep_header)
                                   ├── strips HTML comments
