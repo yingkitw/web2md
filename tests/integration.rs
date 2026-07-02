@@ -1,4 +1,4 @@
-use browsedown::{Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use std::time::Duration;
 
 #[tokio::test]
@@ -182,7 +182,7 @@ async fn strips_noise_tags_in_integration() {
 fn cli_format_html_emits_raw_html() {
     let output = std::process::Command::new("cargo")
         .args(["run", "--", "fetch", "--format", "html", "https://example.com"])
-        .current_dir("/Users/yingkitw/Desktop/myproject/browsedown")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("cargo run failed");
 
@@ -195,7 +195,7 @@ fn cli_format_html_emits_raw_html() {
 fn cli_render_adds_ansi_codes() {
     let output = std::process::Command::new("cargo")
         .args(["run", "--", "fetch", "--render", "https://example.com"])
-        .current_dir("/Users/yingkitw/Desktop/myproject/browsedown")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
         .expect("cargo run failed");
 

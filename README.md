@@ -1,10 +1,10 @@
-# BrowseDown
+# Web2MD
 
-A headless browser that returns web pages as Markdown. Designed to minimize token usage when invoked via MCP (Model Context Protocol).
+A tool that fetches web pages and returns them as Markdown. Designed to minimize token usage when invoked via MCP (Model Context Protocol).
 
 ## Why?
 
-Raw HTML is noisy: scripts, styles, ads, and markup bloat consume LLM context window. BrowseDown fetches a page and converts it to clean Markdown, preserving content hierarchy while stripping everything non-essential.
+Raw HTML is noisy: scripts, styles, ads, and markup bloat consume LLM context window. Web2MD fetches a page and converts it to clean Markdown, preserving content hierarchy while stripping everything non-essential.
 
 ## Quick Start
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use browsedown::{Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use clap::{Parser, Subcommand, ValueEnum};
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
@@ -14,7 +14,7 @@ enum OutputFormat {
 }
 
 #[derive(Parser)]
-#[command(name = "browsedown")]
+#[command(name = "web2md")]
 #[command(about = "Headless browser that returns pages as Markdown")]
 #[command(arg_required_else_help = false)]
 struct Cli {
@@ -99,7 +99,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    browsedown::init()?;
+    web2md::init()?;
     let cli = Cli::parse();
 
     match cli.command {
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
                 let options = BrowserOptions::default();
                 browse_loop(url, options, false, false, false).await?;
             } else {
-                Cli::parse_from(["browsedown", "--help"]);
+                Cli::parse_from(["web2md", "--help"]);
             }
         }
         Some(Commands::Fetch {
@@ -208,7 +208,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
 
         // Clear screen + header bar
         print!("\x1b[2J\x1b[H");
-        println!("\x1b[7m BROWSEDOWN \x1b[0m \x1b[90m{}\x1b[0m\n", url);
+        println!("\x1b[7m WEB2MD \x1b[0m \x1b[90m{}\x1b[0m\n", url);
         io::stdout().flush()?;
 
         let html = match browser.fetch(&url).await {

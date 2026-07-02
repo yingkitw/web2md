@@ -2,7 +2,7 @@
 
 ## Scope
 
-BrowseDown is a headless browser crate that fetches web pages and returns them as Markdown. It is optimized for MCP (Model Context Protocol) integration where token efficiency is critical. It also functions as a minimal terminal browser (Lynx-like) for human use.
+Web2MD is a tool that fetches web pages and returns them as Markdown. It is optimized for MCP (Model Context Protocol) integration where token efficiency is critical. It also functions as a minimal terminal browser (Lynx-like) for human use.
 
 ## Non-Goals
 
@@ -14,11 +14,11 @@ BrowseDown is a headless browser crate that fetches web pages and returns them a
 
 ```bash
 # Default: interactive terminal browser (Lynx-like)
-browsedown <URL>
+web2md <URL>
 # Controls: [1-N] follow link, [b]ack, [f]orward, [u] enter URL, [q]uit
 
 # One-shot fetch to stdout
-browsedown fetch <URL> [FLAGS]
+web2md fetch <URL> [FLAGS]
   --max-length N       Truncate output after N characters
   --timeout SECONDS    Request timeout (default: 30)
   --include-images     Emit Markdown image references
@@ -33,7 +33,7 @@ browsedown fetch <URL> [FLAGS]
   --main-content       Extract only <article>, <main>, or [role=main] content
 
 # MCP server (stdio JSON-RPC)
-browsedown mcp
+web2md mcp
 ```
 
 ### MCP JSON-RPC Request

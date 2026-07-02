@@ -1,15 +1,15 @@
 [package]
-name = "browsedown"
+name = "web2md"
 version = "0.1.0"
 edition = "2021"
 authors = ["Ying Kit WONG"]
-description = "A headless browser that returns web pages as Markdown for MCP token efficiency"
+description = "A tool that fetches web pages and returns them as Markdown for MCP token efficiency"
 license = "Apache-2.0"
-repository = "https://github.com/yingkitw/browsedown"
-documentation = "https://docs.rs/browsedown"
-homepage = "https://github.com/yingkitw/browsedown"
+repository = "https://github.com/yingkitw/web2md"
+documentation = "https://docs.rs/web2md"
+homepage = "https://github.com/yingkitw/web2md"
 categories = ["web-programming::http-client", "development-tools::build-utils"]
-keywords = ["mcp", "browser", "markdown", "web-scraping", "headless"]
+keywords = ["mcp", "markdown", "web-scraping", "html", "converter"]
 
 [dependencies]
 reqwest = "0.12"
@@ -26,11 +26,11 @@ pulldown-cmark = "0.12"
 mockito = "1.4"
 
 [[bin]]
-name = "browsedown"
+name = "web2md"
 path = "src/main.rs"
 
 [lib]
-name = "browsedown"
+name = "web2md"
 path = "src/lib.rs"
 
 [profile.release]

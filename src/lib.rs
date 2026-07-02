@@ -11,9 +11,9 @@ pub use mcp::{McpRequest, McpResponse, McpServer};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_USER_AGENT: &str = concat!(
-    "BrowseDown/",
+    "Web2MD/",
     env!("CARGO_PKG_VERSION"),
-    " (Headless Markdown Browser; +https://github.com/yingkitw/browsedown)"
+    " (Web to Markdown Converter; +https://github.com/yingkitw/web2md)"
 );
 
 /// Initialize global defaults.

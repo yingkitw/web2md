@@ -1,6 +1,6 @@
 # Agent Development Loop
 
-This document defines the continuous improvement cycle for the BrowseDown project.
+This document defines the continuous improvement cycle for the Web2MD project.
 
 ## The Loop
 
