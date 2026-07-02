@@ -60,6 +60,9 @@ enum Commands {
         /// Cache TTL in seconds (0 = disabled, default: 0)
         #[arg(long)]
         cache_ttl: Option<u64>,
+        /// Extract only main content from <article>, <main>, or [role=main] elements
+        #[arg(long)]
+        main_content: bool,
     },
     /// Interactive terminal browser (Lynx-like)
     Browse {
@@ -86,6 +89,9 @@ enum Commands {
         /// Cache TTL in seconds (0 = disabled, default: 0)
         #[arg(long)]
         cache_ttl: Option<u64>,
+        /// Extract only main content from <article>, <main>, or [role=main] elements
+        #[arg(long)]
+        main_content: bool,
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
@@ -100,7 +106,7 @@ async fn main() -> Result<()> {
         None => {
             if let Some(url) = cli.url {
                 let options = BrowserOptions::default();
-                browse_loop(url, options, false, false).await?;
+                browse_loop(url, options, false, false, false).await?;
             } else {
                 Cli::parse_from(["browsedown", "--help"]);
             }
@@ -117,6 +123,7 @@ async fn main() -> Result<()> {
             delay,
             keep_header,
             cache_ttl,
+            main_content,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -136,7 +143,7 @@ async fn main() -> Result<()> {
 
             let mut output = match format {
                 OutputFormat::Markdown => {
-                    let md = PageToMarkdown::convert(&html, include_images, keep_header)?;
+                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
                     if render {
                         render_markdown_ansi(&md, false).0
                     } else {
@@ -163,6 +170,7 @@ async fn main() -> Result<()> {
             delay,
             keep_header,
             cache_ttl,
+            main_content,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -176,7 +184,7 @@ async fn main() -> Result<()> {
             }
             options.cookies = cookie;
             options.headers = header;
-            browse_loop(url, options, include_images, keep_header).await?;
+            browse_loop(url, options, include_images, keep_header, main_content).await?;
         }
         Some(Commands::Mcp) => {
             let server = McpServer::new()?;
@@ -188,7 +196,7 @@ async fn main() -> Result<()> {
 }
 
 /// Interactive Lynx-like browser loop.
-async fn browse_loop(start_url: String, options: BrowserOptions, include_images: bool, keep_header: bool) -> Result<()> {
+async fn browse_loop(start_url: String, options: BrowserOptions, include_images: bool, keep_header: bool, main_content: bool) -> Result<()> {
     let mut history = vec![start_url];
     let mut current = 0;
     let stdin = io::stdin();
@@ -217,7 +225,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
             }
         };
 
-        let md = PageToMarkdown::convert(&html, include_images, keep_header)?;
+        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
         let (rendered, links) = render_markdown_ansi(&md, true);
         println!("{}", rendered);
 

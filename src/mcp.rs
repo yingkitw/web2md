@@ -13,6 +13,8 @@ pub struct McpRequest {
     #[serde(default)]
     pub keep_header: bool,
     #[serde(default)]
+    pub main_content: bool,
+    #[serde(default)]
     pub max_length: Option<usize>,
 }
 
@@ -44,7 +46,7 @@ impl McpServer {
     pub async fn handle(&self, req: McpRequest) -> Result<McpResponse> {
         let html = self.browser.fetch(&req.url).await?;
         let html = self.browser.inline_iframes(&html, &req.url).await?;
-        let mut markdown = PageToMarkdown::convert(&html, req.include_images, req.keep_header)?;
+        let mut markdown = PageToMarkdown::convert(&html, req.include_images, req.keep_header, req.main_content)?;
 
         if let Some(max) = req.max_length {
             if markdown.len() > max {
@@ -136,6 +138,7 @@ mod tests {
                 url: format!("{}/doc", server.url()),
                 include_images: false,
                 keep_header: false,
+                main_content: false,
                 max_length: None,
             })
             .await
@@ -169,6 +172,7 @@ mod tests {
                 url: format!("{}/meta", server.url()),
                 include_images: false,
                 keep_header: false,
+                main_content: false,
                 max_length: None,
             })
             .await
@@ -200,6 +204,7 @@ mod tests {
                 url: format!("{}/og", server.url()),
                 include_images: false,
                 keep_header: false,
+                main_content: false,
                 max_length: None,
             })
             .await
@@ -227,6 +232,7 @@ mod tests {
                 url: format!("{}/bare", server.url()),
                 include_images: false,
                 keep_header: false,
+                main_content: false,
                 max_length: None,
             })
             .await

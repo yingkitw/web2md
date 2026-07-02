@@ -30,6 +30,7 @@ browsedown fetch <URL> [FLAGS]
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
   --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
+  --main-content       Extract only <article>, <main>, or [role=main] content
 
 # MCP server (stdio JSON-RPC)
 browsedown mcp
@@ -42,6 +43,7 @@ browsedown mcp
   "url": "https://example.com/article",
   "include_images": false,
   "keep_header": false,
+  "main_content": false,
   "max_length": 4000
 }
 ```
@@ -65,11 +67,13 @@ browsedown mcp
 1. **Browser.fetch()** → raw HTML
 2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content
 3. **PageToMarkdown.convert()** → Markdown
+   - Extract main content if `main_content` is true (`<article>`, `<main>`, `[role="main"]`)
    - Strip `<script>`, `<style>`, `<iframe>`
    - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
    - Extract code languages from `<code class="language-xxx">`
    - Strip `<img>` unless `include_images` is true
    - Inject languages into fenced code blocks (` ```rust `)
+   - Deduplicate repeated paragraph-level blocks (>20 chars, first occurrence kept)
    - Collapse excessive whitespace
 4. **render_markdown_ansi()** → ANSI-styled terminal output (when `--render` or `browse`)
    - Headings: bold + color-coded by level

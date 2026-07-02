@@ -18,7 +18,7 @@ async fn fetch_and_convert_to_markdown() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/article", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
 
     assert!(md.contains("Heading"));
     assert!(md.contains("First paragraph."));
@@ -65,6 +65,7 @@ async fn mcp_server_end_to_end() {
             url: format!("{}/doc", server.url()),
             include_images: false,
             keep_header: false,
+            main_content: false,
             max_length: None,
         })
         .await
@@ -96,6 +97,7 @@ async fn mcp_server_max_length_truncation() {
             url: format!("{}/long", server.url()),
             include_images: false,
             keep_header: false,
+            main_content: false,
             max_length: Some(100),
         })
         .await
@@ -134,7 +136,7 @@ async fn strips_scripts_and_styles_in_integration() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/styled", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
 
     assert!(!md.contains("alert"));
     assert!(!md.contains("color:red"));
@@ -165,7 +167,7 @@ async fn strips_noise_tags_in_integration() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/noisy", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
 
     assert!(md.contains("Real content here"));
     assert!(!md.contains("Home"));

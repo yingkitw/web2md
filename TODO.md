@@ -33,6 +33,8 @@
 - [x] Metadata extraction: meta description, Open Graph description, author in MCP response
 - [x] `<header>` tag stripping with `--keep-header` opt-out flag
 - [x] Caching layer: in-memory cache with TTL (`--cache-ttl` flag)
+- [x] Content hash deduplication: removes duplicate paragraph-level blocks in Markdown output
+- [x] Main content extraction: extracts `<article>`, `<main>`, or `[role="main"]` content (`--main-content` flag)
 
 ## In Progress
 
@@ -41,6 +43,5 @@
 ## Brainstorming
 
 - Optional JavaScript execution via headless Chrome bridge (behind feature flag)
-- Content hash deduplication
-- Readability-style content extraction (score-based main content detection)
 - Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
+- Full readability scoring algorithm (text density, link density, paragraph scoring) for pages without semantic tags
