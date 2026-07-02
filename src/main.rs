@@ -51,6 +51,9 @@ enum Commands {
         /// Render Markdown with ANSI colors and formatting in the terminal
         #[arg(short, long)]
         render: bool,
+        /// Polite delay between consecutive requests in milliseconds
+        #[arg(long)]
+        delay: Option<u64>,
     },
     /// Interactive terminal browser (Lynx-like)
     Browse {
@@ -68,6 +71,9 @@ enum Commands {
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
+        /// Polite delay between consecutive requests in milliseconds
+        #[arg(long)]
+        delay: Option<u64>,
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
@@ -96,10 +102,14 @@ async fn main() -> Result<()> {
             header,
             format,
             render,
+            delay,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
                 options.timeout = Duration::from_secs(secs);
+            }
+            if let Some(ms) = delay {
+                options.request_delay = Duration::from_millis(ms);
             }
             options.cookies = cookie;
             options.headers = header;
@@ -133,10 +143,14 @@ async fn main() -> Result<()> {
             include_images,
             cookie,
             header,
+            delay,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
                 options.timeout = Duration::from_secs(secs);
+            }
+            if let Some(ms) = delay {
+                options.request_delay = Duration::from_millis(ms);
             }
             options.cookies = cookie;
             options.headers = header;

@@ -58,7 +58,10 @@ browsedown mcp
 2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content
 3. **PageToMarkdown.convert()** → Markdown
    - Strip `<script>`, `<style>`, `<iframe>`
+   - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, HTML comments
+   - Extract code languages from `<code class="language-xxx">`
    - Strip `<img>` unless `include_images` is true
+   - Inject languages into fenced code blocks (` ```rust `)
    - Collapse excessive whitespace
 4. **render_markdown_ansi()** → ANSI-styled terminal output (when `--render` or `browse`)
    - Headings: bold + color-coded by level

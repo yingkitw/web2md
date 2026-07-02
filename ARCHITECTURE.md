@@ -11,7 +11,7 @@ main.rs
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content
-  ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, images)
+  ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; images)
   └── mcp.rs       : JSON-RPC server wrapper
 
 main.rs (helpers)
@@ -33,7 +33,11 @@ URL ──► Browser.fetch() ──► raw HTML
                           PageToMarkdown.convert()
                                   │
                                   ├── strips <script>, <style>, <iframe>
+                                  ├── strips <nav>, <footer>, <aside>, <noscript>, <form>
+                                  ├── strips HTML comments
+                                  ├── extracts code languages from <code class="language-xxx">
                                   ├── strips <img> (unless include_images)
+                                  ├── injects languages into fenced code blocks
                                   └── collapses excessive whitespace
                                   │
                                   ▼
@@ -67,4 +71,5 @@ URL ──► Browser.fetch() ──► raw HTML
 - Local interactive: `cargo run -- <URL>` (browse mode)
 - Local one-shot: `cargo run -- fetch <URL> [--render]`
 - MCP Host: `cargo run -- mcp` (stdio transport)
-- Future: release binary for standalone use
+- Release binary: `cargo build --release` (LTO + stripped, ~4MB)
+- CI/Release: GitHub Actions builds for Linux (x86_64/aarch64), macOS (x86_64/aarch64), Windows (x86_64) on tag push

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::{Client, ClientBuilder};
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use url::Url;
 
 use crate::{DEFAULT_TIMEOUT, DEFAULT_USER_AGENT};
@@ -20,6 +21,8 @@ pub struct BrowserOptions {
     pub cookies: Vec<String>,
     /// Custom HTTP headers to send with every request (format: "Name: Value")
     pub headers: Vec<String>,
+    /// Minimum delay between consecutive requests to the same host
+    pub request_delay: Duration,
 }
 
 impl Default for BrowserOptions {
@@ -31,6 +34,7 @@ impl Default for BrowserOptions {
             enable_javascript: false,
             cookies: Vec::new(),
             headers: Vec::new(),
+            request_delay: Duration::from_millis(0),
         }
     }
 }
@@ -40,6 +44,7 @@ impl Default for BrowserOptions {
 pub struct Browser {
     client: Client,
     options: BrowserOptions,
+    last_request: Mutex<Option<Instant>>,
 }
 
 impl Browser {
@@ -52,11 +57,38 @@ impl Browser {
             .build()
             .context("Failed to build HTTP client")?;
 
-        Ok(Self { client, options })
+        Ok(Self {
+            client,
+            options,
+            last_request: Mutex::new(None),
+        })
+    }
+
+    /// Enforce the configured polite delay between requests.
+    async fn enforce_delay(&self) {
+        let delay = self.options.request_delay;
+        if delay.is_zero() {
+            return;
+        }
+        let mut guard = self.last_request.lock().unwrap();
+        if let Some(last) = *guard {
+            let elapsed = last.elapsed();
+            if elapsed < delay {
+                let remaining = delay - elapsed;
+                drop(guard);
+                tokio::time::sleep(remaining).await;
+                let mut guard = self.last_request.lock().unwrap();
+                *guard = Some(Instant::now());
+                return;
+            }
+        }
+        *guard = Some(Instant::now());
     }
 
     /// Fetch raw HTML from a URL
     pub async fn fetch(&self, url: &str) -> Result<String> {
+        self.enforce_delay().await;
+
         let parsed = Url::parse(url).context("Invalid URL")?;
 
         let mut req = self.client.get(parsed.clone());
@@ -356,5 +388,34 @@ mod tests {
         assert!(inlined.contains("Nested"));
         assert!(!inlined.contains("<iframe"));
         iframe_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_enforces_request_delay() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/page")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Hello</body></html>")
+            .expect(2)
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.request_delay = Duration::from_millis(200);
+        let browser = Browser::new(opts).unwrap();
+
+        let start = Instant::now();
+        let _ = browser.fetch(&format!("{}/page", server.url())).await.unwrap();
+        let _ = browser.fetch(&format!("{}/page", server.url())).await.unwrap();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed >= Duration::from_millis(200),
+            "expected delay between requests, got {:?}",
+            elapsed
+        );
+        mock.assert_async().await;
     }
 }

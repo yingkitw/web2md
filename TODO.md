@@ -25,17 +25,22 @@
 - [x] Numbered links in browse mode: `[N]` prefix before each link
 - [x] Fix empty-text links not getting numbered
 - [x] Fix raw `[text](url)` Markdown links from html2md multi-line output
+- [x] Rate limiting / polite delay between requests (`--delay` flag)
+- [x] Noise tag stripping: `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, HTML comments
+- [x] Competitive intelligence: compared html2md vs htmd, html-to-markdown, Readability.js
+- [x] Code language detection: `<code class="language-xxx">` → ` ```xxx ` fenced blocks
+- [x] Deploy release binaries: optimized release profile + GitHub Actions CI/release workflows
 
 ## In Progress
 
 ## Pending
-
-- [ ] Rate limiting / polite delay between requests
-- [ ] Competitive intelligence: compare html2md output vs other converters
-- [ ] Deploy release binaries
 
 ## Brainstorming
 
 - Optional JavaScript execution via headless Chrome bridge (behind feature flag)
 - Caching layer for repeated fetches
 - Content hash deduplication
+- Readability-style content extraction (score-based main content detection)
+- Metadata extraction (Open Graph, JSON-LD, Twitter cards)
+- Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
+- `<header>` tag stripping (needs opt-out since some pages use it for article headers)

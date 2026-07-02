@@ -140,6 +140,40 @@ async fn strips_scripts_and_styles_in_integration() {
     mock.assert_async().await;
 }
 
+#[tokio::test]
+async fn strips_noise_tags_in_integration() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/noisy")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"<html>
+             <head><!-- tracking comment --></head>
+             <body>
+                <nav><a href="/">Home</a></nav>
+                <p>Real content here</p>
+                <aside>Related links</aside>
+                <noscript>Enable JS</noscript>
+                <footer>Copyright 2025</footer>
+             </body></html>"#,
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let html = browser.fetch(&format!("{}/noisy", server.url())).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false).unwrap();
+
+    assert!(md.contains("Real content here"));
+    assert!(!md.contains("Home"));
+    assert!(!md.contains("Related links"));
+    assert!(!md.contains("Enable JS"));
+    assert!(!md.contains("Copyright"));
+    assert!(!md.contains("tracking"));
+    mock.assert_async().await;
+}
+
 #[test]
 fn cli_format_html_emits_raw_html() {
     let output = std::process::Command::new("cargo")

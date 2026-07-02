@@ -22,6 +22,9 @@ cargo run -- fetch https://example.com --max-length 4000
 # Render with ANSI colors in the terminal (bold headings, underlined links)
 cargo run -- fetch https://example.com --render
 
+# Add a polite delay between requests (milliseconds)
+cargo run -- fetch https://example.com --delay 500
+
 # Interactive terminal browser (explicit)
 cargo run -- browse https://example.com
 
@@ -35,8 +38,10 @@ cargo run -- mcp
 - **ANSI rendering** (`--render`): Bold headings, underlined cyan links, colored code blocks in terminal output
 - **Table rendering**: Markdown tables drawn with box-drawing characters (`┌─┬─┐`)
 - **Iframe inlining**: Fetches `<iframe src="...">` content and embeds it into the parent page
-- **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, ads, and excessive whitespace
+- **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, HTML comments, and excessive whitespace
+- **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)
 - **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
+- **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
 
 ## Architecture
