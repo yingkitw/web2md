@@ -46,7 +46,7 @@ cargo run -- mcp
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
-- **Metadata extraction**: Title, meta description, Open Graph description, and author returned in MCP response
+- **Metadata extraction**: Title, meta description, Open Graph description, author, and publication date returned in MCP response
 
 ## Architecture
 

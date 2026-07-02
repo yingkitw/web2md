@@ -56,11 +56,12 @@ web2md mcp
   "markdown": "# Article Title\n\nBody content...",
   "title": "Article Title",
   "description": "A summary of the article",
-  "author": "Jane Doe"
+  "author": "Jane Doe",
+  "published_date": "2025-01-15T08:30:00Z"
 }
 ```
 
-`description` and `author` are optional — omitted when the page has no corresponding meta tags.
+`description`, `author`, and `published_date` are optional — omitted when the page has no corresponding meta tags or structured data. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order).
 
 ## HTML Processing Pipeline
 
