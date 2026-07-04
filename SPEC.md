@@ -33,6 +33,13 @@ web2md fetch <URL> [FLAGS]
   --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
   --main-content       Extract only <article>, <main>, or [role=main] content
 
+# Sitemap/feed discovery
+web2md sitemap <URL> [FLAGS]
+  --timeout SECONDS    Request timeout (default: 30)
+  --cookie NAME=VAL    Send cookie (repeatable)
+  --header "Name: Val" Send custom header (repeatable)
+  --feeds              Also check HTML page for RSS/Atom feed links
+
 # MCP server (stdio JSON-RPC)
 web2md mcp
 ```
@@ -60,11 +67,13 @@ web2md mcp
   "author": "Jane Doe",
   "published_date": "2025-01-15T08:30:00Z",
   "image": "https://example.com/cover.jpg",
-  "headline": "Breaking News Story"
+  "headline": "Breaking News Story",
+  "site_name": "Tech Blog",
+  "keywords": ["Rust", "Web Scraping", "Markdown"]
 }
 ```
 
-`description`, `author`, `published_date`, `image`, and `headline` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order). `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`.
+`description`, `author`, `published_date`, `image`, `headline`, `site_name`, and `keywords` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order). `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order.
 
 ### CLI `--format json` Output
 
@@ -76,7 +85,9 @@ web2md mcp
   "author": "Jane Doe",
   "published_date": "2025-01-15T08:30:00Z",
   "image": "https://example.com/cover.jpg",
-  "headline": "Breaking News Story"
+  "headline": "Breaking News Story",
+  "site_name": "Tech Blog",
+  "keywords": ["Rust", "Web Scraping", "Markdown"]
 }
 ```
 
@@ -96,6 +107,7 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
    - Deduplicate repeated paragraph-level blocks (>20 chars, first occurrence kept)
    - Collapse excessive whitespace
    - Extract comments from forum/thread pages (detects `class="comment"`, `id="comment-N"`, `data-testid="comment"`, `data-author`; extracts author + text + nesting depth; appends as `## Comments` section with blockquotes and indentation)
+   - Absolutize links: convert relative URLs in `[text](url)` patterns to absolute URLs using the page URL as base
 4. **render_markdown_ansi()** → ANSI-styled terminal output (when `--render` or `browse`)
    - Headings: bold + color-coded by level
    - Links: underlined cyan (with `[N]` numbers in browse mode)

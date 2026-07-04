@@ -34,6 +34,10 @@ pub struct McpResponse {
     pub image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
 }
 
 /// Metadata extracted from an HTML page.
@@ -52,9 +56,13 @@ pub struct PageMetadata {
     pub image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub site_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
 }
 
-/// Extract metadata (title, description, author, publication date, image, headline) from HTML.
+/// Extract metadata (title, description, author, publication date, image, headline, site name, keywords) from HTML.
 pub fn extract_metadata(html: &str) -> PageMetadata {
     let title = extract_title(html);
     let description = extract_meta_content(html, "name", "description")
@@ -65,6 +73,8 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
     let image = extract_meta_content(html, "property", "og:image")
         .or_else(|| extract_json_ld_image(html));
     let headline = extract_json_ld_field(html, "headline");
+    let site_name = extract_meta_content(html, "property", "og:site_name");
+    let keywords = extract_keywords(html);
     PageMetadata {
         title,
         description,
@@ -72,6 +82,8 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         published_date,
         image,
         headline,
+        site_name,
+        keywords,
     }
 }
 
@@ -92,6 +104,7 @@ impl McpServer {
         let html = self.browser.fetch(&req.url).await?;
         let html = self.browser.inline_iframes(&html, &req.url).await?;
         let mut markdown = PageToMarkdown::convert(&html, req.include_images, req.keep_header, req.main_content)?;
+        markdown = PageToMarkdown::absolutize_links(&markdown, &req.url);
 
         if let Some(max) = req.max_length {
             if markdown.len() > max {
@@ -110,6 +123,8 @@ impl McpServer {
             published_date: meta.published_date,
             image: meta.image,
             headline: meta.headline,
+            site_name: meta.site_name,
+            keywords: meta.keywords,
         })
     }
 }
@@ -207,6 +222,70 @@ fn extract_json_ld_field(html: &str, field: &str) -> Option<String> {
             return Some(val.to_string());
         }
     }
+    None
+}
+
+/// Extract keywords/tags from HTML.
+/// Checks in order: multiple `<meta property="article:tag">` tags, `<meta name="keywords">`,
+/// and JSON-LD `keywords` (string, array, or comma-separated).
+fn extract_keywords(html: &str) -> Option<Vec<String>> {
+    let mut keywords = Vec::new();
+
+    // Collect all <meta property="article:tag"> values
+    let mut i = 0;
+    while i < html.len() {
+        if let Some(pos) = find_ci(&html[i..], "<meta") {
+            let pos = i + pos;
+            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
+            let tag = &html[pos..=tag_end];
+            if find_ci(tag, "property=\"article:tag\"").is_some()
+                || find_ci(tag, "property='article:tag'").is_some()
+            {
+                if let Some(val) = extract_attr(tag, "content") {
+                    if !val.is_empty() {
+                        keywords.push(val);
+                    }
+                }
+            }
+            i = tag_end + 1;
+        } else {
+            break;
+        }
+    }
+
+    if !keywords.is_empty() {
+        return Some(keywords);
+    }
+
+    // Fallback: <meta name="keywords"> (comma-separated)
+    if let Some(kw_str) = extract_meta_content(html, "name", "keywords") {
+        let tags: Vec<String> = kw_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        if !tags.is_empty() {
+            return Some(tags);
+        }
+    }
+
+    // Fallback: JSON-LD keywords (string, array)
+    for json in iter_json_ld_blocks(html) {
+        if let Some(kw) = json.get("keywords") {
+            if let Some(arr) = kw.as_array() {
+                let tags: Vec<String> = arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !tags.is_empty() {
+                    return Some(tags);
+                }
+            }
+            if let Some(s) = kw.as_str() {
+                let tags: Vec<String> = s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+                if !tags.is_empty() {
+                    return Some(tags);
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -580,5 +659,84 @@ mod tests {
         let meta = extract_metadata(html);
         assert_eq!(meta.image, None);
         assert_eq!(meta.headline, None);
+    }
+
+    #[test]
+    fn extract_metadata_og_site_name() {
+        let html = r#"<html><head><meta property="og:site_name" content="Tech Blog"></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.site_name, Some("Tech Blog".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_no_site_name_returns_none() {
+        let html = "<html><body><p>No metadata</p></body></html>";
+        let meta = extract_metadata(html);
+        assert_eq!(meta.site_name, None);
+    }
+
+    #[test]
+    fn extract_metadata_article_tags() {
+        let html = r#"<html><head>
+            <meta property="article:tag" content="Rust">
+            <meta property="article:tag" content="Web Scraping">
+            <meta property="article:tag" content="Markdown">
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.keywords, Some(vec![
+            "Rust".to_string(),
+            "Web Scraping".to_string(),
+            "Markdown".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn extract_metadata_meta_keywords_fallback() {
+        let html = r#"<html><head><meta name="keywords" content="python, web scraping, automation"></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.keywords, Some(vec![
+            "python".to_string(),
+            "web scraping".to_string(),
+            "automation".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_keywords_string() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","keywords":"rust, async, tokio"}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.keywords, Some(vec![
+            "rust".to_string(),
+            "async".to_string(),
+            "tokio".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_keywords_array() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","keywords":["rust","async","tokio"]}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.keywords, Some(vec![
+            "rust".to_string(),
+            "async".to_string(),
+            "tokio".to_string(),
+        ]));
+    }
+
+    #[test]
+    fn extract_metadata_article_tag_takes_priority_over_meta_keywords() {
+        let html = r#"<html><head>
+            <meta property="article:tag" content="Primary Tag">
+            <meta name="keywords" content="fallback, tags">
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.keywords, Some(vec!["Primary Tag".to_string()]));
+    }
+
+    #[test]
+    fn extract_metadata_no_keywords_returns_none() {
+        let html = "<html><body><p>No metadata</p></body></html>";
+        let meta = extract_metadata(html);
+        assert_eq!(meta.keywords, None);
     }
 }

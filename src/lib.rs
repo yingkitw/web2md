@@ -5,7 +5,7 @@ mod browser;
 mod markdown;
 mod mcp;
 
-pub use browser::{Browser, BrowserOptions};
+pub use browser::{extract_feed_links, parse_sitemap_urls, Browser, BrowserOptions};
 pub use markdown::PageToMarkdown;
 pub use mcp::{extract_metadata, McpRequest, McpResponse, McpServer, PageMetadata};
 

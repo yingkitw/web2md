@@ -49,16 +49,18 @@ cargo run -- mcp
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
-- **Metadata extraction**: Title, description, author (meta tag or JSON-LD), publication date, image (og:image or JSON-LD), and headline (JSON-LD) returned in MCP response and `--format json` output
+- **Metadata extraction**: Title, description, author (meta tag or JSON-LD), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), and keywords/tags (article:tag, meta keywords, or JSON-LD) returned in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
 - **Comments extraction**: Detects forum/thread pages (Reddit, WordPress, vBulletin) and extracts comments with author attribution, nesting depth, and blockquote formatting
+- **Link URL absolutization**: Converts relative URLs in Markdown links to absolute URLs using the page URL as base, so links are usable in LLM contexts
+- **Sitemap/feed discovery** (`sitemap` subcommand): Fetches `sitemap.xml` from a website and lists all discovered URLs; optionally discovers RSS/Atom feed links from the HTML page (`--feeds` flag)
 
 ## Architecture
 
 - **Browser** (`browser.rs`): Minimal HTTP client with iframe inlining. No rendering engine—intentionally lightweight.
 - **PageToMarkdown** (`markdown.rs`): HTML-to-Markdown conversion. Strips scripts, styles, iframes, images (optional).
 - **McpServer** (`mcp.rs`): JSON-RPC server wrapper exposing a `fetch` tool.
-- **CLI** (`main.rs`): `fetch` (one-shot), `browse` (interactive), `mcp` (server). Default mode is `browse`.
+- **CLI** (`main.rs`): `fetch` (one-shot), `browse` (interactive), `sitemap` (URL discovery), `mcp` (server). Default mode is `browse`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 

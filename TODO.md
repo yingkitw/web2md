@@ -42,6 +42,10 @@
 - [x] JSON-LD structured data extraction: `image` (og:image or JSON-LD string/object/array) and `headline` (JSON-LD) fields in MCP response and `--format json` output
 - [x] Paragraph-level readability scoring: sliding window over `<p>` blocks as fallback when div/section scoring fails
 - [x] Comments extraction for forum pages: detects forum/thread pages, extracts author + text + nesting depth, formats as Markdown with blockquotes and indentation
+- [x] Site name extraction: `og:site_name` meta tag in MCP response and `--format json` output
+- [x] Keywords/tags extraction: `article:tag` meta tags (multiple), `meta name="keywords"` fallback, JSON-LD `keywords` (string or array) fallback
+- [x] Link URL absolutization: convert relative URLs to absolute in Markdown output using the page URL as base
+- [x] Sitemap/feed discovery: `sitemap` subcommand fetches sitemap.xml and discovers RSS/Atom feed links from HTML pages
 
 ## In Progress
 
@@ -53,3 +57,4 @@
 - Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags
+- URL blacklist filtering: skip known non-content URLs (ads, tracking pixels, etc.)

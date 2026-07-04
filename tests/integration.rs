@@ -1,4 +1,4 @@
-use web2md::{extract_metadata, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{extract_feed_links, extract_metadata, parse_sitemap_urls, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use std::time::Duration;
 
 #[tokio::test]
@@ -281,5 +281,55 @@ async fn json_output_format_emits_structured_json() {
     assert!(json_str.contains("2025-07-04T12:00:00Z"));
     assert!(json_str.contains("Heading"));
     assert!(json_str.contains("Body content for JSON."));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn sitemap_discovery_fetches_and_parses() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/sitemap.xml")
+        .with_status(200)
+        .with_header("content-type", "application/xml")
+        .with_body(r#"<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/page1</loc></url>
+  <url><loc>https://example.com/page2</loc></url>
+</urlset>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let sitemap_url = format!("{}/sitemap.xml", server.url());
+    let xml = browser.fetch(&sitemap_url).await.unwrap();
+    let urls = parse_sitemap_urls(&xml);
+
+    assert_eq!(urls.len(), 2);
+    assert!(urls.contains(&"https://example.com/page1".to_string()));
+    assert!(urls.contains(&"https://example.com/page2".to_string()));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn feed_discovery_from_html_page() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/blog")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(r#"<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/blog/rss.xml">
+            <link rel="alternate" type="application/atom+xml" href="/blog/atom.xml">
+        </head><body><h1>Blog</h1></body></html>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let html = browser.fetch(&format!("{}/blog", server.url())).await.unwrap();
+    let feeds = extract_feed_links(&html);
+
+    assert_eq!(feeds.len(), 2);
+    assert!(feeds.contains(&"/blog/rss.xml".to_string()));
+    assert!(feeds.contains(&"/blog/atom.xml".to_string()));
     mock.assert_async().await;
 }

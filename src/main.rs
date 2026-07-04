@@ -1,4 +1,5 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use url::Url;
 use web2md::{extract_metadata, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -32,6 +33,10 @@ struct CliJsonOutput {
     image: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     headline: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    site_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keywords: Option<Vec<String>>,
 }
 
 #[derive(Parser)]
@@ -116,6 +121,23 @@ enum Commands {
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
+    /// Discover URLs from a website's sitemap.xml and RSS/Atom feeds
+    Sitemap {
+        /// Target URL (sitemap.xml will be fetched from the same origin)
+        url: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Also check the HTML page for RSS/Atom feed links
+        #[arg(long)]
+        feeds: bool,
+    },
 }
 
 #[tokio::main]
@@ -165,6 +187,7 @@ async fn main() -> Result<()> {
             let mut output = match format {
                 OutputFormat::Markdown => {
                     let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
+                    let md = PageToMarkdown::absolutize_links(&md, &url);
                     if render {
                         render_markdown_ansi(&md, false).0
                     } else {
@@ -174,6 +197,7 @@ async fn main() -> Result<()> {
                 OutputFormat::Html => html.clone(),
                 OutputFormat::Json => {
                     let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
+                    let md = PageToMarkdown::absolutize_links(&md, &url);
                     let meta = extract_metadata(&html);
                     let output = CliJsonOutput {
                         markdown: md,
@@ -183,6 +207,8 @@ async fn main() -> Result<()> {
                         published_date: meta.published_date,
                         image: meta.image,
                         headline: meta.headline,
+                        site_name: meta.site_name,
+                        keywords: meta.keywords,
                     };
                     serde_json::to_string_pretty(&output)?
                 }
@@ -225,6 +251,66 @@ async fn main() -> Result<()> {
             let server = McpServer::new()?;
             run_stdio_mcp(&server).await?;
         }
+        Some(Commands::Sitemap {
+            url,
+            timeout,
+            cookie,
+            header,
+            feeds,
+        }) => {
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            let browser = Browser::new(options)?;
+
+            let parsed = Url::parse(&url).context("Invalid URL")?;
+            let sitemap_url = format!("{}://{}/sitemap.xml", parsed.scheme(), parsed.host_str().unwrap_or(""));
+
+            let mut found_urls: Vec<String> = Vec::new();
+
+            // Try fetching sitemap.xml
+            match browser.fetch(&sitemap_url).await {
+                Ok(xml) => {
+                    let sitemap_urls = web2md::parse_sitemap_urls(&xml);
+                    if !sitemap_urls.is_empty() {
+                        println!("# Sitemap URLs from {}\n", sitemap_url);
+                        for u in &sitemap_urls {
+                            println!("{}", u);
+                        }
+                        found_urls.extend(sitemap_urls);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("No sitemap.xml found: {}", e);
+                }
+            }
+
+            // Optionally check the HTML page for feed links
+            if feeds {
+                match browser.fetch(&url).await {
+                    Ok(html) => {
+                        let feed_urls = web2md::extract_feed_links(&html);
+                        if !feed_urls.is_empty() {
+                            println!("\n# Feed links from {}\n", url);
+                            for f in &feed_urls {
+                                println!("{}", f);
+                            }
+                            found_urls.extend(feed_urls);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Could not fetch page for feed discovery: {}", e);
+                    }
+                }
+            }
+
+            if found_urls.is_empty() {
+                eprintln!("No sitemap or feed URLs found.");
+            }
+        }
     }
 
     Ok(())
@@ -261,6 +347,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
         };
 
         let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
+        let md = PageToMarkdown::absolutize_links(&md, &url);
         let (rendered, links) = render_markdown_ansi(&md, true);
         println!("{}", rendered);
 

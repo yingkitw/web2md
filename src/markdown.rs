@@ -1,4 +1,5 @@
 use anyhow::Result;
+use url::Url;
 
 /// Case-insensitive byte search. Returns byte position of `needle` in `haystack`.
 pub(crate) fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
@@ -85,6 +86,58 @@ impl PageToMarkdown {
         } else {
             Ok(md)
         }
+    }
+
+    /// Convert relative URLs in Markdown links to absolute URLs using the given base URL.
+    /// Processes `[text](url)` and `![alt](url)` patterns, leaving already-absolute URLs unchanged.
+    pub fn absolutize_links(md: &str, base_url: &str) -> String {
+        let base = match Url::parse(base_url) {
+            Ok(u) => u,
+            Err(_) => return md.to_string(),
+        };
+
+        let mut result = String::with_capacity(md.len());
+        let mut i = 0;
+
+        while i < md.len() {
+            // Look for `](` pattern which indicates a Markdown link
+            let bytes = md.as_bytes();
+            if bytes[i] == b']' && i + 1 < md.len() && bytes[i + 1] == b'(' {
+                // Find the closing ')'
+                if let Some(close) = md[i + 2..].find(')') {
+                    let url_start = i + 2;
+                    let url_end = i + 2 + close;
+                    let raw_url = &md[url_start..url_end];
+
+                    // Skip empty URLs and anchor-only links
+                    if raw_url.is_empty() || raw_url.starts_with('#') {
+                        result.push_str(&md[i..=url_end]);
+                        i = url_end + 1;
+                        continue;
+                    }
+
+                    // Try to resolve the URL against the base
+                    if let Ok(absolved) = base.join(raw_url) {
+                        result.push_str("](");
+                        result.push_str(absolved.as_str());
+                        result.push(')');
+                        i = url_end + 1;
+                        continue;
+                    }
+
+                    // If resolution fails, keep the original
+                    result.push_str(&md[i..=url_end]);
+                    i = url_end + 1;
+                    continue;
+                }
+            }
+            // Push one character (UTF-8 safe) from the current position
+            let ch = md[i..].chars().next().unwrap();
+            result.push(ch);
+            i += ch.len_utf8();
+        }
+
+        result
     }
 
     /// Remove `<img>` tags (case-insensitive). Self-closing (`/>`) or plain (`>`) both handled.
@@ -1342,5 +1395,76 @@ mod tests {
         assert!(md.contains("## Comments"));
         assert!(md.contains("redditor1"));
         assert!(md.contains("Reddit style comment"));
+    }
+
+    #[test]
+    fn absolutize_links_converts_relative_to_absolute() {
+        let md = "[About](/about) [Contact](/contact-us)";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com/page");
+        assert!(result.contains("https://example.com/about"));
+        assert!(result.contains("https://example.com/contact-us"));
+    }
+
+    #[test]
+    fn absolutize_links_handles_protocol_relative() {
+        let md = "[Link](//cdn.example.com/file)";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com/page");
+        assert!(result.contains("https://cdn.example.com/file"));
+    }
+
+    #[test]
+    fn absolutize_links_leaves_absolute_unchanged() {
+        let md = "[Link](https://other.com/page)";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com/page");
+        assert!(result.contains("https://other.com/page"));
+    }
+
+    #[test]
+    fn absolutize_links_leaves_anchor_links_unchanged() {
+        let md = "[Section](#section)";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com/page");
+        assert!(result.contains("#section"));
+    }
+
+    #[test]
+    fn absolutize_links_resolves_relative_paths() {
+        let md = "[Prev](../parent) [Next](./child)";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com/blog/post");
+        // ../parent from /blog/post → /parent (go up from post to blog, then up from blog to root)
+        assert!(result.contains("https://example.com/parent"), "got: {}", result);
+        // ./child from /blog/post → /blog/child (same directory as post)
+        assert!(result.contains("https://example.com/blog/child"), "got: {}", result);
+    }
+
+    #[test]
+    fn absolutize_links_handles_image_links() {
+        let md = "![Photo](/images/photo.jpg)";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com/page");
+        assert!(result.contains("https://example.com/images/photo.jpg"));
+    }
+
+    #[test]
+    fn absolutize_links_preserves_surrounding_text() {
+        let md = "Hello [world](/world) and [universe](/universe) end";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com");
+        assert!(result.starts_with("Hello "));
+        assert!(result.contains("https://example.com/world"));
+        assert!(result.contains("https://example.com/universe"));
+        assert!(result.ends_with("end"));
+    }
+
+    #[test]
+    fn absolutize_links_invalid_base_returns_original() {
+        let md = "[Link](/path)";
+        let result = PageToMarkdown::absolutize_links(md, "not-a-url");
+        assert_eq!(result, md);
+    }
+
+    #[test]
+    fn absolutize_links_preserves_unicode_text() {
+        let md = "[リンク](/page) 日本語テキスト";
+        let result = PageToMarkdown::absolutize_links(md, "https://example.com");
+        assert!(result.contains("https://example.com/page"));
+        assert!(result.contains("日本語テキスト"));
     }
 }

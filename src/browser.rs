@@ -7,6 +7,77 @@ use url::Url;
 
 use crate::{DEFAULT_TIMEOUT, DEFAULT_USER_AGENT};
 
+/// Parse URLs from sitemap XML content.
+/// Extracts all <loc> tag values from sitemap.xml format.
+pub fn parse_sitemap_urls(xml: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut pos = 0;
+    while pos < xml.len() {
+        if let Some(start) = xml[pos..].find("<loc>") {
+            let start = pos + start + 5;
+            if let Some(end) = xml[start..].find("</loc>") {
+                let url = xml[start..start + end].trim().to_string();
+                if !url.is_empty() {
+                    urls.push(url);
+                }
+                pos = start + end + 6;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    urls
+}
+
+/// Extract feed URLs (RSS/Atom) from HTML <link> tags.
+/// Looks for <link rel="alternate" type="application/rss+xml" href="...">
+/// and <link rel="alternate" type="application/atom+xml" href="...">.
+pub fn extract_feed_links(html: &str) -> Vec<String> {
+    let mut feeds = Vec::new();
+    let mut pos = 0;
+    while pos < html.len() {
+        if let Some(start) = html[pos..].find("<link") {
+            let start = pos + start;
+            if let Some(end) = html[start..].find('>') {
+                let tag = &html[start..=start + end];
+                if (tag.contains("application/rss+xml") || tag.contains("application/atom+xml"))
+                    && tag.contains("alternate")
+                {
+                    if let Some(href) = extract_href(tag) {
+                        feeds.push(href);
+                    }
+                }
+                pos = start + end + 1;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+    feeds
+}
+
+/// Extract the href attribute value from an HTML tag string.
+fn extract_href(tag: &str) -> Option<String> {
+    let needle = "href=";
+    let pos = tag.find(needle)?;
+    let after = &tag[pos + needle.len()..];
+    let mut i = 0;
+    while i < after.len() && after.as_bytes()[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    let quote = *after.as_bytes().get(i)? as char;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let val_start = i + 1;
+    let val_end = after[val_start..].find(quote)? + val_start;
+    Some(after[val_start..val_end].to_string())
+}
+
 /// Configuration for the headless browser
 #[derive(Debug, Clone)]
 pub struct BrowserOptions {
@@ -519,5 +590,101 @@ mod tests {
         let _ = browser.fetch(&url).await.unwrap();
 
         mock.assert_async().await;
+    }
+
+    #[test]
+    fn parse_sitemap_urls_extracts_all_locs() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/</loc><lastmod>2025-01-01</lastmod></url>
+  <url><loc>https://example.com/about</loc></url>
+  <url><loc>https://example.com/contact</loc></url>
+</urlset>"#;
+        let urls = parse_sitemap_urls(xml);
+        assert_eq!(urls.len(), 3);
+        assert_eq!(urls[0], "https://example.com/");
+        assert_eq!(urls[1], "https://example.com/about");
+        assert_eq!(urls[2], "https://example.com/contact");
+    }
+
+    #[test]
+    fn parse_sitemap_urls_handles_empty() {
+        let xml = "<?xml version=\"1.0\"?><urlset></urlset>";
+        let urls = parse_sitemap_urls(xml);
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn parse_sitemap_urls_handles_sitemap_index() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>https://example.com/sitemap1.xml</loc></sitemap>
+  <sitemap><loc>https://example.com/sitemap2.xml</loc></sitemap>
+</sitemapindex>"#;
+        let urls = parse_sitemap_urls(xml);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], "https://example.com/sitemap1.xml");
+        assert_eq!(urls[1], "https://example.com/sitemap2.xml");
+    }
+
+    #[test]
+    fn parse_sitemap_urls_skips_empty_locs() {
+        let xml = r#"<urlset><url><loc></loc></url><url><loc>https://example.com/page</loc></url></urlset>"#;
+        let urls = parse_sitemap_urls(xml);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0], "https://example.com/page");
+    }
+
+    #[test]
+    fn extract_feed_links_finds_rss() {
+        let html = r#"<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/feed.xml" title="RSS Feed">
+        </head><body></body></html>"#;
+        let feeds = extract_feed_links(html);
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0], "/feed.xml");
+    }
+
+    #[test]
+    fn extract_feed_links_finds_atom() {
+        let html = r#"<html><head>
+            <link rel="alternate" type="application/atom+xml" href="https://example.com/atom.xml">
+        </head><body></body></html>"#;
+        let feeds = extract_feed_links(html);
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0], "https://example.com/atom.xml");
+    }
+
+    #[test]
+    fn extract_feed_links_finds_multiple() {
+        let html = r#"<html><head>
+            <link rel="alternate" type="application/rss+xml" href="/rss">
+            <link rel="alternate" type="application/atom+xml" href="/atom">
+            <link rel="stylesheet" href="/style.css">
+        </head><body></body></html>"#;
+        let feeds = extract_feed_links(html);
+        assert_eq!(feeds.len(), 2);
+        assert!(feeds.contains(&"/rss".to_string()));
+        assert!(feeds.contains(&"/atom".to_string()));
+    }
+
+    #[test]
+    fn extract_feed_links_ignores_non_feed_links() {
+        let html = r#"<html><head>
+            <link rel="stylesheet" href="/style.css">
+            <link rel="icon" href="/favicon.ico">
+        </head><body></body></html>"#;
+        let feeds = extract_feed_links(html);
+        assert!(feeds.is_empty());
+    }
+
+    #[test]
+    fn extract_feed_links_handles_single_quotes() {
+        let html = r#"<html><head>
+            <link rel='alternate' type='application/rss+xml' href='/feed.rss'>
+        </head><body></body></html>"#;
+        let feeds = extract_feed_links(html);
+        assert_eq!(feeds.len(), 1);
+        assert_eq!(feeds[0], "/feed.rss");
     }
 }
