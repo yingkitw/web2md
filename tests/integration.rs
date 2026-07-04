@@ -1,4 +1,4 @@
-use web2md::{Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{extract_metadata, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use std::time::Duration;
 
 #[tokio::test]
@@ -242,5 +242,44 @@ async fn readability_main_content_extracts_from_div_layout() {
 
     assert!(md.contains("main article content"));
     assert!(!md.contains("Contact"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn json_output_format_emits_structured_json() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/json")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(r#"<html><head>
+            <title>JSON Test Page</title>
+            <meta name="description" content="A test page for JSON output">
+            <meta name="author" content="Test Author">
+            <meta property="article:published_time" content="2025-07-04T12:00:00Z">
+        </head><body><h1>Heading</h1><p>Body content for JSON.</p></body></html>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let html = browser.fetch(&format!("{}/json", server.url())).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
+    let meta = extract_metadata(&html);
+
+    let json = serde_json::json!({
+        "markdown": md,
+        "title": meta.title,
+        "description": meta.description,
+        "author": meta.author,
+        "published_date": meta.published_date,
+    });
+    let json_str = serde_json::to_string(&json).unwrap();
+
+    assert!(json_str.contains("JSON Test Page"));
+    assert!(json_str.contains("A test page for JSON output"));
+    assert!(json_str.contains("Test Author"));
+    assert!(json_str.contains("2025-07-04T12:00:00Z"));
+    assert!(json_str.contains("Heading"));
+    assert!(json_str.contains("Body content for JSON."));
     mock.assert_async().await;
 }

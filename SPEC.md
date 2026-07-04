@@ -26,6 +26,7 @@ web2md fetch <URL> [FLAGS]
   --header "Name: Val" Send custom header (repeatable)
   --format markdown    Output as Markdown (default)
   --format html        Output raw HTML
+  --format json        Output structured JSON (markdown + metadata)
   --render             ANSI colors: bold headings, underlined links, colored code
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
@@ -61,7 +62,21 @@ web2md mcp
 }
 ```
 
-`description`, `author`, and `published_date` are optional — omitted when the page has no corresponding meta tags or structured data. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order).
+`description`, `author`, and `published_date` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order).
+
+### CLI `--format json` Output
+
+```json
+{
+  "markdown": "# Article Title\n\nBody content...",
+  "title": "Article Title",
+  "description": "A summary of the article",
+  "author": "Jane Doe",
+  "published_date": "2025-01-15T08:30:00Z"
+}
+```
+
+Same metadata fields as the MCP response, minus the `url` field. Omitted fields are excluded from the JSON output (not `null`).
 
 ## HTML Processing Pipeline
 

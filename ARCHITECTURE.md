@@ -7,12 +7,13 @@ main.rs
   ├── CLI parsing (clap)
   ├── <URL> (default) → browse_loop → Browser → PageToMarkdown → ANSI renderer → terminal
   ├── fetch command   → Browser → inline_iframes → PageToMarkdown → stdout
+  │                     └── --format json → extract_metadata → structured JSON output
   └── mcp command     → McpServer → Browser → inline_iframes → PageToMarkdown → JSON-RPC
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL
   ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback; dedup; images)
-  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date)
+  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date), PageMetadata struct, extract_metadata() public function
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)
@@ -71,7 +72,7 @@ URL ──► Browser.fetch() ──► raw HTML
 ## Deployment Topology
 
 - Local interactive: `cargo run -- <URL>` (browse mode)
-- Local one-shot: `cargo run -- fetch <URL> [--render]`
+- Local one-shot: `cargo run -- fetch <URL> [--render] [--format json]`
 - MCP Host: `cargo run -- mcp` (stdio transport)
 - Release binary: `cargo build --release` (LTO + stripped, ~4MB)
 - CI/Release: GitHub Actions builds for Linux (x86_64/aarch64), macOS (x86_64/aarch64), Windows (x86_64) on tag push

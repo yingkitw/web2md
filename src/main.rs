@@ -1,6 +1,7 @@
 use anyhow::Result;
-use web2md::{Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{extract_metadata, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
@@ -11,6 +12,22 @@ enum OutputFormat {
     Markdown,
     /// Emit raw HTML without conversion
     Html,
+    /// Emit structured JSON with markdown and metadata
+    Json,
+}
+
+/// Structured JSON output for `--format json` CLI flag.
+#[derive(Debug, Serialize)]
+struct CliJsonOutput {
+    markdown: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    published_date: Option<String>,
 }
 
 #[derive(Parser)]
@@ -150,7 +167,19 @@ async fn main() -> Result<()> {
                         md
                     }
                 }
-                OutputFormat::Html => html,
+                OutputFormat::Html => html.clone(),
+                OutputFormat::Json => {
+                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
+                    let meta = extract_metadata(&html);
+                    let output = CliJsonOutput {
+                        markdown: md,
+                        title: meta.title,
+                        description: meta.description,
+                        author: meta.author,
+                        published_date: meta.published_date,
+                    };
+                    serde_json::to_string_pretty(&output)?
+                }
             };
 
             if let Some(max) = max_length {

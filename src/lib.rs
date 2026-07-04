@@ -7,7 +7,7 @@ mod mcp;
 
 pub use browser::{Browser, BrowserOptions};
 pub use markdown::PageToMarkdown;
-pub use mcp::{McpRequest, McpResponse, McpServer};
+pub use mcp::{extract_metadata, McpRequest, McpResponse, McpServer, PageMetadata};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_USER_AGENT: &str = concat!(

@@ -32,6 +32,36 @@ pub struct McpResponse {
     pub published_date: Option<String>,
 }
 
+/// Metadata extracted from an HTML page.
+/// Used by both the MCP server and the CLI `--format json` output.
+#[derive(Debug, Serialize)]
+pub struct PageMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_date: Option<String>,
+}
+
+/// Extract metadata (title, description, author, publication date) from HTML.
+pub fn extract_metadata(html: &str) -> PageMetadata {
+    let title = extract_title(html);
+    let description = extract_meta_content(html, "name", "description")
+        .or_else(|| extract_meta_content(html, "property", "og:description"));
+    let author = extract_meta_content(html, "name", "author")
+        .or_else(|| extract_json_ld_author(html));
+    let published_date = extract_published_date(html);
+    PageMetadata {
+        title,
+        description,
+        author,
+        published_date,
+    }
+}
+
 /// MCP server wrapping the Browser
 pub struct McpServer {
     browser: Browser,
@@ -56,19 +86,15 @@ impl McpServer {
             }
         }
 
-        let title = extract_title(&html);
-        let description = extract_meta_content(&html, "name", "description")
-            .or_else(|| extract_meta_content(&html, "property", "og:description"));
-        let author = extract_meta_content(&html, "name", "author");
-        let published_date = extract_published_date(&html);
+        let meta = extract_metadata(&html);
 
         Ok(McpResponse {
             url: req.url,
             markdown,
-            title,
-            description,
-            author,
-            published_date,
+            title: meta.title,
+            description: meta.description,
+            author: meta.author,
+            published_date: meta.published_date,
         })
     }
 }
@@ -93,24 +119,52 @@ fn extract_time_datetime(html: &str) -> Option<String> {
 
 /// Extract `datePublished` from JSON-LD `<script type="application/ld+json">` blocks.
 fn extract_json_ld_date(html: &str) -> Option<String> {
-    let mut i = 0;
-    while i < html.len() {
-        let rest = &html[i..];
-        let pos = find_ci(rest, "application/ld+json")?;
-        let abs_pos = i + pos;
-        // Find the closing </script>
-        let script_close = find_ci(&html[abs_pos..], "</script>")?;
-        let block = &html[abs_pos..abs_pos + script_close];
-        // Find the > that opens the script tag content
-        let gt = block.find('>')?;
-        let json_content = &block[gt + 1..];
-        // Parse as JSON and extract datePublished
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_content) {
-            if let Some(date) = json.get("datePublished").and_then(|v| v.as_str()) {
-                return Some(date.to_string());
+    extract_json_ld_field(html, "datePublished")
+}
+
+/// Extract `author` from JSON-LD `<script type="application/ld+json">` blocks.
+/// Handles both string authors and `{"@type":"Person","name":"..."}` object authors.
+fn extract_json_ld_author(html: &str) -> Option<String> {
+    for json in iter_json_ld_blocks(html) {
+        if let Some(author) = json.get("author") {
+            if let Some(name) = author.as_str() {
+                return Some(name.to_string());
+            }
+            if let Some(name) = author.get("name").and_then(|v| v.as_str()) {
+                return Some(name.to_string());
             }
         }
-        i = abs_pos + script_close + 9;
+    }
+    None
+}
+
+/// Iterate over all JSON-LD blocks in the HTML, parsing each as JSON.
+fn iter_json_ld_blocks(html: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
+    let mut pos = 0usize;
+    std::iter::from_fn(move || {
+        while pos < html.len() {
+            let rest = &html[pos..];
+            let ld_pos = find_ci(rest, "application/ld+json")?;
+            let abs = pos + ld_pos;
+            let script_close = find_ci(&html[abs..], "</script>")?;
+            let block = &html[abs..abs + script_close];
+            let gt = block.find('>')?;
+            let json_content = &block[gt + 1..];
+            pos = abs + script_close + 9;
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_content) {
+                return Some(json);
+            }
+        }
+        None
+    })
+}
+
+/// Extract a string field from the first JSON-LD block that contains it.
+fn extract_json_ld_field(html: &str, field: &str) -> Option<String> {
+    for json in iter_json_ld_blocks(html) {
+        if let Some(val) = json.get(field).and_then(|v| v.as_str()) {
+            return Some(val.to_string());
+        }
     }
     None
 }
@@ -374,5 +428,61 @@ mod tests {
 
         assert_eq!(resp.published_date, Some("2025-03-20T12:00:00Z".to_string()));
         mock.assert_async().await;
+    }
+
+    #[test]
+    fn extract_metadata_all_fields() {
+        let html = r#"<html><head>
+            <title>Test Article</title>
+            <meta name="description" content="A description">
+            <meta name="author" content="Jane Doe">
+            <meta property="article:published_time" content="2025-01-15T08:30:00Z">
+        </head><body><p>Content</p></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.title, Some("Test Article".to_string()));
+        assert_eq!(meta.description, Some("A description".to_string()));
+        assert_eq!(meta.author, Some("Jane Doe".to_string()));
+        assert_eq!(meta.published_date, Some("2025-01-15T08:30:00Z".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_no_fields_returns_none() {
+        let html = "<html><body><p>No metadata</p></body></html>";
+        let meta = extract_metadata(html);
+        assert_eq!(meta.title, None);
+        assert_eq!(meta.description, None);
+        assert_eq!(meta.author, None);
+        assert_eq!(meta.published_date, None);
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_author_string() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","author":"John Smith","datePublished":"2025-01-01"}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.author, Some("John Smith".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_author_object() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","author":{"@type":"Person","name":"Alice Jones"}}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.author, Some("Alice Jones".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_meta_author_takes_priority_over_json_ld() {
+        let html = r#"<html><head>
+            <meta name="author" content="Meta Author">
+            <script type="application/ld+json">{"author":"JSON-LD Author"}</script>
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.author, Some("Meta Author".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_author_fallback_when_no_meta() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"NewsArticle","author":{"@type":"Person","name":"From JSON-LD"}}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.author, Some("From JSON-LD".to_string()));
     }
 }
