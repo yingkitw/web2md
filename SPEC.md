@@ -87,7 +87,7 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
 1. **Browser.fetch()** → raw HTML
 2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content
 3. **PageToMarkdown.convert()** → Markdown
-   - Extract main content if `main_content` is true (`<article>`, `<main>`, `[role="main"]`, or readability fallback: text-density scoring of top-level `<div>`/`<section>` blocks)
+   - Extract main content if `main_content` is true (`<article>`, `<main>`, `[role="main"]`, or readability fallback: text-density scoring of top-level `<div>`/`<section>` blocks, then paragraph-level sliding window scoring of `<p>` blocks)
    - Strip `<script>`, `<style>`, `<iframe>`
    - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
    - Extract code languages from `<code class="language-xxx">`
@@ -95,6 +95,7 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
    - Inject languages into fenced code blocks (` ```rust `)
    - Deduplicate repeated paragraph-level blocks (>20 chars, first occurrence kept)
    - Collapse excessive whitespace
+   - Extract comments from forum/thread pages (detects `class="comment"`, `id="comment-N"`, `data-testid="comment"`, `data-author`; extracts author + text + nesting depth; appends as `## Comments` section with blockquotes and indentation)
 4. **render_markdown_ansi()** → ANSI-styled terminal output (when `--render` or `browse`)
    - Headings: bold + color-coded by level
    - Links: underlined cyan (with `[N]` numbers in browse mode)

@@ -40,6 +40,8 @@
 - [x] `--format json` CLI option: emit structured JSON (markdown + metadata) from CLI, not just MCP
 - [x] JSON-LD author extraction: `author` field from JSON-LD blocks (string or `{"name":"..."}` object), as fallback when `<meta name="author">` is absent
 - [x] JSON-LD structured data extraction: `image` (og:image or JSON-LD string/object/array) and `headline` (JSON-LD) fields in MCP response and `--format json` output
+- [x] Paragraph-level readability scoring: sliding window over `<p>` blocks as fallback when div/section scoring fails
+- [x] Comments extraction for forum pages: detects forum/thread pages, extracts author + text + nesting depth, formats as Markdown with blockquotes and indentation
 
 ## In Progress
 
@@ -49,7 +51,5 @@
 
 - Optional JavaScript execution via headless Chrome bridge (behind feature flag)
 - Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
-- Paragraph-level readability scoring (text density per paragraph, not just per div/section)
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags
-- Comments extraction for forum pages (Reddit, vBulletin) via Trafilatura-style algorithm

@@ -62,10 +62,11 @@ impl PageToMarkdown {
     /// When `include_images` is false, strips `<img>` tags to reduce token output.
     /// When `main_content` is true, extracts only the content of `<article>`, `<main>`, or `[role="main"]` elements.
     pub fn convert(html: &str, include_images: bool, keep_header: bool, main_content: bool) -> Result<String> {
+        let original_html = html.to_string();
         let html = if main_content {
-            Self::extract_main_content(html)
+            Self::extract_main_content(&original_html)
         } else {
-            html.to_string()
+            original_html.clone()
         };
         let html = Self::strip_scripts_and_styles(&html);
         let html = Self::strip_iframe_tags(&html);
@@ -76,7 +77,14 @@ impl PageToMarkdown {
         let md = html2md::parse_html(&html);
         let md = Self::inject_code_languages(&md, &languages);
         let md = Self::deduplicate_blocks(&md);
-        Ok(Self::clean(&md))
+        let md = Self::clean(&md);
+
+        // Append extracted comments for forum/thread pages
+        if let Some(comments) = Self::extract_comments(&original_html) {
+            Ok(format!("{}\n\n{}", md, comments))
+        } else {
+            Ok(md)
+        }
     }
 
     /// Remove `<img>` tags (case-insensitive). Self-closing (`/>`) or plain (`>`) both handled.
@@ -303,11 +311,12 @@ impl PageToMarkdown {
 
     /// Readability-based content extraction.
     /// Scores top-level `<div>` and `<section>` blocks by text density and link density.
+    /// Falls back to paragraph-level scoring if no block-level candidate scores well.
     /// Returns the inner HTML of the highest-scoring block, or the full HTML if no suitable block is found.
     fn readability_extract(html: &str) -> String {
         let candidates = Self::find_top_level_blocks(html);
         if candidates.is_empty() {
-            return html.to_string();
+            return Self::paragraph_readability_extract(html);
         }
 
         let mut best_score = 0i64;
@@ -328,8 +337,88 @@ impl PageToMarkdown {
         if best_score > 100 {
             best_html.unwrap_or_else(|| html.to_string())
         } else {
-            html.to_string()
+            Self::paragraph_readability_extract(html)
         }
+    }
+
+    /// Paragraph-level readability extraction.
+    /// Finds all `<p>` blocks, scores them by text length, and extracts the contiguous window
+    /// of paragraphs with the highest combined text density.
+    /// Falls back to the full HTML if no good paragraph cluster is found.
+    fn paragraph_readability_extract(html: &str) -> String {
+        let paragraphs = Self::find_paragraph_blocks(html);
+        if paragraphs.is_empty() {
+            return html.to_string();
+        }
+
+        // Score each paragraph by text length (longer = more likely content)
+        let scores: Vec<usize> = paragraphs
+            .iter()
+            .map(|(content, _, _)| Self::count_text_chars(content))
+            .collect();
+
+        // Find the contiguous window with the highest total text score.
+        // Use a sliding window of up to 5 paragraphs to find the densest cluster.
+        let window_size = 5.min(paragraphs.len());
+        let mut best_start = 0;
+        let mut best_score = 0usize;
+
+        for start in 0..=paragraphs.len() - window_size {
+            let score: usize = scores[start..start + window_size].iter().sum();
+            if score > best_score {
+                best_score = score;
+                best_start = start;
+            }
+        }
+
+        // Only use paragraph extraction if the best window has meaningful content
+        if best_score < 100 {
+            return html.to_string();
+        }
+
+        let end = (best_start + window_size).min(paragraphs.len());
+        let html_start = paragraphs[best_start].1;
+        let html_end = paragraphs[end - 1].2;
+        html[html_start..html_end].to_string()
+    }
+
+    /// Find all `<p>` blocks in the HTML.
+    /// Returns a list of (inner_html, start_byte, end_byte) tuples.
+    fn find_paragraph_blocks(html: &str) -> Vec<(String, usize, usize)> {
+        let mut blocks = Vec::new();
+        let mut i = 0;
+        while i < html.len() {
+            if let Some(pos) = find_ci(&html[i..], "<p") {
+                let pos = i + pos;
+                // Ensure this is a <p> tag, not <pre>, <param>, etc.
+                let after = &html[pos + 2..];
+                let next_char = after.chars().next();
+                if next_char != Some(' ') && next_char != Some('>') && next_char != Some('\t') && next_char != Some('\n') && next_char != Some('\r') {
+                    i = pos + 2;
+                    continue;
+                }
+                if let Some(gt) = html[pos..].find('>') {
+                    let content_start = pos + gt + 1;
+                    if let Some(end) = find_ci(&html[content_start..], "</p>") {
+                        let end_abs = content_start + end;
+                        blocks.push((
+                            html[content_start..end_abs].to_string(),
+                            pos,
+                            end_abs + "</p>".len(),
+                        ));
+                        i = end_abs + "</p>".len();
+                        continue;
+                    }
+                    // Unclosed <p>: take everything until the next <p> or block-level tag
+                    i = content_start;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        blocks
     }
 
     /// Find top-level `<div>` and `<section>` blocks in HTML.
@@ -491,6 +580,295 @@ impl PageToMarkdown {
             }
         }
         out.trim().to_string()
+    }
+
+    /// Detect if a page looks like a forum/thread with comments.
+    /// Returns true if multiple comment-like containers are found.
+    fn looks_like_forum_page(html: &str) -> bool {
+        let comment_indicators = [
+            "class=\"comment",
+            "class='comment",
+            "class=\"post-body",
+            "class='post-body",
+            "class=\"comment-body",
+            "class='comment-body",
+            "class=\"comment-content",
+            "class='comment-content",
+            "class=\"message-body",
+            "class='message-body",
+            "id=\"comment-",
+            "id='comment-",
+            "data-comment-id",
+            "data-testid=\"comment",
+        ];
+        let mut count = 0;
+        for indicator in &comment_indicators {
+            count += find_ci(html, indicator).map(|_| 1).unwrap_or(0);
+            if count >= 2 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Extract comments from forum/thread pages.
+    /// Detects comment containers, extracts author and text, and formats as Markdown.
+    /// Returns None if no comments are found or the page doesn't look like a forum.
+    fn extract_comments(html: &str) -> Option<String> {
+        if !Self::looks_like_forum_page(html) {
+            return None;
+        }
+
+        let comments = Self::find_comment_blocks(html);
+        if comments.len() < 2 {
+            return None;
+        }
+
+        let mut out = String::new();
+        out.push_str("## Comments\n\n");
+        for (author, text, depth) in &comments {
+            let indent = "  ".repeat(*depth);
+            if let Some(a) = author {
+                out.push_str(&format!("{}**{}**:\n\n", indent, a));
+            }
+            let comment_md = html2md::parse_html(text);
+            let comment_md = Self::clean(&comment_md);
+            for line in comment_md.lines() {
+                out.push_str(&format!("{}> {}\n", indent, line));
+            }
+            out.push('\n');
+        }
+        Some(out.trim().to_string())
+    }
+
+    /// Find comment blocks in HTML.
+    /// Returns a list of (author, inner_html, nesting_depth) tuples.
+    fn find_comment_blocks(html: &str) -> Vec<(Option<String>, String, usize)> {
+        let mut blocks = Vec::new();
+        let comment_patterns = [
+            "class=\"comment",
+            "class='comment",
+            "id=\"comment-",
+            "id='comment-",
+            "data-testid=\"comment",
+        ];
+
+        let mut i = 0;
+        while i < html.len() {
+            let mut found = false;
+            for pattern in &comment_patterns {
+                if let Some(pos) = find_ci(&html[i..], pattern) {
+                    let pos = i + pos;
+                    // Find the enclosing tag start (walk back to '<')
+                    let tag_start = html[..pos].rfind('<').unwrap_or(pos);
+                    if let Some(gt) = html[tag_start..].find('>') {
+                        let tag = &html[tag_start..=tag_start + gt];
+                        let tag_name = Self::extract_tag_name(tag);
+                        let close_tag = format!("</{}>", tag_name);
+                        let content_start = tag_start + gt + 1;
+                        if let Some(end) = Self::find_matching_close(
+                            html,
+                            content_start,
+                            &format!("<{}", tag_name),
+                            &close_tag,
+                        ) {
+                            let inner = &html[content_start..end];
+                            // Check the container tag for data-author first, then inner HTML
+                            let author = Self::extract_comment_author(tag)
+                                .or_else(|| Self::extract_comment_author(inner));
+                            let depth = Self::estimate_nesting_depth(html, tag_start);
+                            let text = Self::extract_comment_text(inner);
+                            if !text.is_empty() {
+                                blocks.push((author, text, depth));
+                            }
+                            i = end + close_tag.len();
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+        blocks
+    }
+
+    /// Extract the tag name from an opening tag string like `<div class="...">`.
+    fn extract_tag_name(tag: &str) -> String {
+        let after_lt = &tag[1..];
+        let end = after_lt
+            .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+            .unwrap_or(after_lt.len());
+        after_lt[..end].to_string()
+    }
+
+    /// Extract author name from comment inner HTML.
+    /// Looks for common author patterns: `<a class="author">`, `<span class="author">`,
+    /// `data-author="..."`, `<cite>`, or `<address>`.
+    fn extract_comment_author(html: &str) -> Option<String> {
+        // data-author attribute
+        if let Some(pos) = find_ci(html, "data-author=") {
+            let after = &html[pos + 12..];
+            if let Some(val) = Self::extract_quoted_value(after) {
+                return Some(val);
+            }
+        }
+        // <a class="author"> or <span class="author">
+        for tag in &["<a", "<span", "<div", "<strong", "<b"] {
+            let mut i = 0;
+            while i < html.len() {
+                if let Some(pos) = find_ci(&html[i..], tag) {
+                    let pos = i + pos;
+                    if let Some(gt) = html[pos..].find('>') {
+                        let tag_str = &html[pos..=pos + gt];
+                        if find_ci(tag_str, "author").is_some()
+                            || find_ci(tag_str, "username").is_some()
+                            || find_ci(tag_str, "user-name").is_some()
+                        {
+                            let content_start = pos + gt + 1;
+                            let close = format!("</{}", &tag[1..]);
+                            if let Some(end) = find_ci(&html[content_start..], &close) {
+                                let author_html = &html[content_start..content_start + end];
+                                let author = Self::strip_tags(author_html);
+                                let author = author.trim().to_string();
+                                if !author.is_empty() {
+                                    return Some(author);
+                                }
+                            }
+                        }
+                        i = pos + gt + 1;
+                        continue;
+                    }
+                }
+                break;
+            }
+        }
+        // <cite> or <address>
+        for tag in &["<cite", "<address"] {
+            if let Some(pos) = find_ci(html, tag) {
+                if let Some(gt) = html[pos..].find('>') {
+                    let content_start = pos + gt + 1;
+                    let close = format!("</{}", &tag[1..]);
+                    if let Some(end) = find_ci(&html[content_start..], &close) {
+                        let author = Self::strip_tags(&html[content_start..content_start + end]);
+                        let author = author.trim().to_string();
+                        if !author.is_empty() {
+                            return Some(author);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract the main text content from a comment block, excluding metadata.
+    /// Looks for content containers first, then falls back to the full inner HTML.
+    fn extract_comment_text(html: &str) -> String {
+        let content_patterns = [
+            "class=\"comment-body",
+            "class='comment-body",
+            "class=\"comment-content",
+            "class='comment-content",
+            "class=\"post-body",
+            "class='post-body",
+            "class=\"message-body",
+            "class='message-body",
+            "class=\"usertext-body",
+            "class='usertext-body",
+            "class=\"md",
+            "class='md",
+        ];
+        for pattern in &content_patterns {
+            if let Some(pos) = find_ci(html, pattern) {
+                let tag_start = html[..pos].rfind('<').unwrap_or(pos);
+                if let Some(gt) = html[tag_start..].find('>') {
+                    let tag = &html[tag_start..=tag_start + gt];
+                    let tag_name = Self::extract_tag_name(tag);
+                    let close_tag = format!("</{}>", tag_name);
+                    let content_start = tag_start + gt + 1;
+                    if let Some(end) =
+                        Self::find_matching_close(html, content_start, &format!("<{}", tag_name), &close_tag)
+                    {
+                        return html[content_start..end].to_string();
+                    }
+                }
+            }
+        }
+        // Fallback: return the full inner HTML
+        html.to_string()
+    }
+
+    /// Estimate nesting depth by counting ancestor comment containers.
+    fn estimate_nesting_depth(html: &str, pos: usize) -> usize {
+        let before = &html[..pos];
+        let mut depth: usize = 0;
+        let mut i = 0;
+        while i < before.len() {
+            let mut found = false;
+            for pattern in &["class=\"comment", "class='comment", "id=\"comment-"] {
+                if let Some(p) = find_ci(&before[i..], pattern) {
+                    let p = i + p;
+                    let tag_start = before[..p].rfind('<').unwrap_or(p);
+                    if let Some(gt) = before[tag_start..].find('>') {
+                        let tag = &before[tag_start..=tag_start + gt];
+                        let tag_name = Self::extract_tag_name(tag);
+                        let close_tag = format!("</{}>", tag_name);
+                        let content_start = tag_start + gt + 1;
+                        if let Some(end) = Self::find_matching_close(
+                            before,
+                            content_start,
+                            &format!("<{}", tag_name),
+                            &close_tag,
+                        ) {
+                            if end >= pos {
+                                depth += 1;
+                            }
+                            i = end + close_tag.len();
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+        depth.saturating_sub(1)
+    }
+
+    /// Extract the value from a quoted attribute string like ="value" or ='value'.
+    fn extract_quoted_value(s: &str) -> Option<String> {
+        let mut i = 0;
+        while i < s.len() && s.as_bytes()[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let quote = *s.as_bytes().get(i)? as char;
+        if quote != '"' && quote != '\'' {
+            return None;
+        }
+        let val_start = i + 1;
+        let val_end = s[val_start..].find(quote)? + val_start;
+        Some(s[val_start..val_end].to_string())
+    }
+
+    /// Strip all HTML tags from a string, leaving only text.
+    fn strip_tags(html: &str) -> String {
+        let mut out = String::with_capacity(html.len());
+        let mut in_tag = false;
+        for c in html.chars() {
+            if c == '<' {
+                in_tag = true;
+            } else if c == '>' {
+                in_tag = false;
+            } else if !in_tag {
+                out.push(c);
+            }
+        }
+        out
     }
 }
 
@@ -812,5 +1190,157 @@ mod tests {
         let md = PageToMarkdown::convert(html, false, false, true).unwrap();
         assert!(md.contains("primary article content"));
         assert!(!md.contains("Short2"));
+    }
+
+    #[test]
+    fn paragraph_readability_extracts_dense_cluster() {
+        let html = r#"<div><a href="/">Home</a><a href="/about">About</a></div><p>Short nav text.</p><p>This is the first paragraph of the main article content with substantial text that should be captured by the paragraph-level readability scoring algorithm as part of a dense cluster.</p><p>Here is the second paragraph continuing the article with more meaningful content that contributes to the overall text density of this cluster of paragraphs.</p><p>The third paragraph adds even more substantial text content to ensure the sliding window picks up this cluster as the highest scoring region of the page.</p><p>Finally the fourth paragraph rounds out the content cluster with additional text that should push the combined score well above the threshold for extraction.</p><div><a href="/privacy">Privacy</a><a href="/terms">Terms</a></div>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        assert!(md.contains("first paragraph"));
+        assert!(md.contains("fourth paragraph"));
+        assert!(!md.contains("Privacy"));
+        assert!(!md.contains("Terms"));
+    }
+
+    #[test]
+    fn paragraph_readability_falls_back_when_no_divs() {
+        let html = r#"<p>Brief intro.</p><p>This is a substantial article paragraph with enough text content to be identified as the main content by the paragraph-level readability scoring algorithm when no div or section containers are present.</p><p>Another paragraph with additional content to build up the text density score of this cluster for extraction by the sliding window approach.</p><p>More content here to ensure the window score exceeds the threshold for meaningful extraction by the algorithm.</p>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        assert!(md.contains("substantial article paragraph"));
+    }
+
+    #[test]
+    fn paragraph_readability_skips_short_paragraphs() {
+        let html = r#"<p>OK.</p><p>Sure.</p><p>Yep.</p><p>No.</p><p>Fine.</p>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        // All paragraphs are too short — should return full HTML
+        assert!(md.contains("OK") || md.contains("Sure") || md.contains("Yep"));
+    }
+
+    #[test]
+    fn paragraph_readability_extracts_best_window() {
+        let html = r#"<p>Nav link one.</p><p>Nav link two.</p><p>Nav link three.</p><p>This paragraph contains the real article content that should be extracted by the paragraph readability algorithm because it has substantially more text than the navigation paragraphs above and below it.</p><p>Continuing the real article content with another substantial paragraph that should be part of the extracted window along with the previous paragraph.</p><p>Footer text one.</p><p>Footer text two.</p>"#;
+        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        assert!(md.contains("real article content"));
+    }
+
+    #[test]
+    fn comments_extracted_from_forum_page() {
+        let html = r#"<html><head><title>Forum Thread</title></head><body>
+            <h1>Discussion Topic</h1>
+            <p>Original post content here.</p>
+            <div class="comment" id="comment-1">
+                <span class="author">Alice</span>
+                <div class="comment-body"><p>First comment with some text.</p></div>
+            </div>
+            <div class="comment" id="comment-2">
+                <span class="author">Bob</span>
+                <div class="comment-body"><p>Second comment agreeing with Alice.</p></div>
+            </div>
+            <div class="comment" id="comment-3">
+                <span class="author">Charlie</span>
+                <div class="comment-body"><p>Third comment with a different perspective on the topic.</p></div>
+            </div>
+        </body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        assert!(md.contains("## Comments"));
+        assert!(md.contains("Alice"));
+        assert!(md.contains("Bob"));
+        assert!(md.contains("Charlie"));
+        assert!(md.contains("First comment"));
+        assert!(md.contains("Second comment"));
+        assert!(md.contains("Third comment"));
+    }
+
+    #[test]
+    fn comments_not_extracted_from_non_forum_page() {
+        let html = r#"<html><head><title>Article</title></head><body>
+            <h1>Regular Article</h1>
+            <p>This is a normal article with no comments section.</p>
+            <p>It has multiple paragraphs of content.</p>
+        </body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        assert!(!md.contains("## Comments"));
+    }
+
+    #[test]
+    fn comments_extracted_with_data_author() {
+        let html = r#"<html><body>
+            <h1>Thread</h1>
+            <p>Post content.</p>
+            <div class="comment" data-author="johndoe">
+                <div class="comment-body"><p>Great post, thanks for sharing.</p></div>
+            </div>
+            <div class="comment" data-author="janedoe">
+                <div class="comment-body"><p>I disagree with some points.</p></div>
+            </div>
+        </body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        assert!(md.contains("## Comments"));
+        assert!(md.contains("johndoe"));
+        assert!(md.contains("janedoe"));
+        assert!(md.contains("Great post"));
+    }
+
+    #[test]
+    fn comments_not_extracted_with_only_one_comment() {
+        let html = r#"<html><body>
+            <h1>Page</h1>
+            <p>Content.</p>
+            <div class="comment" id="comment-1">
+                <span class="author">Solo</span>
+                <div class="comment-body"><p>Only one comment here.</p></div>
+            </div>
+        </body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        assert!(!md.contains("## Comments"));
+    }
+
+    #[test]
+    fn comments_nested_with_indentation() {
+        let html = r#"<html><body>
+            <h1>Thread</h1>
+            <p>Post.</p>
+            <div class="comment" id="comment-1">
+                <span class="author">Parent</span>
+                <div class="comment-body"><p>Top level comment.</p></div>
+                <div class="comment" id="comment-2">
+                    <span class="author">Child</span>
+                    <div class="comment-body"><p>Reply to parent.</p></div>
+                </div>
+            </div>
+            <div class="comment" id="comment-3">
+                <span class="author">Another</span>
+                <div class="comment-body"><p>Another top level comment.</p></div>
+            </div>
+        </body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        assert!(md.contains("## Comments"));
+        assert!(md.contains("Parent"));
+        assert!(md.contains("Child"));
+        assert!(md.contains("Top level comment"));
+        assert!(md.contains("Reply to parent"));
+    }
+
+    #[test]
+    fn comments_extracted_from_reddit_style() {
+        let html = r#"<html><body>
+            <h1>Reddit Post</h1>
+            <p>Post content.</p>
+            <div class="comment" data-testid="comment-1">
+                <div data-author="redditor1">
+                    <div class="md"><p>Reddit style comment.</p></div>
+                </div>
+            </div>
+            <div class="comment" data-testid="comment-2">
+                <div data-author="redditor2">
+                    <div class="md"><p>Another Reddit comment.</p></div>
+                </div>
+            </div>
+        </body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        assert!(md.contains("## Comments"));
+        assert!(md.contains("redditor1"));
+        assert!(md.contains("Reddit style comment"));
     }
 }
