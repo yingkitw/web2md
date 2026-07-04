@@ -9,17 +9,19 @@ main.rs
   ├── fetch command   → Browser → inline_iframes → PageToMarkdown → stdout
   │                     └── --format json → extract_metadata → structured JSON output
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
+  ├── batch command   → Browser → PageToMarkdown → stdout or output directory
   └── mcp command     → McpServer → Browser → inline_iframes → PageToMarkdown → JSON-RPC
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction
   ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback + paragraph-level sliding window; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization)
-  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct, extract_metadata() public function
+  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)
   ├── fix_raw_links()        : Post-process multi-line `[text](url)` patterns
   ├── extract_links()          : Parse Markdown links for browse navigation
+  ├── url_to_filename()        : Convert URL to safe filename for batch output
   └── browse_loop()           : Interactive terminal browser with history
 ```
 

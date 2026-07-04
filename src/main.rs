@@ -89,6 +89,12 @@ enum Commands {
         /// Extract only main content from <article>, <main>, or [role=main] elements
         #[arg(long)]
         main_content: bool,
+        /// Write output to file instead of stdout
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Prepend YAML frontmatter (metadata) to Markdown output
+        #[arg(long)]
+        frontmatter: bool,
     },
     /// Interactive terminal browser (Lynx-like)
     Browse {
@@ -138,6 +144,41 @@ enum Commands {
         #[arg(long)]
         feeds: bool,
     },
+    /// Batch convert multiple URLs to Markdown from a file
+    Batch {
+        /// File containing one URL per line (lines starting with # are ignored)
+        file: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Include image references in Markdown output
+        #[arg(short, long)]
+        include_images: bool,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Polite delay between consecutive requests in milliseconds
+        #[arg(long)]
+        delay: Option<u64>,
+        /// Keep <header> tags in output (stripped by default)
+        #[arg(long)]
+        keep_header: bool,
+        /// Cache TTL in seconds (0 = disabled, default: 0)
+        #[arg(long)]
+        cache_ttl: Option<u64>,
+        /// Extract only main content from <article>, <main>, or [role=main] elements
+        #[arg(long)]
+        main_content: bool,
+        /// Output directory to write Markdown files (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Prepend YAML frontmatter (metadata) to each Markdown output
+        #[arg(long)]
+        frontmatter: bool,
+    },
 }
 
 #[tokio::main]
@@ -167,6 +208,8 @@ async fn main() -> Result<()> {
             keep_header,
             cache_ttl,
             main_content,
+            output: output_file,
+            frontmatter,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -184,7 +227,7 @@ async fn main() -> Result<()> {
             let html = browser.fetch(&url).await?;
             let html = browser.inline_iframes(&html, &url).await?;
 
-            let mut output = match format {
+            let mut result = match format {
                 OutputFormat::Markdown => {
                     let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
                     let md = PageToMarkdown::absolutize_links(&md, &url);
@@ -214,13 +257,25 @@ async fn main() -> Result<()> {
                 }
             };
 
-            if let Some(max) = max_length {
-                if output.len() > max {
-                    output = format!("{}\n\n[truncated]", &output[..max]);
+            if frontmatter && matches!(format, OutputFormat::Markdown) {
+                let meta = extract_metadata(&html);
+                if let Some(fm) = meta.to_frontmatter(Some(&url)) {
+                    result = format!("{}{}", fm, result);
                 }
             }
 
-            println!("{}", output);
+            if let Some(max) = max_length {
+                if result.len() > max {
+                    result = format!("{}\n\n[truncated]", &result[..max]);
+                }
+            }
+
+            if let Some(path) = output_file {
+                std::fs::write(&path, &result)?;
+                eprintln!("Written to {}", path);
+            } else {
+                println!("{}", result);
+            }
         }
         Some(Commands::Browse {
             url,
@@ -311,9 +366,120 @@ async fn main() -> Result<()> {
                 eprintln!("No sitemap or feed URLs found.");
             }
         }
+        Some(Commands::Batch {
+            file,
+            timeout,
+            include_images,
+            cookie,
+            header,
+            delay,
+            keep_header,
+            cache_ttl,
+            main_content,
+            output: output_dir,
+            frontmatter,
+        }) => {
+            let content = std::fs::read_to_string(&file)
+                .context("Failed to read batch file")?;
+            let urls: Vec<String> = content
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+                .map(|l| l.to_string())
+                .collect();
+
+            if urls.is_empty() {
+                eprintln!("No URLs found in {}", file);
+                return Ok(());
+            }
+
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            if let Some(ms) = delay {
+                options.request_delay = Duration::from_millis(ms);
+            }
+            if let Some(secs) = cache_ttl {
+                options.cache_ttl = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            let browser = Browser::new(options)?;
+
+            // Create output directory if specified
+            if let Some(ref dir) = output_dir {
+                std::fs::create_dir_all(dir)?;
+            }
+
+            let total = urls.len();
+            let mut succeeded = 0;
+            let mut failed = 0;
+
+            for (i, url) in urls.iter().enumerate() {
+                eprintln!("[{}/{}] {}", i + 1, total, url);
+
+                match browser.fetch(url).await {
+                    Ok(html) => {
+                        let html = match browser.inline_iframes(&html, url).await {
+                            Ok(inlined) => inlined,
+                            Err(_) => html,
+                        };
+                        match PageToMarkdown::convert(&html, include_images, keep_header, main_content) {
+                            Ok(md) => {
+                                let md = PageToMarkdown::absolutize_links(&md, url);
+                                let md = if frontmatter {
+                                    let meta = extract_metadata(&html);
+                                    if let Some(fm) = meta.to_frontmatter(Some(url)) {
+                                        format!("{}{}", fm, md)
+                                    } else {
+                                        md
+                                    }
+                                } else {
+                                    md
+                                };
+                                if let Some(ref dir) = output_dir {
+                                    let filename = url_to_filename(url);
+                                    let path = format!("{}/{}", dir, filename);
+                                    std::fs::write(&path, &md)?;
+                                    eprintln!("  → {}", path);
+                                } else {
+                                    println!("---\n# {}\n\n{}", url, md);
+                                }
+                                succeeded += 1;
+                            }
+                            Err(e) => {
+                                eprintln!("  Error converting: {}", e);
+                                failed += 1;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("  Error fetching: {}", e);
+                        failed += 1;
+                    }
+                }
+            }
+
+            eprintln!("\nDone: {}/{} succeeded, {} failed", succeeded, total, failed);
+        }
     }
 
     Ok(())
+}
+
+/// Convert a URL to a safe filename for batch output.
+/// e.g. "https://example.com/blog/post" → "example.com_blog_post.md"
+fn url_to_filename(url: &str) -> String {
+    let parsed = match Url::parse(url) {
+        Ok(u) => u,
+        Err(_) => return format!("{}.md", url.replace(['/', ':', '?', '=', '&'], "_")),
+    };
+    let host = parsed.host_str().unwrap_or("unknown");
+    let path = parsed.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index" } else { path };
+    let path = path.replace(['/', '?', '=', '&'], "_");
+    format!("{}_{}.md", host, path)
 }
 
 /// Interactive Lynx-like browser loop.
@@ -915,5 +1081,24 @@ mod tests {
         assert!(output.contains("Age"), "missing Age header");
         assert!(output.contains("Alice"), "missing Alice");
         assert!(output.contains("Bob"), "missing Bob");
+    }
+
+    #[test]
+    fn url_to_filename_basic() {
+        let name = url_to_filename("https://example.com/blog/post");
+        assert_eq!(name, "example.com_blog_post.md");
+    }
+
+    #[test]
+    fn url_to_filename_root() {
+        let name = url_to_filename("https://example.com/");
+        assert_eq!(name, "example.com_index.md");
+    }
+
+    #[test]
+    fn url_to_filename_with_query() {
+        let name = url_to_filename("https://example.com/search?q=rust&page=2");
+        assert!(name.starts_with("example.com_search"));
+        assert!(name.ends_with(".md"));
     }
 }

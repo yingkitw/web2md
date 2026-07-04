@@ -32,6 +32,8 @@ web2md fetch <URL> [FLAGS]
   --keep-header        Preserve <header> tags (stripped by default)
   --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
   --main-content       Extract only <article>, <main>, or [role=main] content
+  -o, --output FILE    Write output to file instead of stdout
+  --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
 
 # Sitemap/feed discovery
 web2md sitemap <URL> [FLAGS]
@@ -39,6 +41,19 @@ web2md sitemap <URL> [FLAGS]
   --cookie NAME=VAL    Send cookie (repeatable)
   --header "Name: Val" Send custom header (repeatable)
   --feeds              Also check HTML page for RSS/Atom feed links
+
+# Batch convert multiple URLs
+web2md batch <FILE> [FLAGS]
+  --timeout SECONDS    Request timeout (default: 30)
+  --include-images     Emit Markdown image references
+  --cookie NAME=VAL    Send cookie (repeatable)
+  --header "Name: Val" Send custom header (repeatable)
+  --delay MS           Polite delay between requests in milliseconds
+  --keep-header        Preserve <header> tags (stripped by default)
+  --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
+  --main-content       Extract only <article>, <main>, or [role=main] content
+  -o, --output DIR     Write Markdown files to directory (default: stdout)
+  --frontmatter         Prepend YAML frontmatter (metadata) to each Markdown output
 
 # MCP server (stdio JSON-RPC)
 web2md mcp

@@ -62,6 +62,55 @@ pub struct PageMetadata {
     pub keywords: Option<Vec<String>>,
 }
 
+impl PageMetadata {
+    /// Generate a YAML frontmatter block from the metadata.
+    /// Returns `None` if no metadata fields are present.
+    /// The block is wrapped in `---` delimiters and includes a `url` field if provided.
+    pub fn to_frontmatter(&self, url: Option<&str>) -> Option<String> {
+        let mut lines = Vec::new();
+
+        if let Some(u) = url {
+            lines.push(format!("url: \"{}\"", escape_yaml_string(u)));
+        }
+        if let Some(ref title) = self.title {
+            lines.push(format!("title: \"{}\"", escape_yaml_string(title)));
+        }
+        if let Some(ref desc) = self.description {
+            lines.push(format!("description: \"{}\"", escape_yaml_string(desc)));
+        }
+        if let Some(ref author) = self.author {
+            lines.push(format!("author: \"{}\"", escape_yaml_string(author)));
+        }
+        if let Some(ref date) = self.published_date {
+            lines.push(format!("published_date: \"{}\"", escape_yaml_string(date)));
+        }
+        if let Some(ref image) = self.image {
+            lines.push(format!("image: \"{}\"", escape_yaml_string(image)));
+        }
+        if let Some(ref headline) = self.headline {
+            lines.push(format!("headline: \"{}\"", escape_yaml_string(headline)));
+        }
+        if let Some(ref site) = self.site_name {
+            lines.push(format!("site_name: \"{}\"", escape_yaml_string(site)));
+        }
+        if let Some(ref kw) = self.keywords {
+            let items: Vec<String> = kw.iter().map(|k| format!("  - \"{}\"", escape_yaml_string(k))).collect();
+            lines.push(format!("keywords:\n{}", items.join("\n")));
+        }
+
+        if lines.is_empty() {
+            None
+        } else {
+            Some(format!("---\n{}\n---\n\n", lines.join("\n")))
+        }
+    }
+}
+
+/// Escape double quotes and backslashes in a YAML string value.
+fn escape_yaml_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Extract metadata (title, description, author, publication date, image, headline, site name, keywords) from HTML.
 pub fn extract_metadata(html: &str) -> PageMetadata {
     let title = extract_title(html);
@@ -738,5 +787,95 @@ mod tests {
         let html = "<html><body><p>No metadata</p></body></html>";
         let meta = extract_metadata(html);
         assert_eq!(meta.keywords, None);
+    }
+
+    #[test]
+    fn frontmatter_includes_all_fields() {
+        let meta = PageMetadata {
+            title: Some("Test Title".to_string()),
+            description: Some("A description".to_string()),
+            author: Some("Author Name".to_string()),
+            published_date: Some("2025-07-04T12:00:00Z".to_string()),
+            image: Some("https://example.com/img.jpg".to_string()),
+            headline: Some("Breaking News".to_string()),
+            site_name: Some("Tech Blog".to_string()),
+            keywords: Some(vec!["Rust".to_string(), "Markdown".to_string()]),
+        };
+        let fm = meta.to_frontmatter(Some("https://example.com/page")).unwrap();
+        assert!(fm.starts_with("---\n"));
+        assert!(fm.contains("url: \"https://example.com/page\""));
+        assert!(fm.contains("title: \"Test Title\""));
+        assert!(fm.contains("description: \"A description\""));
+        assert!(fm.contains("author: \"Author Name\""));
+        assert!(fm.contains("published_date: \"2025-07-04T12:00:00Z\""));
+        assert!(fm.contains("image: \"https://example.com/img.jpg\""));
+        assert!(fm.contains("headline: \"Breaking News\""));
+        assert!(fm.contains("site_name: \"Tech Blog\""));
+        assert!(fm.contains("keywords:\n  - \"Rust\"\n  - \"Markdown\""));
+        assert!(fm.ends_with("---\n\n"));
+    }
+
+    #[test]
+    fn frontmatter_without_url() {
+        let meta = PageMetadata {
+            title: Some("Title Only".to_string()),
+            description: None,
+            author: None,
+            published_date: None,
+            image: None,
+            headline: None,
+            site_name: None,
+            keywords: None,
+        };
+        let fm = meta.to_frontmatter(None).unwrap();
+        assert!(fm.contains("title: \"Title Only\""));
+        assert!(!fm.contains("url:"));
+    }
+
+    #[test]
+    fn frontmatter_empty_metadata_returns_none() {
+        let meta = PageMetadata {
+            title: None,
+            description: None,
+            author: None,
+            published_date: None,
+            image: None,
+            headline: None,
+            site_name: None,
+            keywords: None,
+        };
+        assert!(meta.to_frontmatter(None).is_none());
+    }
+
+    #[test]
+    fn frontmatter_escapes_quotes() {
+        let meta = PageMetadata {
+            title: Some("Title with \"quotes\"".to_string()),
+            description: None,
+            author: None,
+            published_date: None,
+            image: None,
+            headline: None,
+            site_name: None,
+            keywords: None,
+        };
+        let fm = meta.to_frontmatter(None).unwrap();
+        assert!(fm.contains("title: \"Title with \\\"quotes\\\"\""));
+    }
+
+    #[test]
+    fn frontmatter_escapes_backslashes() {
+        let meta = PageMetadata {
+            title: Some("Path\\with\\backslashes".to_string()),
+            description: None,
+            author: None,
+            published_date: None,
+            image: None,
+            headline: None,
+            site_name: None,
+            keywords: None,
+        };
+        let fm = meta.to_frontmatter(None).unwrap();
+        assert!(fm.contains("title: \"Path\\\\with\\\\backslashes\""));
     }
 }

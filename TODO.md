@@ -46,6 +46,9 @@
 - [x] Keywords/tags extraction: `article:tag` meta tags (multiple), `meta name="keywords"` fallback, JSON-LD `keywords` (string or array) fallback
 - [x] Link URL absolutization: convert relative URLs to absolute in Markdown output using the page URL as base
 - [x] Sitemap/feed discovery: `sitemap` subcommand fetches sitemap.xml and discovers RSS/Atom feed links from HTML pages
+- [x] Batch processing: `batch` subcommand reads URLs from a file (one per line, # comments supported) and converts each to Markdown
+- [x] Output to file: `--output` flag on `fetch` writes result to a file instead of stdout; `--output` on `batch` writes to a directory
+- [x] YAML frontmatter output: `--frontmatter` flag prepends metadata (title, description, author, date, etc.) as a YAML block at the top of Markdown output
 
 ## In Progress
 
@@ -58,3 +61,5 @@
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags
 - URL blacklist filtering: skip known non-content URLs (ads, tracking pixels, etc.)
+- CSS selector targeting: `--include-selector` / `--exclude-selector` to include/exclude specific HTML elements
+- Recursive crawl: `--depth N` to discover and convert same-domain linked pages
