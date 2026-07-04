@@ -57,6 +57,7 @@ cargo run -- mcp
 - **Batch processing** (`batch` subcommand): Reads URLs from a file (one per line, `#` comments supported) and converts each to Markdown; use `--output <dir>` to write files to a directory
 - **Output to file** (`--output` flag): Write `fetch` output to a file instead of stdout
 - **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
+- **CSS selector targeting** (`--exclude-selector` flag): Strip HTML elements matching `.class` or `#id` selectors before conversion — remove ads, sidebars, and other noise elements
 
 ## Architecture
 

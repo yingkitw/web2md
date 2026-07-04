@@ -62,7 +62,8 @@ impl PageToMarkdown {
     /// Convert HTML string to Markdown.
     /// When `include_images` is false, strips `<img>` tags to reduce token output.
     /// When `main_content` is true, extracts only the content of `<article>`, `<main>`, or `[role="main"]` elements.
-    pub fn convert(html: &str, include_images: bool, keep_header: bool, main_content: bool) -> Result<String> {
+    /// When `exclude_selectors` is non-empty, removes HTML elements matching the given CSS-like selectors (`.class` or `#id`) before conversion.
+    pub fn convert(html: &str, include_images: bool, keep_header: bool, main_content: bool, exclude_selectors: &[String]) -> Result<String> {
         let original_html = html.to_string();
         let html = if main_content {
             Self::extract_main_content(&original_html)
@@ -73,6 +74,7 @@ impl PageToMarkdown {
         let html = Self::strip_iframe_tags(&html);
         let html = Self::strip_noise_tags(&html, keep_header);
         let html = Self::strip_html_comments(&html);
+        let html = Self::strip_by_selectors(&html, exclude_selectors);
         let languages = Self::extract_code_languages(&html);
         let html = if include_images { html } else { Self::strip_img_tags(&html) };
         let md = html2md::parse_html(&html);
@@ -242,6 +244,106 @@ impl PageToMarkdown {
                 if let Some(end) = find_ci(&html[start..], "-->") {
                     out.push_str(&html[i..start]);
                     i = start + end + 3;
+                    continue;
+                }
+            }
+            out.push_str(&html[i..]);
+            break;
+        }
+        out
+    }
+
+    /// Remove HTML elements matching CSS-like selectors from the HTML.
+    /// Supports `.classname` (class selector) and `#id` (ID selector).
+    /// Multiple selectors can be provided; each is applied in order.
+    fn strip_by_selectors(html: &str, selectors: &[String]) -> String {
+        let mut result = html.to_string();
+        for selector in selectors {
+            let trimmed = selector.trim();
+            if let Some(class_name) = trimmed.strip_prefix('.') {
+                if !class_name.is_empty() {
+                    result = Self::strip_elements_by_attr(&result, "class", class_name);
+                }
+            } else if let Some(id_val) = trimmed.strip_prefix('#') {
+                if !id_val.is_empty() {
+                    result = Self::strip_elements_by_attr(&result, "id", id_val);
+                }
+            }
+        }
+        result
+    }
+
+    /// Remove HTML elements where an attribute contains the given value.
+    /// Matches `class="foo bar"` for value "foo" (word-boundary match),
+    /// and `id="exact"` for value "exact" (exact match).
+    fn strip_elements_by_attr(html: &str, attr: &str, value: &str) -> String {
+        let mut out = String::with_capacity(html.len());
+        let mut i = 0;
+        let lower_attr = format!("{}=\"", attr);
+
+        while i < html.len() {
+            // Find the next opening tag
+            if let Some(rel_start) = html[i..].find('<') {
+                let tag_start = i + rel_start;
+                // Find the end of this opening tag
+                if let Some(rel_end) = html[tag_start..].find('>') {
+                    let tag_end = tag_start + rel_end;
+                    let tag_content = &html[tag_start..=tag_end];
+                    let tag_lower = tag_content.to_ascii_lowercase();
+
+                    // Check if this tag has the attribute we're looking for
+                    if let Some(attr_pos) = find_ci(&tag_lower, &lower_attr) {
+                        let val_start = attr_pos + lower_attr.len();
+                        if let Some(quote_end) = tag_lower[val_start..].find('"') {
+                            let attr_val = &tag_lower[val_start..val_start + quote_end];
+                            let matches = if attr == "id" {
+                                attr_val == value.to_ascii_lowercase()
+                            } else {
+                                attr_val.split_whitespace().any(|w| w == value.to_ascii_lowercase().as_str())
+                            };
+
+                            if matches {
+                                // Determine the tag name
+                                let after_lt = &tag_content[1..];
+                                let tag_name: String = after_lt
+                                    .chars()
+                                    .take_while(|c| c.is_alphanumeric())
+                                    .collect();
+
+                                // Copy everything before this tag
+                                out.push_str(&html[i..tag_start]);
+
+                                if tag_name.is_empty() {
+                                    i = tag_end + 1;
+                                    continue;
+                                }
+
+                                let void_tags = ["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"];
+                                if void_tags.contains(&tag_name.as_str()) {
+                                    i = tag_end + 1;
+                                    continue;
+                                }
+
+                                // Find the matching close tag
+                                let close_tag = format!("</{}", tag_name);
+                                if let Some(close_pos) = find_ci(&html[tag_end + 1..], &close_tag) {
+                                    let close_start = tag_end + 1 + close_pos;
+                                    if let Some(close_end) = html[close_start..].find('>') {
+                                        i = close_start + close_end + 1;
+                                        continue;
+                                    }
+                                }
+
+                                // No close tag found, just remove the opening tag
+                                i = tag_end + 1;
+                                continue;
+                            }
+                        }
+                    }
+
+                    // Tag doesn't match — copy it and advance past it
+                    out.push_str(&html[i..tag_end + 1]);
+                    i = tag_end + 1;
                     continue;
                 }
             }
@@ -932,14 +1034,14 @@ mod tests {
     #[test]
     fn simple_paragraph() {
         let html = "<p>Hello world</p>";
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("Hello world"));
     }
 
     #[test]
     fn heading_conversion() {
         let html = "<h1>Title</h1><h2>Subtitle</h2>";
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("Title"));
         assert!(md.contains("Subtitle"));
     }
@@ -955,7 +1057,7 @@ mod tests {
             </body>
             </html>
         "#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("alert"));
         assert!(!md.contains("color:red"));
         assert!(md.contains("Content"));
@@ -964,7 +1066,7 @@ mod tests {
     #[test]
     fn strips_images_when_false() {
         let html = r#"<p>Text before</p><img src="a.png" alt="pic"><p>Text after</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("a.png"));
         assert!(!md.contains("pic"));
         assert!(md.contains("Text before"));
@@ -974,7 +1076,7 @@ mod tests {
     #[test]
     fn keeps_images_when_true() {
         let html = r#"<p>Text before</p><img src="a.png" alt="pic"><p>Text after</p>"#;
-        let md = PageToMarkdown::convert(html, true, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, true, false, false, &[]).unwrap();
         assert!(md.contains("a.png"));
         assert!(md.contains("pic"));
         assert!(md.contains("Text before"));
@@ -984,7 +1086,7 @@ mod tests {
     #[test]
     fn strips_self_closing_images() {
         let html = r#"<p>Before</p><img src="b.png" alt="self"/><p>After</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("b.png"));
         assert!(!md.contains("self"));
         assert!(md.contains("Before"));
@@ -998,7 +1100,7 @@ mod tests {
             <iframe src="https://video.ibm.com/embed/123" allowfullscreen></iframe>
             <p>After</p>
         "#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("iframe"));
         assert!(!md.contains("video.ibm.com"));
         assert!(md.contains("Before"));
@@ -1008,7 +1110,7 @@ mod tests {
     #[test]
     fn strips_iframe_tags_self_closing() {
         let html = r#"<p>Before</p><iframe src="map.html"/><p>After</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("iframe"));
         assert!(!md.contains("map.html"));
         assert!(md.contains("Before"));
@@ -1018,7 +1120,7 @@ mod tests {
     #[test]
     fn strips_nav_tags() {
         let html = r#"<nav><a href="/">Home</a><a href="/about">About</a></nav><p>Content</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("Home"));
         assert!(!md.contains("About"));
         assert!(md.contains("Content"));
@@ -1027,7 +1129,7 @@ mod tests {
     #[test]
     fn strips_footer_tags() {
         let html = r#"<p>Article</p><footer>Copyright 2025</footer>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("Article"));
         assert!(!md.contains("Copyright"));
     }
@@ -1035,7 +1137,7 @@ mod tests {
     #[test]
     fn strips_aside_tags() {
         let html = r#"<p>Main text</p><aside>Sidebar content</aside>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("Main text"));
         assert!(!md.contains("Sidebar"));
     }
@@ -1043,7 +1145,7 @@ mod tests {
     #[test]
     fn strips_noscript_tags() {
         let html = r#"<noscript>Please enable JS</noscript><p>Visible</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("enable JS"));
         assert!(md.contains("Visible"));
     }
@@ -1051,7 +1153,7 @@ mod tests {
     #[test]
     fn strips_form_tags() {
         let html = r#"<form action="/submit"><input type="text"/><button>Go</button></form><p>Text</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("submit"));
         assert!(!md.contains("button"));
         assert!(md.contains("Text"));
@@ -1060,7 +1162,7 @@ mod tests {
     #[test]
     fn strips_html_comments() {
         let html = r#"<p>Before</p><!-- this is a comment --><p>After</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("comment"));
         assert!(md.contains("Before"));
         assert!(md.contains("After"));
@@ -1069,7 +1171,7 @@ mod tests {
     #[test]
     fn strips_noise_tags_case_insensitive() {
         let html = r#"<NAV>Menu</NAV><p>Body</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("Menu"));
         assert!(md.contains("Body"));
     }
@@ -1077,7 +1179,7 @@ mod tests {
     #[test]
     fn preserves_content_between_noise_tags() {
         let html = r#"<nav>Nav</nav><p>First</p><footer>Foot</footer><p>Second</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("Nav"));
         assert!(!md.contains("Foot"));
         assert!(md.contains("First"));
@@ -1087,7 +1189,7 @@ mod tests {
     #[test]
     fn code_block_language_preserved() {
         let html = r#"<pre><code class="language-rust">fn main() {}</code></pre>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("```rust"), "expected language annotation, got: {}", md);
         assert!(md.contains("fn main()"));
     }
@@ -1095,7 +1197,7 @@ mod tests {
     #[test]
     fn code_block_language_python() {
         let html = r#"<pre><code class="language-python">print("hello")</code></pre>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("```python"), "expected language annotation, got: {}", md);
         assert!(md.contains("print"));
     }
@@ -1103,7 +1205,7 @@ mod tests {
     #[test]
     fn code_block_no_language_stays_plain() {
         let html = r#"<pre><code>plain code</code></pre>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("```"));
         assert!(!md.contains("```rust"));
         assert!(!md.contains("```python"));
@@ -1113,7 +1215,7 @@ mod tests {
     #[test]
     fn multiple_code_blocks_with_languages() {
         let html = r#"<pre><code class="language-rust">let x = 1;</code></pre><p>text</p><pre><code class="language-go">fmt.Println()</code></pre>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("```rust"));
         assert!(md.contains("```go"));
         assert!(md.contains("let x = 1;"));
@@ -1123,7 +1225,7 @@ mod tests {
     #[test]
     fn strips_header_tags_by_default() {
         let html = r#"<header><h1>Site Title</h1><nav>Menu</nav></header><p>Article body</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("Site Title"));
         assert!(!md.contains("Menu"));
         assert!(md.contains("Article body"));
@@ -1132,7 +1234,7 @@ mod tests {
     #[test]
     fn keeps_header_when_requested() {
         let html = r#"<header><h1>Article Title</h1></header><p>Article body</p>"#;
-        let md = PageToMarkdown::convert(html, false, true, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, true, false, &[]).unwrap();
         assert!(md.contains("Article Title"));
         assert!(md.contains("Article body"));
     }
@@ -1140,7 +1242,7 @@ mod tests {
     #[test]
     fn dedup_removes_duplicate_paragraphs() {
         let html = r#"<p>This is a long paragraph that should be deduplicated when it appears twice.</p><p>This is a long paragraph that should be deduplicated when it appears twice.</p><p>Unique content here.</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         let count = md.matches("deduplicated").count();
         assert_eq!(count, 1, "duplicate paragraph should appear once, got: {}", md);
         assert!(md.contains("Unique content"));
@@ -1149,7 +1251,7 @@ mod tests {
     #[test]
     fn dedup_keeps_short_blocks() {
         let html = r#"<h1>Title</h1><h1>Title</h1><p>Body text</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("Title"));
         assert!(md.contains("Body text"));
     }
@@ -1157,7 +1259,7 @@ mod tests {
     #[test]
     fn dedup_preserves_unique_blocks() {
         let html = r#"<p>First unique paragraph with enough text to exceed the threshold.</p><p>Second unique paragraph with different content entirely.</p><p>Third unique paragraph also different from the rest.</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("First unique"));
         assert!(md.contains("Second unique"));
         assert!(md.contains("Third unique"));
@@ -1166,7 +1268,7 @@ mod tests {
     #[test]
     fn main_content_extracts_article_tag() {
         let html = r#"<nav>Home About</nav><article><h1>Article Title</h1><p>This is the main article content that should be extracted.</p></article><footer>Copyright 2025</footer>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("Article Title"));
         assert!(md.contains("main article content"));
         assert!(!md.contains("Copyright"));
@@ -1175,7 +1277,7 @@ mod tests {
     #[test]
     fn main_content_extracts_main_tag() {
         let html = r#"<div>Sidebar noise</div><main><p>Main content goes here with enough text to be meaningful.</p></main><aside>Related links</aside>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("Main content"));
         assert!(!md.contains("Sidebar noise"));
     }
@@ -1183,7 +1285,7 @@ mod tests {
     #[test]
     fn main_content_extracts_role_main_div() {
         let html = r#"<div class="sidebar">Sidebar</div><div role="main"><p>This is the main content extracted via role attribute.</p></div>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("role attribute"));
         assert!(!md.contains("Sidebar"));
     }
@@ -1191,21 +1293,21 @@ mod tests {
     #[test]
     fn main_content_falls_back_to_full_html() {
         let html = r#"<div><p>Just some content without semantic tags.</p></div>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("Just some content"));
     }
 
     #[test]
     fn main_content_disabled_by_default() {
         let html = r#"<nav>Navigation</nav><article><p>Article content here.</p></article><footer>Footer</footer>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("Article content"));
     }
 
     #[test]
     fn readability_extracts_content_div_from_layout() {
         let html = r#"<div><a href="/">Home</a><a href="/about">About</a><a href="/contact">Contact</a><a href="/blog">Blog</a><a href="/shop">Shop</a></div><div><h2>Article Title</h2><p>This is a substantial article body with enough text content to score well in the readability algorithm. It contains meaningful paragraphs of text that should be extracted as the main content of the page, far exceeding the navigation links above.</p><p>Another paragraph with additional content to further increase the text density score of this content block compared to the navigation block which consists mostly of short link texts.</p></div>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("substantial article body"));
         assert!(!md.contains("Shop"));
     }
@@ -1213,7 +1315,7 @@ mod tests {
     #[test]
     fn readability_falls_back_when_no_semantic_tags() {
         let html = r#"<div><a href="/">Home</a><a href="/about">About</a></div><div><p>This is the main content paragraph with enough text to exceed the readability threshold for extraction. It has substantial body text that should be identified as the primary content block by the scoring algorithm.</p></div>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("main content paragraph"));
         assert!(!md.contains("About"));
     }
@@ -1221,7 +1323,7 @@ mod tests {
     #[test]
     fn readability_returns_full_html_when_no_good_candidate() {
         let html = r#"<div><p>Short.</p></div><div><p>Brief.</p></div>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("Short") || md.contains("Brief"));
     }
 
@@ -1230,7 +1332,7 @@ mod tests {
         let nav_html = r#"<div><a href="/a">Link A</a><a href="/b">Link B</a><a href="/c">Link C</a></div>"#;
         let content_html = r#"<div><p>This block has substantial text content that should score higher than the navigation block which only contains short link texts. The readability algorithm should correctly identify this as the main content area of the page.</p></div>"#;
         let html = format!("{}{}", nav_html, content_html);
-        let md = PageToMarkdown::convert(&html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(&html, false, false, true, &[]).unwrap();
         assert!(md.contains("substantial text content"));
         assert!(!md.contains("Link A"));
         assert!(!md.contains("Link B"));
@@ -1240,7 +1342,7 @@ mod tests {
     #[test]
     fn readability_section_tag_supported() {
         let html = r#"<section><a href="/x">Short</a><a href="/y">Short2</a></section><section><p>This section contains the primary article content with enough text to be identified by the readability scoring algorithm as the main content block on the page, exceeding the navigation section in text density.</p></section>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("primary article content"));
         assert!(!md.contains("Short2"));
     }
@@ -1248,7 +1350,7 @@ mod tests {
     #[test]
     fn paragraph_readability_extracts_dense_cluster() {
         let html = r#"<div><a href="/">Home</a><a href="/about">About</a></div><p>Short nav text.</p><p>This is the first paragraph of the main article content with substantial text that should be captured by the paragraph-level readability scoring algorithm as part of a dense cluster.</p><p>Here is the second paragraph continuing the article with more meaningful content that contributes to the overall text density of this cluster of paragraphs.</p><p>The third paragraph adds even more substantial text content to ensure the sliding window picks up this cluster as the highest scoring region of the page.</p><p>Finally the fourth paragraph rounds out the content cluster with additional text that should push the combined score well above the threshold for extraction.</p><div><a href="/privacy">Privacy</a><a href="/terms">Terms</a></div>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("first paragraph"));
         assert!(md.contains("fourth paragraph"));
         assert!(!md.contains("Privacy"));
@@ -1258,14 +1360,14 @@ mod tests {
     #[test]
     fn paragraph_readability_falls_back_when_no_divs() {
         let html = r#"<p>Brief intro.</p><p>This is a substantial article paragraph with enough text content to be identified as the main content by the paragraph-level readability scoring algorithm when no div or section containers are present.</p><p>Another paragraph with additional content to build up the text density score of this cluster for extraction by the sliding window approach.</p><p>More content here to ensure the window score exceeds the threshold for meaningful extraction by the algorithm.</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("substantial article paragraph"));
     }
 
     #[test]
     fn paragraph_readability_skips_short_paragraphs() {
         let html = r#"<p>OK.</p><p>Sure.</p><p>Yep.</p><p>No.</p><p>Fine.</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         // All paragraphs are too short — should return full HTML
         assert!(md.contains("OK") || md.contains("Sure") || md.contains("Yep"));
     }
@@ -1273,7 +1375,7 @@ mod tests {
     #[test]
     fn paragraph_readability_extracts_best_window() {
         let html = r#"<p>Nav link one.</p><p>Nav link two.</p><p>Nav link three.</p><p>This paragraph contains the real article content that should be extracted by the paragraph readability algorithm because it has substantially more text than the navigation paragraphs above and below it.</p><p>Continuing the real article content with another substantial paragraph that should be part of the extracted window along with the previous paragraph.</p><p>Footer text one.</p><p>Footer text two.</p>"#;
-        let md = PageToMarkdown::convert(html, false, false, true).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
         assert!(md.contains("real article content"));
     }
 
@@ -1295,7 +1397,7 @@ mod tests {
                 <div class="comment-body"><p>Third comment with a different perspective on the topic.</p></div>
             </div>
         </body></html>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("## Comments"));
         assert!(md.contains("Alice"));
         assert!(md.contains("Bob"));
@@ -1312,7 +1414,7 @@ mod tests {
             <p>This is a normal article with no comments section.</p>
             <p>It has multiple paragraphs of content.</p>
         </body></html>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("## Comments"));
     }
 
@@ -1328,7 +1430,7 @@ mod tests {
                 <div class="comment-body"><p>I disagree with some points.</p></div>
             </div>
         </body></html>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("## Comments"));
         assert!(md.contains("johndoe"));
         assert!(md.contains("janedoe"));
@@ -1345,7 +1447,7 @@ mod tests {
                 <div class="comment-body"><p>Only one comment here.</p></div>
             </div>
         </body></html>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("## Comments"));
     }
 
@@ -1367,7 +1469,7 @@ mod tests {
                 <div class="comment-body"><p>Another top level comment.</p></div>
             </div>
         </body></html>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("## Comments"));
         assert!(md.contains("Parent"));
         assert!(md.contains("Child"));
@@ -1391,7 +1493,7 @@ mod tests {
                 </div>
             </div>
         </body></html>"#;
-        let md = PageToMarkdown::convert(html, false, false, false).unwrap();
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("## Comments"));
         assert!(md.contains("redditor1"));
         assert!(md.contains("Reddit style comment"));
@@ -1466,5 +1568,74 @@ mod tests {
         let result = PageToMarkdown::absolutize_links(md, "https://example.com");
         assert!(result.contains("https://example.com/page"));
         assert!(result.contains("日本語テキスト"));
+    }
+
+    #[test]
+    fn exclude_selector_class_removes_element() {
+        let html = r#"<p>Keep this</p><div class="ad">Advertisement</div><p>Also keep</p>"#;
+        let selectors = vec![".ad".to_string()];
+        let md = PageToMarkdown::convert(html, false, false, false, &selectors).unwrap();
+        assert!(md.contains("Keep this"));
+        assert!(md.contains("Also keep"));
+        assert!(!md.contains("Advertisement"));
+    }
+
+    #[test]
+    fn exclude_selector_id_removes_element() {
+        let html = r#"<p>Keep this</p><div id="sidebar">Sidebar content</div><p>Also keep</p>"#;
+        let selectors = vec!["#sidebar".to_string()];
+        let md = PageToMarkdown::convert(html, false, false, false, &selectors).unwrap();
+        assert!(md.contains("Keep this"));
+        assert!(md.contains("Also keep"));
+        assert!(!md.contains("Sidebar"));
+    }
+
+    #[test]
+    fn exclude_selector_multiple_selectors() {
+        let html = r#"<div class="ad">Ad</div><p>Keep</p><div id="promo">Promo</div><p>Also keep</p>"#;
+        let selectors = vec![".ad".to_string(), "#promo".to_string()];
+        let md = PageToMarkdown::convert(html, false, false, false, &selectors).unwrap();
+        assert!(md.contains("Keep"));
+        assert!(md.contains("Also keep"));
+        assert!(!md.contains("Ad"));
+        assert!(!md.contains("Promo"));
+    }
+
+    #[test]
+    fn exclude_selector_class_word_boundary() {
+        let html = r#"<div class="ad-banner">Banner</div><p>Keep</p><div class="notad">Should keep</div>"#;
+        let selectors = vec![".ad".to_string()];
+        let md = PageToMarkdown::convert(html, false, false, false, &selectors).unwrap();
+        assert!(md.contains("Keep"));
+        assert!(md.contains("Banner"));
+        assert!(md.contains("Should keep"));
+    }
+
+    #[test]
+    fn exclude_selector_class_multi_class_match() {
+        let html = r#"<div class="box highlight">Highlighted</div><p>Keep</p>"#;
+        let selectors = vec![".highlight".to_string()];
+        let md = PageToMarkdown::convert(html, false, false, false, &selectors).unwrap();
+        assert!(md.contains("Keep"));
+        assert!(!md.contains("Highlighted"));
+    }
+
+    #[test]
+    fn exclude_selector_empty_does_nothing() {
+        let html = r#"<p>Keep this</p><div class="ad">Ad</div>"#;
+        let selectors: Vec<String> = vec![];
+        let md = PageToMarkdown::convert(html, false, false, false, &selectors).unwrap();
+        assert!(md.contains("Keep this"));
+        assert!(md.contains("Ad"));
+    }
+
+    #[test]
+    fn exclude_selector_nested_elements_removed() {
+        let html = r#"<div class="ad"><h2>Ad Title</h2><p>Ad content</p></div><p>Keep this</p>"#;
+        let selectors = vec![".ad".to_string()];
+        let md = PageToMarkdown::convert(html, false, false, false, &selectors).unwrap();
+        assert!(md.contains("Keep this"));
+        assert!(!md.contains("Ad Title"));
+        assert!(!md.contains("Ad content"));
     }
 }

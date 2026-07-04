@@ -14,7 +14,7 @@ main.rs
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction
-  ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback + paragraph-level sliding window; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization)
+  ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback + paragraph-level sliding window; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector)
   └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
 
 main.rs (helpers)

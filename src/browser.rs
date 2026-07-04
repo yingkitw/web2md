@@ -78,7 +78,7 @@ fn extract_href(tag: &str) -> Option<String> {
     Some(after[val_start..val_end].to_string())
 }
 
-/// Configuration for the headless browser
+/// Configuration for the HTTP client
 #[derive(Debug, Clone)]
 pub struct BrowserOptions {
     /// Request timeout
@@ -114,7 +114,7 @@ impl Default for BrowserOptions {
     }
 }
 
-/// Minimal headless browser: fetches raw HTML only.
+/// Minimal HTTP client: fetches raw HTML only.
 /// No rendering engine—intentionally lightweight for MCP token efficiency.
 pub struct Browser {
     client: Client,

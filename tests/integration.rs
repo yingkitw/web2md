@@ -18,7 +18,7 @@ async fn fetch_and_convert_to_markdown() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/article", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
 
     assert!(md.contains("Heading"));
     assert!(md.contains("First paragraph."));
@@ -136,7 +136,7 @@ async fn strips_scripts_and_styles_in_integration() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/styled", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
 
     assert!(!md.contains("alert"));
     assert!(!md.contains("color:red"));
@@ -167,7 +167,7 @@ async fn strips_noise_tags_in_integration() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/noisy", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
 
     assert!(md.contains("Real content here"));
     assert!(!md.contains("Home"));
@@ -210,7 +210,7 @@ async fn cli_render_adds_ansi_codes() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/render", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
 
     // Simulate what --render does: the render_markdown_ansi function is in main.rs
     // and not exposed via the library, so we verify the markdown contains content
@@ -238,7 +238,7 @@ async fn readability_main_content_extracts_from_div_layout() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/layout", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false, true).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, true, &[]).unwrap();
 
     assert!(md.contains("main article content"));
     assert!(!md.contains("Contact"));
@@ -263,7 +263,7 @@ async fn json_output_format_emits_structured_json() {
 
     let browser = Browser::new(BrowserOptions::default()).unwrap();
     let html = browser.fetch(&format!("{}/json", server.url())).await.unwrap();
-    let md = PageToMarkdown::convert(&html, false, false, false).unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
     let meta = extract_metadata(&html);
 
     let json = serde_json::json!({

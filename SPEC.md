@@ -34,6 +34,7 @@ web2md fetch <URL> [FLAGS]
   --main-content       Extract only <article>, <main>, or [role=main] content
   -o, --output FILE    Write output to file instead of stdout
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
+  --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
 
 # Sitemap/feed discovery
 web2md sitemap <URL> [FLAGS]
@@ -54,6 +55,7 @@ web2md batch <FILE> [FLAGS]
   --main-content       Extract only <article>, <main>, or [role=main] content
   -o, --output DIR     Write Markdown files to directory (default: stdout)
   --frontmatter         Prepend YAML frontmatter (metadata) to each Markdown output
+  --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
 
 # MCP server (stdio JSON-RPC)
 web2md mcp

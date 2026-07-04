@@ -41,7 +41,7 @@ struct CliJsonOutput {
 
 #[derive(Parser)]
 #[command(name = "web2md")]
-#[command(about = "Headless browser that returns pages as Markdown")]
+#[command(about = "Fetch web pages and convert them to Markdown")]
 #[command(arg_required_else_help = false)]
 struct Cli {
     /// URL to browse (defaults to interactive browse mode if no subcommand given)
@@ -95,6 +95,9 @@ enum Commands {
         /// Prepend YAML frontmatter (metadata) to Markdown output
         #[arg(long)]
         frontmatter: bool,
+        /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
+        #[arg(long)]
+        exclude_selector: Vec<String>,
     },
     /// Interactive terminal browser (Lynx-like)
     Browse {
@@ -178,6 +181,9 @@ enum Commands {
         /// Prepend YAML frontmatter (metadata) to each Markdown output
         #[arg(long)]
         frontmatter: bool,
+        /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
+        #[arg(long)]
+        exclude_selector: Vec<String>,
     },
 }
 
@@ -210,6 +216,7 @@ async fn main() -> Result<()> {
             main_content,
             output: output_file,
             frontmatter,
+            exclude_selector,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -229,7 +236,7 @@ async fn main() -> Result<()> {
 
             let mut result = match format {
                 OutputFormat::Markdown => {
-                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
+                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
                     let md = PageToMarkdown::absolutize_links(&md, &url);
                     if render {
                         render_markdown_ansi(&md, false).0
@@ -239,7 +246,7 @@ async fn main() -> Result<()> {
                 }
                 OutputFormat::Html => html.clone(),
                 OutputFormat::Json => {
-                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
+                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
                     let md = PageToMarkdown::absolutize_links(&md, &url);
                     let meta = extract_metadata(&html);
                     let output = CliJsonOutput {
@@ -378,6 +385,7 @@ async fn main() -> Result<()> {
             main_content,
             output: output_dir,
             frontmatter,
+            exclude_selector,
         }) => {
             let content = std::fs::read_to_string(&file)
                 .context("Failed to read batch file")?;
@@ -425,7 +433,7 @@ async fn main() -> Result<()> {
                             Ok(inlined) => inlined,
                             Err(_) => html,
                         };
-                        match PageToMarkdown::convert(&html, include_images, keep_header, main_content) {
+                        match PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector) {
                             Ok(md) => {
                                 let md = PageToMarkdown::absolutize_links(&md, url);
                                 let md = if frontmatter {
@@ -512,7 +520,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
             }
         };
 
-        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content)?;
+        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &[])?;
         let md = PageToMarkdown::absolutize_links(&md, &url);
         let (rendered, links) = render_markdown_ansi(&md, true);
         println!("{}", rendered);

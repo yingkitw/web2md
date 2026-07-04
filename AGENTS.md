@@ -34,7 +34,7 @@ After each batch of features, perform a quality pass:
 - **Consistency**: Match existing code style and patterns
 
 ### 6. Competitive Intelligence
-Research similar headless browser and HTML-to-Markdown tools (html2text, readability-lxml, Mercury Parser, etc.). Identify capabilities they have that this project lacks. Add the most valuable ones to the `TODO.md` brainstorming section. Prioritize features that provide clear competitive advantage.
+Research similar HTML-to-Markdown and web scraping tools (html2text, readability-lxml, Mercury Parser, etc.). Identify capabilities they have that this project lacks. Add the most valuable ones to the `TODO.md` brainstorming section. Prioritize features that provide clear competitive advantage.
 
 ### 7. Update Documentation
 Keep all project docs aligned with the current implementation:
