@@ -8,7 +8,7 @@ use url::Url;
 use crate::{DEFAULT_TIMEOUT, DEFAULT_USER_AGENT};
 
 /// Parse URLs from sitemap XML content.
-/// Extracts all <loc> tag values from sitemap.xml format.
+/// Extracts all `<loc>` tag values from sitemap.xml format.
 pub fn parse_sitemap_urls(xml: &str) -> Vec<String> {
     let mut urls = Vec::new();
     let mut pos = 0;
