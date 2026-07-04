@@ -39,6 +39,7 @@
 - [x] Publication date extraction: `<meta property="article:published_time">`, `<time datetime>`, JSON-LD `datePublished`
 - [x] `--format json` CLI option: emit structured JSON (markdown + metadata) from CLI, not just MCP
 - [x] JSON-LD author extraction: `author` field from JSON-LD blocks (string or `{"name":"..."}` object), as fallback when `<meta name="author">` is absent
+- [x] JSON-LD structured data extraction: `image` (og:image or JSON-LD string/object/array) and `headline` (JSON-LD) fields in MCP response and `--format json` output
 
 ## In Progress
 
@@ -50,6 +51,5 @@
 - Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
 - Paragraph-level readability scoring (text density per paragraph, not just per div/section)
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
-- JSON-LD structured data extraction: article schema, image, headline (author and datePublished already done)
 - Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags
 - Comments extraction for forum pages (Reddit, vBulletin) via Trafilatura-style algorithm

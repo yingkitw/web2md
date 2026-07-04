@@ -30,6 +30,10 @@ pub struct McpResponse {
     pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headline: Option<String>,
 }
 
 /// Metadata extracted from an HTML page.
@@ -44,9 +48,13 @@ pub struct PageMetadata {
     pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub published_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headline: Option<String>,
 }
 
-/// Extract metadata (title, description, author, publication date) from HTML.
+/// Extract metadata (title, description, author, publication date, image, headline) from HTML.
 pub fn extract_metadata(html: &str) -> PageMetadata {
     let title = extract_title(html);
     let description = extract_meta_content(html, "name", "description")
@@ -54,11 +62,16 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
     let author = extract_meta_content(html, "name", "author")
         .or_else(|| extract_json_ld_author(html));
     let published_date = extract_published_date(html);
+    let image = extract_meta_content(html, "property", "og:image")
+        .or_else(|| extract_json_ld_image(html));
+    let headline = extract_json_ld_field(html, "headline");
     PageMetadata {
         title,
         description,
         author,
         published_date,
+        image,
+        headline,
     }
 }
 
@@ -95,6 +108,8 @@ impl McpServer {
             description: meta.description,
             author: meta.author,
             published_date: meta.published_date,
+            image: meta.image,
+            headline: meta.headline,
         })
     }
 }
@@ -132,6 +147,32 @@ fn extract_json_ld_author(html: &str) -> Option<String> {
             }
             if let Some(name) = author.get("name").and_then(|v| v.as_str()) {
                 return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract `image` from JSON-LD `<script type="application/ld+json">` blocks.
+/// Handles string URLs, `{"url":"..."}` objects, and arrays of either (first item used).
+fn extract_json_ld_image(html: &str) -> Option<String> {
+    for json in iter_json_ld_blocks(html) {
+        if let Some(image) = json.get("image") {
+            if let Some(url) = image.as_str() {
+                return Some(url.to_string());
+            }
+            if let Some(url) = image.get("url").and_then(|v| v.as_str()) {
+                return Some(url.to_string());
+            }
+            if let Some(arr) = image.as_array() {
+                if let Some(first) = arr.first() {
+                    if let Some(url) = first.as_str() {
+                        return Some(url.to_string());
+                    }
+                    if let Some(url) = first.get("url").and_then(|v| v.as_str()) {
+                        return Some(url.to_string());
+                    }
+                }
             }
         }
     }
@@ -484,5 +525,60 @@ mod tests {
         let html = r#"<html><head><script type="application/ld+json">{"@type":"NewsArticle","author":{"@type":"Person","name":"From JSON-LD"}}</script></head><body></body></html>"#;
         let meta = extract_metadata(html);
         assert_eq!(meta.author, Some("From JSON-LD".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_og_image_meta_tag() {
+        let html = r#"<html><head>
+            <meta property="og:image" content="https://example.com/cover.jpg">
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.image, Some("https://example.com/cover.jpg".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_image_string() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","image":"https://example.com/img.png"}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.image, Some("https://example.com/img.png".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_image_object() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","image":{"@type":"ImageObject","url":"https://example.com/photo.jpg"}}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.image, Some("https://example.com/photo.jpg".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_image_array() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","image":["https://example.com/first.jpg","https://example.com/second.jpg"]}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.image, Some("https://example.com/first.jpg".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_og_image_takes_priority_over_json_ld() {
+        let html = r#"<html><head>
+            <meta property="og:image" content="https://example.com/og.jpg">
+            <script type="application/ld+json">{"image":"https://example.com/jsonld.jpg"}</script>
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.image, Some("https://example.com/og.jpg".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_headline() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"NewsArticle","headline":"Breaking News Story"}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.headline, Some("Breaking News Story".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_no_image_or_headline_returns_none() {
+        let html = "<html><body><p>No metadata</p></body></html>";
+        let meta = extract_metadata(html);
+        assert_eq!(meta.image, None);
+        assert_eq!(meta.headline, None);
     }
 }

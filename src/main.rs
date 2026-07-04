@@ -28,6 +28,10 @@ struct CliJsonOutput {
     author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     published_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    headline: Option<String>,
 }
 
 #[derive(Parser)]
@@ -177,6 +181,8 @@ async fn main() -> Result<()> {
                         description: meta.description,
                         author: meta.author,
                         published_date: meta.published_date,
+                        image: meta.image,
+                        headline: meta.headline,
                     };
                     serde_json::to_string_pretty(&output)?
                 }

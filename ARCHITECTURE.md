@@ -13,7 +13,7 @@ main.rs
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL
   ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback; dedup; images)
-  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date), PageMetadata struct, extract_metadata() public function
+  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline), PageMetadata struct, extract_metadata() public function
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)

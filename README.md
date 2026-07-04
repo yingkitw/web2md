@@ -49,7 +49,7 @@ cargo run -- mcp
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
-- **Metadata extraction**: Title, meta description, Open Graph description, author (meta tag or JSON-LD), and publication date returned in MCP response and `--format json` output
+- **Metadata extraction**: Title, description, author (meta tag or JSON-LD), publication date, image (og:image or JSON-LD), and headline (JSON-LD) returned in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
 
 ## Architecture

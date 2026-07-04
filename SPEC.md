@@ -58,11 +58,13 @@ web2md mcp
   "title": "Article Title",
   "description": "A summary of the article",
   "author": "Jane Doe",
-  "published_date": "2025-01-15T08:30:00Z"
+  "published_date": "2025-01-15T08:30:00Z",
+  "image": "https://example.com/cover.jpg",
+  "headline": "Breaking News Story"
 }
 ```
 
-`description`, `author`, and `published_date` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order).
+`description`, `author`, `published_date`, `image`, and `headline` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order). `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`.
 
 ### CLI `--format json` Output
 
@@ -72,7 +74,9 @@ web2md mcp
   "title": "Article Title",
   "description": "A summary of the article",
   "author": "Jane Doe",
-  "published_date": "2025-01-15T08:30:00Z"
+  "published_date": "2025-01-15T08:30:00Z",
+  "image": "https://example.com/cover.jpg",
+  "headline": "Breaking News Story"
 }
 ```
 
