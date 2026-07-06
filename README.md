@@ -58,10 +58,12 @@ cargo run -- mcp
 - **Output to file** (`--output` flag): Write `fetch` output to a file instead of stdout
 - **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
 - **CSS selector targeting** (`--exclude-selector` flag): Strip HTML elements matching `.class` or `#id` selectors before conversion — remove ads, sidebars, and other noise elements
+- **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
 
 ## Architecture
 
-- **Browser** (`browser.rs`): Minimal HTTP client with iframe inlining. No rendering engine—intentionally lightweight.
+- **Browser** (`browser.rs`): Minimal HTTP client with iframe inlining. Optional inline-JS execution via a built-in, dependency-free interpreter.
+- **JS interpreter** (`src/js/`): Lexer + recursive-descent parser + tree-walking evaluator. When `--javascript` is set, inline `<script>` blocks run and `document.write` output is folded into the page. No `boa`/`v8` dependency.
 - **PageToMarkdown** (`markdown.rs`): HTML-to-Markdown conversion. Strips scripts, styles, iframes, images (optional).
 - **McpServer** (`mcp.rs`): JSON-RPC server wrapper exposing a `fetch` tool.
 - **CLI** (`main.rs`): `fetch` (one-shot), `browse` (interactive), `sitemap` (URL discovery), `batch` (bulk convert), `mcp` (server). Default mode is `browse`.

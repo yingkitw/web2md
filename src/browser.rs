@@ -87,7 +87,8 @@ pub struct BrowserOptions {
     pub user_agent: String,
     /// Follow redirects
     pub follow_redirects: bool,
-    /// Enable JavaScript execution (reserved for future expansion)
+    /// Execute inline `<script>` blocks via the built-in JS interpreter,
+    /// capturing `document.write` output into the page.
     pub enable_javascript: bool,
     /// Initial cookies to send with every request (format: "name=value")
     pub cookies: Vec<String>,
@@ -279,6 +280,25 @@ impl Browser {
     /// Returns a reference to the browser options
     pub fn options(&self) -> &BrowserOptions {
         &self.options
+    }
+
+    /// Execute inline `<script>` blocks and inject any HTML captured via
+    /// `document.write` back into the page, when `enable_javascript` is set.
+    ///
+    /// Scripts are evaluated with the built-in dependency-free JS subset
+    /// interpreter (`crate::js`); external scripts, modules, and unsupported
+    /// features are silently skipped. When JavaScript is disabled the input is
+    /// returned unchanged. Call this after [`inline_iframes`](Self::inline_iframes)
+    /// and before Markdown conversion.
+    pub fn run_inline_scripts(&self, html: &str) -> String {
+        if !self.options.enable_javascript {
+            return html.to_string();
+        }
+        let captured = crate::js::run_inline_scripts(html);
+        if captured.is_empty() {
+            return html.to_string();
+        }
+        crate::js::inject_before_body_close(html, &captured)
     }
 }
 

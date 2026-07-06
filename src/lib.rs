@@ -2,10 +2,12 @@ use anyhow::Result;
 use std::time::Duration;
 
 mod browser;
+mod js;
 mod markdown;
 mod mcp;
 
 pub use browser::{extract_feed_links, parse_sitemap_urls, Browser, BrowserOptions};
+pub use js::{inject_before_body_close, run_inline_scripts, Interpreter};
 pub use markdown::PageToMarkdown;
 pub use mcp::{extract_metadata, McpRequest, McpResponse, McpServer, PageMetadata};
 

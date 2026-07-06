@@ -98,6 +98,9 @@ enum Commands {
         /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
         #[arg(long)]
         exclude_selector: Vec<String>,
+        /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
+        #[arg(long)]
+        javascript: bool,
     },
     /// Interactive terminal browser (Lynx-like)
     Browse {
@@ -127,6 +130,9 @@ enum Commands {
         /// Extract only main content from <article>, <main>, or [role=main] elements
         #[arg(long)]
         main_content: bool,
+        /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
+        #[arg(long)]
+        javascript: bool,
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
@@ -184,6 +190,9 @@ enum Commands {
         /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
         #[arg(long)]
         exclude_selector: Vec<String>,
+        /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
+        #[arg(long)]
+        javascript: bool,
     },
 }
 
@@ -217,6 +226,7 @@ async fn main() -> Result<()> {
             output: output_file,
             frontmatter,
             exclude_selector,
+            javascript,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -230,9 +240,11 @@ async fn main() -> Result<()> {
             }
             options.cookies = cookie;
             options.headers = header;
+            options.enable_javascript = javascript;
             let browser = Browser::new(options)?;
             let html = browser.fetch(&url).await?;
             let html = browser.inline_iframes(&html, &url).await?;
+            let html = browser.run_inline_scripts(&html);
 
             let mut result = match format {
                 OutputFormat::Markdown => {
@@ -294,6 +306,7 @@ async fn main() -> Result<()> {
             keep_header,
             cache_ttl,
             main_content,
+            javascript,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -307,6 +320,7 @@ async fn main() -> Result<()> {
             }
             options.cookies = cookie;
             options.headers = header;
+            options.enable_javascript = javascript;
             browse_loop(url, options, include_images, keep_header, main_content).await?;
         }
         Some(Commands::Mcp) => {
@@ -386,6 +400,7 @@ async fn main() -> Result<()> {
             output: output_dir,
             frontmatter,
             exclude_selector,
+            javascript,
         }) => {
             let content = std::fs::read_to_string(&file)
                 .context("Failed to read batch file")?;
@@ -413,6 +428,7 @@ async fn main() -> Result<()> {
             }
             options.cookies = cookie;
             options.headers = header;
+            options.enable_javascript = javascript;
             let browser = Browser::new(options)?;
 
             // Create output directory if specified
@@ -433,6 +449,7 @@ async fn main() -> Result<()> {
                             Ok(inlined) => inlined,
                             Err(_) => html,
                         };
+                        let html = browser.run_inline_scripts(&html);
                         match PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector) {
                             Ok(md) => {
                                 let md = PageToMarkdown::absolutize_links(&md, url);
@@ -519,6 +536,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
                 continue;
             }
         };
+        let html = browser.run_inline_scripts(&html);
 
         let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &[])?;
         let md = PageToMarkdown::absolutize_links(&md, &url);

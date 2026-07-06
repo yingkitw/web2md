@@ -6,9 +6,13 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 
 ## Non-Goals
 
-- JavaScript execution (no DOM rendering)
+- Full DOM rendering / browser engine semantics
 - Screenshot or PDF generation
 - Session/cookie persistence across requests
+
+## Optional JS Execution
+
+When enabled (`--javascript` / `enable_javascript`), inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or other external engine. A pragmatic JS subset is supported (variables, closures, control flow, template literals, `document.write`, strings, arrays, `Math`, `JSON`). Unsupported features fail fast and are skipped, so a script can never break conversion. External (`src=`) and module scripts are not executed.
 
 ## CLI
 
@@ -35,6 +39,7 @@ web2md fetch <URL> [FLAGS]
   -o, --output FILE    Write output to file instead of stdout
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
+  --javascript          Execute inline <script> blocks via the built-in JS interpreter
 
 # Sitemap/feed discovery
 web2md sitemap <URL> [FLAGS]
@@ -56,6 +61,7 @@ web2md batch <FILE> [FLAGS]
   -o, --output DIR     Write Markdown files to directory (default: stdout)
   --frontmatter         Prepend YAML frontmatter (metadata) to each Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
+  --javascript          Execute inline <script> blocks via the built-in JS interpreter
 
 # MCP server (stdio JSON-RPC)
 web2md mcp

@@ -6,14 +6,20 @@
 main.rs
   ├── CLI parsing (clap)
   ├── <URL> (default) → browse_loop → Browser → PageToMarkdown → ANSI renderer → terminal
-  ├── fetch command   → Browser → inline_iframes → PageToMarkdown → stdout
+  ├── fetch command   → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → stdout
   │                     └── --format json → extract_metadata → structured JSON output
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
-  ├── batch command   → Browser → PageToMarkdown → stdout or output directory
-  └── mcp command     → McpServer → Browser → inline_iframes → PageToMarkdown → JSON-RPC
+  ├── batch command   → Browser → run_inline_scripts → PageToMarkdown → stdout or output directory
+  └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction
+  ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction, run_inline_scripts() (gated by enable_javascript)
+  ├── js/          : Built-in dependency-free JavaScript subset interpreter
+  │     ├── ast.rs     : AST node types (expressions, statements, operators)
+  │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)
+  │     ├── parser.rs  : Recursive-descent parser → Vec<Stmt>
+  │     ├── eval.rs    : Tree-walking evaluator with lexical scopes, closures, control flow, and builtins (document.write, strings, arrays, Math, JSON, console, global constructors)
+  │     └── mod.rs     : run_inline_scripts(html) — extracts inline <script> blocks, runs them, returns document.write output; inject_before_body_close()
   ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback + paragraph-level sliding window; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector)
   └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
 
@@ -32,6 +38,14 @@ URL ──► Browser.fetch() ──► raw HTML
                                   │
                                   ▼
                           Browser.inline_iframes()
+                                  │
+                                  ▼
+                          Browser.run_inline_scripts()   (only when --javascript / enable_javascript)
+                                  │
+                                  ├── extracts inline <script> blocks (no src; classic JS type)
+                                  ├── parses + evaluates each via the built-in interpreter
+                                  ├── captures document.write / writeln output
+                                  └── injects captured HTML before </body>
                                   │
                                   ▼
                           PageToMarkdown.convert()
@@ -62,7 +76,7 @@ URL ──► Browser.fetch() ──► raw HTML
 
 ## Key Decisions
 
-1. **No rendering engine**: We do not execute JavaScript or render CSS. This keeps the crate lightweight and avoids DOM complexity. The tradeoff is that JS-heavy SPAs may return incomplete Markdown.
+1. **Optional JS execution, in-house**: By default the crate does not execute JavaScript (keeping it lightweight and deterministic). With `--javascript` / `enable_javascript`, inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or external engine. The interpreter supports a pragmatic subset (variables, closures, control flow, template literals, `document.write`, strings, arrays, `Math`, `JSON`); scripts using unsupported features fail fast and are silently skipped, so they never break conversion. External and module scripts are not executed.
 
 2. **html2md crate**: Delegates HTML parsing to a mature, lightweight library rather than building a custom parser.
 

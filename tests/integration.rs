@@ -333,3 +333,65 @@ async fn feed_discovery_from_html_page() {
     assert!(feeds.contains(&"/blog/atom.xml".to_string()));
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn js_disabled_ignores_document_write() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/page")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><p>Static</p>\
+             <script>document.write(\"<p>Dynamic</p>\");</script>\
+             </body></html>",
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/page", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let html = browser.run_inline_scripts(&html);
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
+
+    assert!(md.contains("Static"));
+    assert!(!md.contains("Dynamic"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn js_enabled_captures_document_write() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/page")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><p>Static</p>\
+             <script>var items=[\"a\",\"b\"]; for (var i of items){document.write(\"<p>\"+i+\"</p>\");}</script>\
+             <script type=\"application/ld+json\">{\"x\":1}</script>\
+             <script src=\"external.js\"></script>\
+             </body></html>",
+        )
+        .create_async()
+        .await;
+
+    let mut opts = BrowserOptions::default();
+    opts.enable_javascript = true;
+    let browser = Browser::new(opts).unwrap();
+    let url = format!("{}/page", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let html = browser.run_inline_scripts(&html);
+
+    // Captured HTML is injected before </body>.
+    assert!(html.contains("<p>a</p>"));
+    assert!(html.contains("<p>b</p>"));
+    assert!(html.contains("Static"));
+
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
+    assert!(md.contains("Static"));
+    assert!(md.contains("a"));
+    assert!(md.contains("b"));
+    mock.assert_async().await;
+}
