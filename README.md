@@ -1,10 +1,41 @@
 # Web2MD
 
+[![Crates.io](https://img.shields.io/crates/v/web2md)](https://crates.io/crates/web2md)
+[![docs.rs](https://docs.rs/web2md/badge.svg)](https://docs.rs/web2md)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org)
+[![MCP](https://img.shields.io/badge/MCP-compatible-purple.svg)](#mcp-server)
+[![GitHub](https://img.shields.io/badge/github-yingkitw%2Fweb2md-lightgrey.svg)](https://github.com/yingkitw/web2md)
+
 A tool that fetches web pages and returns them as Markdown. Designed to minimize token usage when invoked via MCP (Model Context Protocol).
 
-## Why?
+## Why Markdown instead of HTML?
 
-Raw HTML is noisy: scripts, styles, ads, and markup bloat consume LLM context window. Web2MD fetches a page and converts it to clean Markdown, preserving content hierarchy while stripping everything non-essential.
+HTML is built for browsers, not for reasoning. A typical article page carries far more markup than meaning:
+
+| What you get with raw HTML | What Web2MD gives you |
+|---|---|
+| `<div class="sidebar-ad">`, inline styles, `<script>` blocks | Content only — nav, ads, footers, and scripts stripped |
+| Nested tags around every word (`<span><strong>…</strong></span>`) | Flat, readable text with `#` headings and `-` lists |
+| Relative links (`/docs/guide`) that agents cannot follow | Absolute URLs ready for the next fetch |
+| 5–10× more tokens for the same article | Compact Markdown that fits more pages in context |
+
+**Markdown preserves what matters for reading and reasoning** — headings, paragraphs, lists, tables, code blocks, and links — without the DOM ceremony. LLMs are trained on vast amounts of Markdown (GitHub, docs, forums), so they parse structure and intent from it more reliably than from tag soup.
+
+**Browsing in Markdown is a deliberate trade:** you lose pixel-perfect layout and client-side rendering, but you gain a representation optimized for *understanding* and *acting on* web content. For research, summarization, citation, and multi-step agent workflows, that trade is almost always worth it.
+
+## Value for AI agents
+
+Agents consume the web through tools. Every page fetch costs context window, latency, and money. Web2MD is built around that constraint:
+
+- **Token efficiency** — `--main-content` extraction, noise stripping, and deduplication shrink pages before they hit the model. An agent can read several articles in the space one raw HTML dump would occupy.
+- **MCP-native** — Run `web2md mcp` as a stdio JSON-RPC server. Agents call a single `fetch` tool and receive Markdown plus structured metadata (title, author, date, description, keywords) in one response.
+- **Actionable links** — Relative URLs are absolutized so an agent can follow numbered links in terminal browse mode or chain fetches across a site without guessing base paths.
+- **Structured output** — `--format json` and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
+- **Polite crawling** — `--delay`, caching (`--cache-ttl`), and batch mode let research agents process URL lists without hammering servers or re-fetching the same page.
+- **Auth for gated content** — Cookies and custom headers (`--cookie`, `--header`) let agents reach documentation, dashboards, or member-only pages when credentials are provided.
+
+In short: **Web2MD turns the web into a format agents can read, reason over, and act on** — without burning context on markup nobody needs.
 
 ## Quick Start
 
@@ -33,6 +64,29 @@ cargo run -- browse https://example.com
 
 # Run as MCP server (stdio JSON-RPC)
 cargo run -- mcp
+```
+
+## MCP Server
+
+Web2MD exposes a stdio JSON-RPC `fetch` tool for MCP clients (Cursor, Claude Desktop, custom agents). Send a URL; receive Markdown plus metadata in one round trip:
+
+```json
+{ "url": "https://example.com/article", "main_content": true, "max_length": 4000 }
+```
+
+Response includes `markdown`, `title`, `description`, `author`, `published_date`, and other fields when present on the page. See [SPEC.md](SPEC.md) for the full request/response schema.
+
+Example Cursor MCP config:
+
+```json
+{
+  "mcpServers": {
+    "web2md": {
+      "command": "web2md",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
 ## Features
