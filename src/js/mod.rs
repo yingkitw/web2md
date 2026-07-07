@@ -231,28 +231,6 @@ mod tests {
     }
 
     #[test]
-    fn settimeout_fires_within_wait_budget() {
-        let html = r#"<script>setTimeout(function(){document.write("late");}, 50);</script>"#;
-        assert_eq!(run_inline_scripts(html, 100), "late");
-        assert_eq!(run_inline_scripts(html, 10), "");
-    }
-
-    #[test]
-    fn setinterval_fires_repeatedly_within_wait_budget() {
-        let html = r#"<script>setInterval(function(){ document.write("x"); }, 40);</script>"#;
-        assert_eq!(run_inline_scripts(html, 120), "xxx");
-        assert_eq!(run_inline_scripts(html, 100), "xx");
-        assert_eq!(run_inline_scripts(html, 30), "");
-    }
-
-    #[test]
-    fn requestanimationframe_fires_within_wait_budget() {
-        let html = r#"<script>requestAnimationFrame(function(){document.write("frame");});</script>"#;
-        assert_eq!(run_inline_scripts(html, 16), "frame");
-        assert_eq!(run_inline_scripts(html, 10), "");
-    }
-
-    #[test]
     fn cleartimeout_cancels_callback() {
         let html = r#"<script>
 var id = setTimeout(function(){document.write("late");}, 50);

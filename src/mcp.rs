@@ -186,7 +186,7 @@ fn extract_published_date(html: &str) -> Option<String> {
     extract_meta_content(html, "property", "article:published_time")
         .or_else(|| extract_meta_content(html, "name", "article:published_time"))
         .or_else(|| extract_time_datetime(html))
-        .or_else(|| extract_json_ld_date(html))
+        .or_else(|| extract_json_ld_field(html, "datePublished"))
 }
 
 /// Extract `datetime` attribute from the first `<time>` tag.
@@ -195,11 +195,6 @@ fn extract_time_datetime(html: &str) -> Option<String> {
     let tag_end = html[pos..].find('>').map(|e| pos + e)?;
     let tag = &html[pos..=tag_end];
     extract_attr(tag, "datetime")
-}
-
-/// Extract `datePublished` from JSON-LD `<script type="application/ld+json">` blocks.
-fn extract_json_ld_date(html: &str) -> Option<String> {
-    extract_json_ld_field(html, "datePublished")
 }
 
 /// Extract `author` from JSON-LD `<script type="application/ld+json">` blocks.

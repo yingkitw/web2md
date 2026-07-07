@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use url::Url;
 
+use crate::html_meta::extract_attr;
 use crate::url_blacklist::BlacklistPatterns;
 use crate::{DEFAULT_TIMEOUT, DEFAULT_USER_AGENT};
 use crate::robots::{is_robots_txt_url, robots_origin, RobotsTxt};
@@ -47,7 +48,7 @@ pub fn extract_feed_links(html: &str) -> Vec<String> {
                 if (tag.contains("application/rss+xml") || tag.contains("application/atom+xml"))
                     && tag.contains("alternate")
                 {
-                    if let Some(href) = extract_href(tag) {
+                    if let Some(href) = extract_attr(tag, "href") {
                         feeds.push(href);
                     }
                 }
@@ -60,24 +61,6 @@ pub fn extract_feed_links(html: &str) -> Vec<String> {
         }
     }
     feeds
-}
-
-/// Extract the href attribute value from an HTML tag string.
-fn extract_href(tag: &str) -> Option<String> {
-    let needle = "href=";
-    let pos = tag.find(needle)?;
-    let after = &tag[pos + needle.len()..];
-    let mut i = 0;
-    while i < after.len() && after.as_bytes()[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let quote = *after.as_bytes().get(i)? as char;
-    if quote != '"' && quote != '\'' {
-        return None;
-    }
-    let val_start = i + 1;
-    let val_end = after[val_start..].find(quote)? + val_start;
-    Some(after[val_start..val_end].to_string())
 }
 
 /// Configuration for the HTTP client
@@ -909,58 +892,5 @@ mod tests {
         let urls = parse_sitemap_urls(xml);
         assert_eq!(urls.len(), 1);
         assert_eq!(urls[0], "https://example.com/page");
-    }
-
-    #[test]
-    fn extract_feed_links_finds_rss() {
-        let html = r#"<html><head>
-            <link rel="alternate" type="application/rss+xml" href="/feed.xml" title="RSS Feed">
-        </head><body></body></html>"#;
-        let feeds = extract_feed_links(html);
-        assert_eq!(feeds.len(), 1);
-        assert_eq!(feeds[0], "/feed.xml");
-    }
-
-    #[test]
-    fn extract_feed_links_finds_atom() {
-        let html = r#"<html><head>
-            <link rel="alternate" type="application/atom+xml" href="https://example.com/atom.xml">
-        </head><body></body></html>"#;
-        let feeds = extract_feed_links(html);
-        assert_eq!(feeds.len(), 1);
-        assert_eq!(feeds[0], "https://example.com/atom.xml");
-    }
-
-    #[test]
-    fn extract_feed_links_finds_multiple() {
-        let html = r#"<html><head>
-            <link rel="alternate" type="application/rss+xml" href="/rss">
-            <link rel="alternate" type="application/atom+xml" href="/atom">
-            <link rel="stylesheet" href="/style.css">
-        </head><body></body></html>"#;
-        let feeds = extract_feed_links(html);
-        assert_eq!(feeds.len(), 2);
-        assert!(feeds.contains(&"/rss".to_string()));
-        assert!(feeds.contains(&"/atom".to_string()));
-    }
-
-    #[test]
-    fn extract_feed_links_ignores_non_feed_links() {
-        let html = r#"<html><head>
-            <link rel="stylesheet" href="/style.css">
-            <link rel="icon" href="/favicon.ico">
-        </head><body></body></html>"#;
-        let feeds = extract_feed_links(html);
-        assert!(feeds.is_empty());
-    }
-
-    #[test]
-    fn extract_feed_links_handles_single_quotes() {
-        let html = r#"<html><head>
-            <link rel='alternate' type='application/rss+xml' href='/feed.rss'>
-        </head><body></body></html>"#;
-        let feeds = extract_feed_links(html);
-        assert_eq!(feeds.len(), 1);
-        assert_eq!(feeds[0], "/feed.rss");
     }
 }

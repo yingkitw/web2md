@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use url::Url;
-use web2md::{extract_metadata, parse_sitemap_urls, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{
+    extract_feed_links, extract_metadata, normalize_crawl_url, parse_sitemap_urls, Browser,
+    BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
@@ -259,7 +262,6 @@ fn apply_blacklist_options(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    web2md::init()?;
     let cli = Cli::parse();
 
     match cli.command {
@@ -478,7 +480,7 @@ async fn main() -> Result<()> {
             if feeds {
                 match browser.fetch(&url).await {
                     Ok(html) => {
-                        let feed_urls = web2md::extract_feed_links(&html);
+                        let feed_urls = extract_feed_links(&html);
                         if !feed_urls.is_empty() {
                             println!("\n# Feed links from {}\n", url);
                             for f in &feed_urls {
@@ -640,7 +642,7 @@ async fn crawl_fetch(
     render: bool,
 ) -> Result<()> {
     let root = Url::parse(start_url).context("Invalid URL")?;
-    let start = web2md::normalize_crawl_url(start_url, start_url)
+    let start = normalize_crawl_url(start_url, start_url)
         .unwrap_or_else(|| start_url.to_string());
 
     if let Some(dir) = output_dir {
@@ -654,7 +656,7 @@ async fn crawl_fetch(
     let mut skipped = 0usize;
 
     while let Some((url, level)) = queue.pop_front() {
-        let key = web2md::normalize_crawl_url(&url, &url).unwrap_or_else(|| url.clone());
+        let key = normalize_crawl_url(&url, &url).unwrap_or_else(|| url.clone());
         if !visited.insert(key) {
             continue;
         }
@@ -683,7 +685,7 @@ async fn crawl_fetch(
                 if level < depth {
                     for link in browser.same_origin_links(&html, &url, &root) {
                         let link_key =
-                            web2md::normalize_crawl_url(&link, &link).unwrap_or(link.clone());
+                            normalize_crawl_url(&link, &link).unwrap_or(link.clone());
                         if !visited.contains(&link_key) {
                             queue.push_back((link, level + 1));
                         }

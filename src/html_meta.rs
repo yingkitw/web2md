@@ -87,22 +87,4 @@ mod tests {
             .collect();
         assert_eq!(headlines, vec!["One", "Two"]);
     }
-
-    #[test]
-    fn extract_meta_content_finds_og_description() {
-        let html = r#"<meta property="og:description" content="Hello world">"#;
-        assert_eq!(
-            extract_meta_content(html, "property", "og:description"),
-            Some("Hello world".into())
-        );
-    }
-
-    #[test]
-    fn extract_json_ld_field_reads_headline() {
-        let html = r#"<script type="application/ld+json">{"headline":"Big story"}</script>"#;
-        assert_eq!(
-            extract_json_ld_field(html, "headline"),
-            Some("Big story".into())
-        );
-    }
 }

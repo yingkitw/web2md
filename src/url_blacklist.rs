@@ -148,14 +148,6 @@ pub fn is_blacklisted(url: &str) -> bool {
     BlacklistPatterns::builtin().is_blacklisted(url)
 }
 
-/// Remove blacklisted URLs from a list using the built-in patterns.
-pub fn filter_blacklisted_urls(urls: impl IntoIterator<Item = String>) -> Vec<String> {
-    let patterns = BlacklistPatterns::builtin();
-    urls.into_iter()
-        .filter(|u| !patterns.is_blacklisted(u))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,15 +178,18 @@ mod tests {
 
     #[test]
     fn filter_removes_blacklisted_entries() {
-        let urls = vec![
-            "https://example.com/article".to_string(),
-            "https://cdn.doubleclick.net/ad".to_string(),
-            "https://example.com/about".to_string(),
+        let urls = [
+            "https://example.com/article",
+            "https://cdn.doubleclick.net/ad",
+            "https://example.com/about",
         ];
-        let filtered = filter_blacklisted_urls(urls);
+        let filtered: Vec<_> = urls
+            .into_iter()
+            .filter(|u| !is_blacklisted(u))
+            .collect();
         assert_eq!(filtered.len(), 2);
-        assert!(filtered.contains(&"https://example.com/article".to_string()));
-        assert!(filtered.contains(&"https://example.com/about".to_string()));
+        assert!(filtered.contains(&"https://example.com/article"));
+        assert!(filtered.contains(&"https://example.com/about"));
     }
 
     #[test]

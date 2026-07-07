@@ -2,7 +2,8 @@ use std::collections::HashSet;
 
 use url::Url;
 
-use crate::is_blacklisted;
+use crate::url_blacklist::is_blacklisted;
+use crate::html_meta::extract_attr;
 use crate::html_util::find_ci;
 
 /// Extract absolute HTTP(S) links from `<a href="...">` tags in HTML.
@@ -16,7 +17,7 @@ pub fn extract_page_links(html: &str, base_url: &str) -> Vec<String> {
             let start = pos + start;
             if let Some(end) = html[start..].find('>') {
                 let tag = &html[start..=start + end];
-                if let Some(href) = extract_href(tag) {
+                if let Some(href) = extract_attr(tag, "href") {
                     if let Some(resolved) = normalize_crawl_url(&href, base_url) {
                         if seen.insert(resolved.clone()) {
                             links.push(resolved);
@@ -82,23 +83,6 @@ pub fn normalize_crawl_url(href: &str, base_url: &str) -> Option<String> {
     }
     parsed.set_fragment(None);
     Some(parsed.to_string())
-}
-
-fn extract_href(tag: &str) -> Option<String> {
-    let needle = "href=";
-    let pos = find_ci(tag, needle)?;
-    let after = &tag[pos + needle.len()..];
-    let mut i = 0;
-    while i < after.len() && after.as_bytes()[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let quote = *after.as_bytes().get(i)? as char;
-    if quote != '"' && quote != '\'' {
-        return None;
-    }
-    let val_start = i + 1;
-    let val_end = after[val_start..].find(quote)? + val_start;
-    Some(after[val_start..val_end].to_string())
 }
 
 #[cfg(test)]

@@ -27,8 +27,7 @@ lib.rs
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding)
   ├── html_meta.rs  : Shared `<meta>` and JSON-LD parsing (`iter_json_ld_blocks`, `extract_meta_content`, `extract_json_ld_field`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
-  ├── structured_content.rs : JSON-LD / Open Graph fallback for `--main-content` when DOM heuristics fail
-  ├── markdown.rs  : HTML → Markdown pipeline (strip scripts, styles, iframes, noise tags, comments; extract code languages; Trafilatura-style main-content fallback chain + structured metadata fallback + boilerplate strip; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector; to_plain_text for --format text)
+  ├── markdown.rs  : PageToMarkdown — HTML→Markdown pipeline (main-content heuristics, JSON-LD/OG structured fallback, forum comments, dedup, link absolutization, --exclude-selector)
   └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
 
 main.rs (helpers)
