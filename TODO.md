@@ -62,6 +62,7 @@
 - [x] Plain-text output format (`--format text`) for archival and NLP pipelines
 - [x] Trafilatura-style fallback chain: multi-candidate scoring (semantic tags with bonus, block readability, paragraph clustering), best-candidate selection, jusText-style boilerplate paragraph stripping
 - [x] Post-load wait (`--wait` MS): delay after fetch before processing; `setTimeout` callbacks fire when delay ≤ wait budget (with `--javascript`)
+- [x] JS timer scheduling: `setInterval` (repeating within `--wait`) and `requestAnimationFrame` (~16ms) in the built-in interpreter
 
 ## In Progress
 
@@ -76,4 +77,5 @@ _Competitive gaps vs Trafilatura, Firecrawl, and Readability.js:_
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - PDF and plain-text output formats for archival pipelines — plain text done via `--format text`; PDF remains future work
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
-- `setInterval` and `requestAnimationFrame` scheduling in the built-in JS interpreter
+- `clearTimeout` / `clearInterval` for cancelling scheduled callbacks
+- Structured content extraction from Open Graph / Schema.org when main-content heuristics fail (Mercury Parser pattern)

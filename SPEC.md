@@ -27,7 +27,7 @@ No dedicated HTML-to-Markdown crate — conversion is implemented in-house with 
 
 ## Optional JS Execution
 
-When enabled (`--javascript` / `enable_javascript`), inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or other external engine. A pragmatic JS subset is supported (variables, closures, control flow, template literals, `document.write`, `setTimeout`, strings, arrays, `Math`, `JSON`). `setTimeout` callbacks run when their delay ≤ `--wait` (milliseconds). Unsupported features fail fast and are skipped, so a script can never break conversion. External (`src=`) and module scripts are not executed.
+When enabled (`--javascript` / `enable_javascript`), inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or other external engine. A pragmatic JS subset is supported (variables, closures, control flow, template literals, `document.write`, `setTimeout`, `setInterval`, `requestAnimationFrame`, strings, arrays, `Math`, `JSON`). Timer callbacks run when their scheduled time ≤ `--wait` (milliseconds). Unsupported features fail fast and are skipped, so a script can never break conversion. External (`src=`) and module scripts are not executed.
 
 ## URL Blacklist
 
@@ -182,7 +182,7 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
 1. **Browser.fetch()** → raw HTML
 2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content (blacklisted URLs skipped)
 3. **Browser.post_load_wait()** → sleep `--wait` milliseconds after fetch (optional)
-4. **Browser.run_inline_scripts()** → evaluate inline `<script>` blocks when `--javascript` / `enable_javascript` (optional); flush `setTimeout` callbacks up to `--wait`
+4. **Browser.run_inline_scripts()** → evaluate inline `<script>` blocks when `--javascript` / `enable_javascript` (optional); flush `setTimeout`, `setInterval`, and `requestAnimationFrame` callbacks up to `--wait`
 5. **PageToMarkdown.convert()** → Markdown
    - Extract main content if `main_content` is true (Trafilatura-style fallback: score semantic tags with bonus, top-level `<div>`/`<section>` blocks by text vs link density, paragraph clusters; pick best candidate; strip link-heavy boilerplate `<p>` blocks)
    - Strip `<script>`, `<style>`, `<iframe>`

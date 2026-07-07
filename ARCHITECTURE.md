@@ -23,7 +23,7 @@ lib.rs
   │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)
   │     ├── parser.rs  : Recursive-descent parser → Vec<Stmt>
   │     ├── eval.rs    : Tree-walking evaluator with lexical scopes, closures, control flow, and builtins (document.write, strings, arrays, Math, JSON, console, global constructors)
-  │     └── mod.rs     : run_inline_scripts(html, wait_ms) — extracts inline <script> blocks, runs them, flushes setTimeout, returns document.write output; inject_before_body_close()
+  │     └── mod.rs     : run_inline_scripts(html, wait_ms) — extracts inline <script> blocks, runs them, flushes timer callbacks, returns document.write output; inject_before_body_close()
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
   ├── markdown.rs  : HTML → Markdown pipeline (strip scripts, styles, iframes, noise tags, comments; extract code languages; Trafilatura-style main-content fallback chain + boilerplate strip; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector; to_plain_text for --format text)
@@ -90,7 +90,7 @@ URL ──► Browser.fetch() ──► raw HTML
 
 ## Key Decisions
 
-1. **Optional JS execution, in-house**: By default the crate does not execute JavaScript (keeping it lightweight and deterministic). With `--javascript` / `enable_javascript`, inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or external engine. The interpreter supports a pragmatic subset (variables, closures, control flow, template literals, `document.write`, `setTimeout`, strings, arrays, `Math`, `JSON`); `setTimeout` callbacks flush when delay ≤ `--wait`. Scripts using unsupported features fail fast and are silently skipped, so they never break conversion. External and module scripts are not executed.
+1. **Optional JS execution, in-house**: By default the crate does not execute JavaScript (keeping it lightweight and deterministic). With `--javascript` / `enable_javascript`, inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or external engine. The interpreter supports a pragmatic subset (variables, closures, control flow, template literals, `document.write`, `setTimeout`, `setInterval`, `requestAnimationFrame`, strings, arrays, `Math`, `JSON`); timer callbacks flush when scheduled time ≤ `--wait`. Scripts using unsupported features fail fast and are silently skipped, so they never break conversion. External and module scripts are not executed.
 
 2. **In-house HTML-to-Markdown converter**: HTML-to-Markdown conversion uses `html_to_md.rs` — a DOM walker built on `scraper` (html5ever) for malformed-HTML tolerance. No dedicated HTML-to-Markdown crate (`html2md`, `htmd`, etc.). The converter handles headings, links, images, lists, tables, code blocks, entity decoding, and Markdown control-character escaping. Pre/post-processing in `PageToMarkdown` (noise stripping, main-content extraction, dedup, code language injection, forum comments, link absolutization) wraps `html_to_md::parse_html`.
 

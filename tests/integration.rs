@@ -454,6 +454,33 @@ async fn settimeout_captures_delayed_content_with_wait() {
 }
 
 #[tokio::test]
+async fn setinterval_captures_repeated_content_with_wait() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/page")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body>\
+             <script>setInterval(function(){document.write(\"x\");}, 40);</script>\
+             </body></html>",
+        )
+        .create_async()
+        .await;
+
+    let mut opts = BrowserOptions::default();
+    opts.enable_javascript = true;
+    opts.post_load_wait = Duration::from_millis(120);
+    let browser = Browser::new(opts).unwrap();
+    let url = format!("{}/page", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let html = browser.prepare_html(&html, &url).await.unwrap();
+
+    assert!(html.contains("xxx"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn blacklisted_iframe_not_inlined_in_pipeline() {
     let mut server = mockito::Server::new_async().await;
     let iframe_mock = server

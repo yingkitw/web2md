@@ -126,8 +126,8 @@ Example Cursor MCP config:
 - **Output to file** (`--output` flag): Write `fetch` output to a file instead of stdout
 - **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
 - **CSS selector targeting** (`--exclude-selector` flag): Strip HTML elements matching `.class` or `#id` selectors before conversion — remove ads, sidebars, and other noise elements
-- **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout` callbacks when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
-- **Post-load wait** (`--wait` MS): Pause after fetch before processing; also caps which `setTimeout` callbacks run (Firecrawl/Jina pattern for JS-heavy pages)
+- **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout`, `setInterval`, and `requestAnimationFrame` when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
+- **Post-load wait** (`--wait` MS): Pause after fetch before processing; caps which timer callbacks run (Firecrawl/Jina pattern for JS-heavy pages)
 
 ## Architecture
 
@@ -135,7 +135,7 @@ Example Cursor MCP config:
 - **Crawl** (`crawl.rs`): Same-origin link extraction and URL normalization for `--depth N` recursive crawl.
 - **Robots** (`robots.rs`): `robots.txt` parser (Disallow, Crawl-delay) with per-origin cache.
 - **URL blacklist** (`url_blacklist.rs`): Built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` pattern matching.
-- **JS interpreter** (`src/js/`): Dependency-free lexer/parser/evaluator. When `--javascript` is set, inline `<script>` blocks run, `setTimeout` callbacks flush up to `--wait`, and `document.write` output is folded into the page.
+- **JS interpreter** (`src/js/`): Dependency-free lexer/parser/evaluator. When `--javascript` is set, inline `<script>` blocks run, timer callbacks (`setTimeout`/`setInterval`/`requestAnimationFrame`) flush up to `--wait`, and `document.write` output is folded into the page.
 - **HTML utilities** (`html_util.rs`): Shared `find_ci` search and HTML entity decoding.
 - **HTML-to-Markdown** (`html_to_md.rs`): In-house converter via `scraper`/html5ever DOM walk (headings, links, images, lists, tables, code blocks, inline formatting).
 - **PageToMarkdown** (`markdown.rs`): Pre/post-processing pipeline — Trafilatura-style main-content fallback chain, noise stripping, code language injection, dedup, forum comments, link absolutization, CSS selector exclusion.

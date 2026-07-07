@@ -106,7 +106,8 @@ enum Flow {
 }
 
 struct TimerEntry {
-    delay_ms: u64,
+    fire_at_ms: u64,
+    interval_ms: Option<u64>,
     callback: Value,
 }
 
@@ -151,21 +152,40 @@ impl Interpreter {
         Ok(())
     }
 
-    /// Run `setTimeout` callbacks whose delay is within `max_delay_ms`.
+    /// Run scheduled callbacks (`setTimeout`, `setInterval`, `requestAnimationFrame`)
+    /// whose fire time is within `max_delay_ms`.
     pub fn flush_timers(&mut self, max_delay_ms: u64) {
-        let mut timers = self.pending_timers.borrow_mut();
-        let mut due = Vec::new();
-        timers.retain(|t| {
-            if t.delay_ms <= max_delay_ms {
-                due.push(t.callback.clone());
-                false
-            } else {
-                true
+        const MAX_TIMER_FIRES: u32 = 1_000;
+        let mut fires = 0u32;
+        loop {
+            if fires >= MAX_TIMER_FIRES {
+                break;
             }
-        });
-        drop(timers);
-        for cb in due {
-            let _ = self.call_value(cb, &[]);
+            let mut timers = self.pending_timers.borrow_mut();
+            let idx = timers
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| t.fire_at_ms <= max_delay_ms)
+                .min_by_key(|(_, t)| t.fire_at_ms)
+                .map(|(i, _)| i);
+            let Some(idx) = idx else { break };
+            let entry = timers.remove(idx);
+            drop(timers);
+
+            let callback = entry.callback.clone();
+            let _ = self.call_value(entry.callback, &[]);
+            fires += 1;
+
+            if let Some(interval) = entry.interval_ms {
+                let next = entry.fire_at_ms.saturating_add(interval);
+                if next <= max_delay_ms {
+                    self.pending_timers.borrow_mut().push(TimerEntry {
+                        fire_at_ms: next,
+                        interval_ms: Some(interval),
+                        callback,
+                    });
+                }
+            }
         }
     }
 
@@ -835,7 +855,42 @@ impl Interpreter {
                 let delay = to_number(args.get(1).unwrap_or(&Value::Number(0.0))).max(0.0) as u64;
                 if matches!(cb, Value::Func(_) | Value::Native(_)) {
                     timers_ref.borrow_mut().push(TimerEntry {
-                        delay_ms: delay,
+                        fire_at_ms: delay,
+                        interval_ms: None,
+                        callback: cb,
+                    });
+                }
+                Ok(Value::Undefined)
+            })),
+        );
+        let timers_ref = pending_timers.clone();
+        g.vars.insert(
+            "setInterval".into(),
+            Value::Native(Rc::new(move |args: &[Value]| {
+                let cb = args.first().cloned().unwrap_or(Value::Undefined);
+                let interval = to_number(args.get(1).unwrap_or(&Value::Number(0.0))).max(0.0) as u64;
+                if interval == 0 {
+                    return Ok(Value::Undefined);
+                }
+                if matches!(cb, Value::Func(_) | Value::Native(_)) {
+                    timers_ref.borrow_mut().push(TimerEntry {
+                        fire_at_ms: interval,
+                        interval_ms: Some(interval),
+                        callback: cb,
+                    });
+                }
+                Ok(Value::Undefined)
+            })),
+        );
+        let timers_ref = pending_timers.clone();
+        g.vars.insert(
+            "requestAnimationFrame".into(),
+            Value::Native(Rc::new(move |args: &[Value]| {
+                let cb = args.first().cloned().unwrap_or(Value::Undefined);
+                if matches!(cb, Value::Func(_) | Value::Native(_)) {
+                    timers_ref.borrow_mut().push(TimerEntry {
+                        fire_at_ms: 16,
+                        interval_ms: None,
                         callback: cb,
                     });
                 }

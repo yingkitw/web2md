@@ -104,7 +104,7 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
-        /// Post-load wait in milliseconds before processing (also caps setTimeout callback delay)
+        /// Post-load wait in milliseconds before processing (also caps timer callback delay)
         #[arg(long)]
         wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
@@ -153,7 +153,7 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
-        /// Post-load wait in milliseconds before processing (also caps setTimeout callback delay)
+        /// Post-load wait in milliseconds before processing (also caps timer callback delay)
         #[arg(long)]
         wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
@@ -228,7 +228,7 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
-        /// Post-load wait in milliseconds before processing (also caps setTimeout callback delay)
+        /// Post-load wait in milliseconds before processing (also caps timer callback delay)
         #[arg(long)]
         wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
