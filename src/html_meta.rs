@@ -72,6 +72,45 @@ pub(crate) fn extract_attr(tag: &str, attr: &str) -> Option<String> {
     Some(after[val_start..val_end].to_string())
 }
 
+/// Extract `href` from the first `<link rel="...">` tag whose `rel` matches `rel`.
+pub(crate) fn extract_link_rel(html: &str, rel: &str) -> Option<String> {
+    let rel_lower = rel.to_ascii_lowercase();
+    let mut i = 0;
+    while i < html.len() {
+        if let Some(pos) = find_ci(&html[i..], "<link") {
+            let pos = i + pos;
+            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
+            let tag = &html[pos..=tag_end];
+            if link_rel_matches(tag, &rel_lower) {
+                if let Some(href) = extract_attr(tag, "href") {
+                    return Some(href);
+                }
+            }
+            i = tag_end + 1;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn link_rel_matches(tag: &str, rel: &str) -> bool {
+    let Some(rel_attr) = extract_attr(tag, "rel") else {
+        return false;
+    };
+    rel_attr
+        .split_whitespace()
+        .any(|part| part.eq_ignore_ascii_case(rel))
+}
+
+/// Extract `lang` from the opening `<html>` tag.
+pub(crate) fn extract_html_lang(html: &str) -> Option<String> {
+    let pos = find_ci(html, "<html")?;
+    let tag_end = html[pos..].find('>').map(|e| pos + e)?;
+    let tag = &html[pos..=tag_end];
+    extract_attr(tag, "lang")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,5 +125,20 @@ mod tests {
             .filter_map(|j| j.get("headline").and_then(|v| v.as_str()).map(str::to_string))
             .collect();
         assert_eq!(headlines, vec!["One", "Two"]);
+    }
+
+    #[test]
+    fn extract_link_rel_finds_canonical_href() {
+        let html = r#"<head><link rel="canonical" href="https://example.com/article"></head>"#;
+        assert_eq!(
+            extract_link_rel(html, "canonical"),
+            Some("https://example.com/article".into())
+        );
+    }
+
+    #[test]
+    fn extract_html_lang_reads_lang_attribute() {
+        let html = r#"<html lang="en-US"><head></head><body></body></html>"#;
+        assert_eq!(extract_html_lang(html), Some("en-US".into()));
     }
 }

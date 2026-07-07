@@ -43,6 +43,12 @@ struct CliJsonOutput {
     site_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    canonical_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
 }
 
 #[derive(Parser)]
@@ -364,6 +370,9 @@ async fn main() -> Result<()> {
                             headline: meta.headline,
                             site_name: meta.site_name,
                             keywords: meta.keywords,
+                            excerpt: meta.excerpt,
+                            canonical_url: meta.canonical_url,
+                            language: meta.language,
                         };
                         serde_json::to_string_pretty(&output)?
                     }

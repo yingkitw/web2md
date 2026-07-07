@@ -29,7 +29,7 @@ HTML is built for browsers, not for reasoning. A typical article page carries fa
 Agents consume the web through tools. Every page fetch costs context window, latency, and money. Web2MD is built around that constraint:
 
 - **Token efficiency** — `--main-content` extraction, noise stripping, and deduplication shrink pages before they hit the model. An agent can read several articles in the space one raw HTML dump would occupy.
-- **MCP-native** — Run `web2md mcp` as a stdio JSON-RPC server. Agents call a single `fetch` tool and receive Markdown plus structured metadata (title, author, date, description, keywords) in one response.
+- **MCP-native** — Run `web2md mcp` as a stdio JSON-RPC server. Agents call a single `fetch` tool and receive Markdown plus structured metadata (title, author, date, description, excerpt, canonical URL, language, keywords) in one response.
 - **Actionable links** — Relative URLs are absolutized so an agent can follow numbered links in terminal browse mode or chain fetches across a site without guessing base paths.
 - **Structured output** — `--format json` and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
 - **Polite crawling** — `--delay`, caching (`--cache-ttl`), `robots.txt` respect, and batch mode let research agents process URL lists without hammering servers or re-fetching the same page.
@@ -116,7 +116,7 @@ Example Cursor MCP config:
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
-- **Metadata extraction**: Title, description, author (meta tag or JSON-LD), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), and keywords/tags (article:tag, meta keywords, or JSON-LD) returned in MCP response and `--format json` output
+- **Metadata extraction**: Title, description, author (meta tag or JSON-LD), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), and language (html lang, og:locale, JSON-LD inLanguage) in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
 - **Plain-text output** (`--format text`): Strip Markdown syntax for archival pipelines and NLP ingestion
 - **Comments extraction**: Detects forum/thread pages (Reddit, WordPress, vBulletin) and extracts comments with author attribution, nesting depth, and blockquote formatting
@@ -124,7 +124,7 @@ Example Cursor MCP config:
 - **Sitemap/feed discovery** (`sitemap` subcommand): Fetches `sitemap.xml` from a website and lists all discovered URLs; optionally discovers RSS/Atom feed links from the HTML page (`--feeds` flag)
 - **Batch processing** (`batch` subcommand): Reads URLs from a file (one per line, `#` comments supported) and converts each to Markdown; use `--output <dir>` to write files to a directory
 - **Output to file** (`--output` flag): Write `fetch` output to a file instead of stdout
-- **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
+- **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords, excerpt, canonical URL, language) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
 - **CSS selector targeting** (`--exclude-selector` flag): Strip HTML elements matching `.class` or `#id` selectors before conversion — remove ads, sidebars, and other noise elements
 - **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, and `requestAnimationFrame` when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
 - **Post-load wait** (`--wait` MS): Pause after fetch before processing; caps which timer callbacks run (Firecrawl/Jina pattern for JS-heavy pages)
@@ -157,4 +157,4 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ## Project Status
 
-Feature-complete for the current scope — see [TODO.md](TODO.md) for brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **221 tests** pass across unit and integration suites.
+Feature-complete for the current scope — see [TODO.md](TODO.md) for brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **231 tests** pass across unit and integration suites.

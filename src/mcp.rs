@@ -1,7 +1,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::html_meta::{extract_attr, extract_json_ld_field, extract_meta_content, iter_json_ld_blocks};
+use crate::html_meta::{
+    extract_attr, extract_html_lang, extract_json_ld_field, extract_link_rel, extract_meta_content,
+    iter_json_ld_blocks,
+};
 use crate::html_util::find_ci;
 use crate::{Browser, BrowserOptions, PageToMarkdown};
 
@@ -39,6 +42,12 @@ pub struct McpResponse {
     pub site_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 /// Metadata extracted from an HTML page.
@@ -61,6 +70,12 @@ pub struct PageMetadata {
     pub site_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 impl PageMetadata {
@@ -98,6 +113,15 @@ impl PageMetadata {
             let items: Vec<String> = kw.iter().map(|k| format!("  - \"{}\"", escape_yaml_string(k))).collect();
             lines.push(format!("keywords:\n{}", items.join("\n")));
         }
+        if let Some(ref excerpt) = self.excerpt {
+            lines.push(format!("excerpt: \"{}\"", escape_yaml_string(excerpt)));
+        }
+        if let Some(ref canonical) = self.canonical_url {
+            lines.push(format!("canonical_url: \"{}\"", escape_yaml_string(canonical)));
+        }
+        if let Some(ref language) = self.language {
+            lines.push(format!("language: \"{}\"", escape_yaml_string(language)));
+        }
 
         if lines.is_empty() {
             None
@@ -112,7 +136,7 @@ fn escape_yaml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Extract metadata (title, description, author, publication date, image, headline, site name, keywords) from HTML.
+/// Extract metadata (title, description, author, publication date, image, headline, site name, keywords, excerpt, canonical URL, language) from HTML.
 pub fn extract_metadata(html: &str) -> PageMetadata {
     let title = extract_title(html);
     let description = extract_meta_content(html, "name", "description")
@@ -125,6 +149,10 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
     let headline = extract_json_ld_field(html, "headline");
     let site_name = extract_meta_content(html, "property", "og:site_name");
     let keywords = extract_keywords(html);
+    let excerpt = extract_excerpt(html);
+    let canonical_url = extract_meta_content(html, "property", "og:url")
+        .or_else(|| extract_link_rel(html, "canonical"));
+    let language = extract_language(html);
     PageMetadata {
         title,
         description,
@@ -134,6 +162,9 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         headline,
         site_name,
         keywords,
+        excerpt,
+        canonical_url,
+        language,
     }
 }
 
@@ -175,6 +206,9 @@ impl McpServer {
             headline: meta.headline,
             site_name: meta.site_name,
             keywords: meta.keywords,
+            excerpt: meta.excerpt,
+            canonical_url: meta.canonical_url,
+            language: meta.language,
         })
     }
 }
@@ -309,6 +343,97 @@ fn extract_title(html: &str) -> Option<String> {
         let rest = &html[start + 7..];
         find_ci(rest, "</title>").map(|end| rest[..end].trim().to_string())
     })
+}
+
+const EXCERPT_MAX_LEN: usize = 160;
+const MIN_EXCERPT_PARAGRAPH_LEN: usize = 40;
+
+/// Build a short excerpt from the first substantive paragraph in the page body.
+fn extract_excerpt(html: &str) -> Option<String> {
+    first_paragraph_text(html).map(|text| truncate_excerpt(&text))
+}
+
+fn first_paragraph_text(html: &str) -> Option<String> {
+    let mut i = 0;
+    while i < html.len() {
+        if let Some(pos) = find_ci(&html[i..], "<p") {
+            let pos = i + pos;
+            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
+            let close = find_ci(&html[tag_end + 1..], "</p>").map(|c| tag_end + 1 + c)?;
+            let inner = &html[tag_end + 1..close];
+            let text = strip_html_tags(inner);
+            let trimmed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if trimmed.len() >= MIN_EXCERPT_PARAGRAPH_LEN {
+                return Some(trimmed);
+            }
+            i = close + 4;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn truncate_excerpt(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.len() <= EXCERPT_MAX_LEN {
+        return trimmed.to_string();
+    }
+
+    let mut end = EXCERPT_MAX_LEN;
+    while end > 0 && !trimmed.is_char_boundary(end) {
+        end -= 1;
+    }
+    while end > EXCERPT_MAX_LEN / 2 && !trimmed[..end].ends_with(' ') {
+        end -= 1;
+    }
+    if end <= EXCERPT_MAX_LEN / 2 {
+        end = EXCERPT_MAX_LEN;
+        while end > 0 && !trimmed.is_char_boundary(end) {
+            end -= 1;
+        }
+    }
+    format!("{}…", trimmed[..end].trim_end())
+}
+
+fn strip_html_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn extract_language(html: &str) -> Option<String> {
+    extract_html_lang(html)
+        .or_else(|| extract_meta_content(html, "property", "og:locale"))
+        .or_else(|| extract_json_ld_language(html))
+        .map(normalize_language_tag)
+}
+
+fn normalize_language_tag(tag: String) -> String {
+    tag.replace('_', "-")
+}
+
+fn extract_json_ld_language(html: &str) -> Option<String> {
+    for json in iter_json_ld_blocks(html) {
+        if let Some(lang) = json.get("inLanguage") {
+            if let Some(s) = lang.as_str() {
+                return Some(s.to_string());
+            }
+            if let Some(s) = lang.get("name").and_then(|v| v.as_str()) {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -715,6 +840,50 @@ mod tests {
     }
 
     #[test]
+    fn extract_metadata_excerpt_from_first_paragraph() {
+        let html = r#"<html><body><p>This is the opening paragraph with enough words to qualify as a page excerpt for agents and citations.</p><p>Second paragraph.</p></body></html>"#;
+        let meta = extract_metadata(html);
+        assert!(meta
+            .excerpt
+            .unwrap()
+            .starts_with("This is the opening paragraph"));
+    }
+
+    #[test]
+    fn extract_metadata_canonical_url_prefers_og_url() {
+        let html = r#"<html><head>
+            <meta property="og:url" content="https://example.com/og">
+            <link rel="canonical" href="https://example.com/canonical">
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.canonical_url, Some("https://example.com/og".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_canonical_url_falls_back_to_link_rel() {
+        let html = r#"<html><head><link rel="canonical" href="https://example.com/article"></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(
+            meta.canonical_url,
+            Some("https://example.com/article".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_metadata_language_from_html_lang() {
+        let html = r#"<html lang="en"><body><p>Hello world with enough text to become an excerpt field here today.</p></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.language, Some("en".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_language_from_og_locale() {
+        let html = r#"<html><head><meta property="og:locale" content="en_US"></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.language, Some("en-US".to_string()));
+    }
+
+    #[test]
     fn frontmatter_includes_all_fields() {
         let meta = PageMetadata {
             title: Some("Test Title".to_string()),
@@ -725,6 +894,9 @@ mod tests {
             headline: Some("Breaking News".to_string()),
             site_name: Some("Tech Blog".to_string()),
             keywords: Some(vec!["Rust".to_string(), "Markdown".to_string()]),
+            excerpt: Some("Short summary".to_string()),
+            canonical_url: Some("https://example.com/page".to_string()),
+            language: Some("en".to_string()),
         };
         let fm = meta.to_frontmatter(Some("https://example.com/page")).unwrap();
         assert!(fm.starts_with("---\n"));
@@ -737,6 +909,9 @@ mod tests {
         assert!(fm.contains("headline: \"Breaking News\""));
         assert!(fm.contains("site_name: \"Tech Blog\""));
         assert!(fm.contains("keywords:\n  - \"Rust\"\n  - \"Markdown\""));
+        assert!(fm.contains("excerpt: \"Short summary\""));
+        assert!(fm.contains("canonical_url: \"https://example.com/page\""));
+        assert!(fm.contains("language: \"en\""));
         assert!(fm.ends_with("---\n\n"));
     }
 
@@ -751,6 +926,9 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            excerpt: None,
+            canonical_url: None,
+            language: None,
         };
         let fm = meta.to_frontmatter(None).unwrap();
         assert!(fm.contains("title: \"Title Only\""));
@@ -768,6 +946,9 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            excerpt: None,
+            canonical_url: None,
+            language: None,
         };
         assert!(meta.to_frontmatter(None).is_none());
     }
@@ -783,6 +964,9 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            excerpt: None,
+            canonical_url: None,
+            language: None,
         };
         let fm = meta.to_frontmatter(None).unwrap();
         assert!(fm.contains("title: \"Title with \\\"quotes\\\"\""));
@@ -799,6 +983,9 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            excerpt: None,
+            canonical_url: None,
+            language: None,
         };
         let fm = meta.to_frontmatter(None).unwrap();
         assert!(fm.contains("title: \"Path\\\\with\\\\backslashes\""));

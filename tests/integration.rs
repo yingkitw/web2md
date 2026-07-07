@@ -280,12 +280,14 @@ async fn json_output_format_emits_structured_json() {
         .mock("GET", "/json")
         .with_status(200)
         .with_header("content-type", "text/html")
-        .with_body(r#"<html><head>
+        .with_body(r#"<html lang="en"><head>
             <title>JSON Test Page</title>
             <meta name="description" content="A test page for JSON output">
             <meta name="author" content="Test Author">
             <meta property="article:published_time" content="2025-07-04T12:00:00Z">
-        </head><body><h1>Heading</h1><p>Body content for JSON.</p></body></html>"#)
+            <meta property="og:url" content="https://example.com/json-canonical">
+            <link rel="canonical" href="https://example.com/json">
+        </head><body><h1>Heading</h1><p>Body content for JSON with enough words to populate the excerpt metadata field.</p></body></html>"#)
         .create_async()
         .await;
 
@@ -300,6 +302,9 @@ async fn json_output_format_emits_structured_json() {
         "description": meta.description,
         "author": meta.author,
         "published_date": meta.published_date,
+        "excerpt": meta.excerpt,
+        "canonical_url": meta.canonical_url,
+        "language": meta.language,
     });
     let json_str = serde_json::to_string(&json).unwrap();
 
@@ -307,8 +312,9 @@ async fn json_output_format_emits_structured_json() {
     assert!(json_str.contains("A test page for JSON output"));
     assert!(json_str.contains("Test Author"));
     assert!(json_str.contains("2025-07-04T12:00:00Z"));
-    assert!(json_str.contains("Heading"));
-    assert!(json_str.contains("Body content for JSON."));
+    assert!(json_str.contains("json-canonical"));
+    assert!(json_str.contains("\"language\":\"en\""));
+    assert!(json_str.contains("Body content for JSON"));
     mock.assert_async().await;
 }
 

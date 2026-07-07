@@ -66,6 +66,7 @@
 - [x] `clearTimeout` / `clearInterval` for cancelling scheduled JS callbacks
 - [x] Structured content fallback: JSON-LD `articleBody` / `description`, `og:description`, and meta description when main-content heuristics fail
 - [x] Shared `html_meta` module: deduplicated JSON-LD and `<meta>` parsing used by `mcp.rs` and structured content fallback in `markdown.rs`
+- [x] Extended metadata: excerpt (first substantive paragraph), canonical URL (`og:url` / `<link rel="canonical">`), and language (`html lang`, `og:locale`, JSON-LD `inLanguage`)
 
 ## In Progress
 
@@ -78,5 +79,9 @@ _None — all planned features are implemented. See Brainstorming for future ide
 _Competitive gaps vs Trafilatura, Firecrawl, and Readability.js:_
 
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
-- PDF and plain-text output formats for archival pipelines — plain text done via `--format text`; PDF remains future work
+- PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
+- RSS/Atom feed parsing and conversion (discover feed links today; fetch and extract feed entries)
+- Article categories/sections (`article:section`, JSON-LD `articleSection`)
+- Language detection on extracted text content (Trafilatura optional add-on)
+- CSV/XML-TEI export formats for corpus pipelines

@@ -153,11 +153,14 @@ web2md mcp
   "image": "https://example.com/cover.jpg",
   "headline": "Breaking News Story",
   "site_name": "Tech Blog",
-  "keywords": ["Rust", "Web Scraping", "Markdown"]
+  "keywords": ["Rust", "Web Scraping", "Markdown"],
+  "excerpt": "Opening paragraph text truncated to ~160 characters…",
+  "canonical_url": "https://example.com/article",
+  "language": "en"
 }
 ```
 
-`description`, `author`, `published_date`, `image`, `headline`, `site_name`, and `keywords` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order). `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order.
+`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `excerpt`, `canonical_url`, and `language` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order). `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`.
 
 ### CLI `--format json` Output
 
@@ -171,7 +174,10 @@ web2md mcp
   "image": "https://example.com/cover.jpg",
   "headline": "Breaking News Story",
   "site_name": "Tech Blog",
-  "keywords": ["Rust", "Web Scraping", "Markdown"]
+  "keywords": ["Rust", "Web Scraping", "Markdown"],
+  "excerpt": "Opening paragraph text truncated to ~160 characters…",
+  "canonical_url": "https://example.com/article",
+  "language": "en"
 }
 ```
 
