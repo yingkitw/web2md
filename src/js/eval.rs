@@ -105,11 +105,17 @@ enum Flow {
     Continue,
 }
 
+struct TimerEntry {
+    delay_ms: u64,
+    callback: Value,
+}
+
 /// A self-contained JS interpreter instance with its own global scope and
 /// `document` write buffer.
 pub struct Interpreter {
     global: ScopeRef,
     doc_buf: Rc<RefCell<String>>,
+    pending_timers: Rc<RefCell<Vec<TimerEntry>>>,
     steps: u64,
 }
 
@@ -126,12 +132,14 @@ impl Interpreter {
             parent: None,
         }));
         let doc_buf = Rc::new(RefCell::new(String::new()));
+        let pending_timers = Rc::new(RefCell::new(Vec::new()));
         let me = Self {
             global: global.clone(),
             doc_buf: doc_buf.clone(),
+            pending_timers: pending_timers.clone(),
             steps: 0,
         };
-        me.install_globals(&global, &doc_buf);
+        me.install_globals(&global, &doc_buf, &pending_timers);
         me
     }
 
@@ -141,6 +149,24 @@ impl Interpreter {
         let env = self.global.clone();
         self.exec_block(&stmts, &env)?;
         Ok(())
+    }
+
+    /// Run `setTimeout` callbacks whose delay is within `max_delay_ms`.
+    pub fn flush_timers(&mut self, max_delay_ms: u64) {
+        let mut timers = self.pending_timers.borrow_mut();
+        let mut due = Vec::new();
+        timers.retain(|t| {
+            if t.delay_ms <= max_delay_ms {
+                due.push(t.callback.clone());
+                false
+            } else {
+                true
+            }
+        });
+        drop(timers);
+        for cb in due {
+            let _ = self.call_value(cb, &[]);
+        }
     }
 
     /// Return the HTML captured via `document.write`/`writeln` so far.
@@ -683,7 +709,12 @@ impl Interpreter {
 // ===== Global environment setup =====
 
 impl Interpreter {
-    fn install_globals(&self, global: &ScopeRef, doc_buf: &Rc<RefCell<String>>) {
+    fn install_globals(
+        &self,
+        global: &ScopeRef,
+        doc_buf: &Rc<RefCell<String>>,
+        pending_timers: &Rc<RefCell<Vec<TimerEntry>>>,
+    ) {
         let mut g = global.borrow_mut();
 
         // document host object
@@ -794,6 +825,21 @@ impl Interpreter {
             Value::Native(Rc::new(|args| {
                 let n = to_number(args.first().unwrap_or(&Value::Undefined));
                 Ok(Value::Bool(n.is_finite()))
+            })),
+        );
+        let timers_ref = pending_timers.clone();
+        g.vars.insert(
+            "setTimeout".into(),
+            Value::Native(Rc::new(move |args: &[Value]| {
+                let cb = args.first().cloned().unwrap_or(Value::Undefined);
+                let delay = to_number(args.get(1).unwrap_or(&Value::Number(0.0))).max(0.0) as u64;
+                if matches!(cb, Value::Func(_) | Value::Native(_)) {
+                    timers_ref.borrow_mut().push(TimerEntry {
+                        delay_ms: delay,
+                        callback: cb,
+                    });
+                }
+                Ok(Value::Undefined)
             })),
         );
         g.vars.insert("undefined".into(), Value::Undefined);

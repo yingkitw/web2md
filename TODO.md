@@ -58,16 +58,22 @@
 - [x] Custom user blacklist file: load additional URL patterns from `~/.web2md/blacklist.txt` and `--blacklist-file`; `--no-user-blacklist` to skip the default file
 - [x] Shared `html_util` module: extracted `find_ci` and HTML entity decoding for the in-house converter
 - [x] Markdown control-character escaping in `html_to_md` (list/heading markers in raw text)
+- [x] Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags in `html_to_md`
+- [x] Plain-text output format (`--format text`) for archival and NLP pipelines
+- [x] Trafilatura-style fallback chain: multi-candidate scoring (semantic tags with bonus, block readability, paragraph clustering), best-candidate selection, jusText-style boilerplate paragraph stripping
+- [x] Post-load wait (`--wait` MS): delay after fetch before processing; `setTimeout` callbacks fire when delay ≤ wait budget (with `--javascript`)
 
 ## In Progress
 
 ## Pending
 
+_None — all planned features are implemented. See Brainstorming for future ideas._
+
 ## Brainstorming
 
+_Competitive gaps vs Trafilatura, Firecrawl, and Readability.js:_
+
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
-- Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags in `html_to_md`
-- PDF and plain-text output formats for archival pipelines
-- Trafilatura-style fallback chain: heuristic scoring → readability-lxml port → jusText-style boilerplate removal (competitive gap vs Firecrawl/Trafilatura)
-- `--wait` / post-load delay for JS-rendered SPAs (Firecrawl/Jina pattern; our interpreter only handles inline scripts today)
-- `--wait` / post-load delay for JS-rendered SPAs (Firecrawl/Jina pattern; our interpreter only handles inline scripts today)
+- PDF and plain-text output formats for archival pipelines — plain text done via `--format text`; PDF remains future work
+- Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
+- `setInterval` and `requestAnimationFrame` scheduling in the built-in JS interpreter

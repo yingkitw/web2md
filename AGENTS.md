@@ -10,7 +10,7 @@ Pick the next highest-priority item from `TODO.md` (or `ARCHITECTURE.md` if the 
 ### 2. Create Tests and Examples
 For every new capability:
 - Write integration tests in `tests/` that exercise the feature end-to-end where possible
-- Add unit tests for core logic in `Browser`, `PageToMarkdown`, and other business-logic types
+- Add unit tests for core logic in `Browser`, `PageToMarkdown`, `html_to_md`, `html_util`, and other business-logic types
 - Provide a minimal usage example if the feature is client-facing
 
 ### 3. Ensure `cargo build`, `cargo test`, and `cargo run` All Pass
@@ -34,7 +34,7 @@ After each batch of features, perform a quality pass:
 - **Consistency**: Match existing code style and patterns
 
 ### 6. Competitive Intelligence
-Research similar HTML-to-Markdown and web scraping tools (html2text, readability-lxml, Mercury Parser, etc.). Identify capabilities they have that this project lacks. Add the most valuable ones to the `TODO.md` brainstorming section. Prioritize features that provide clear competitive advantage.
+Research similar HTML-to-Markdown and web scraping tools (Trafilatura, Firecrawl, Readability.js, Mercury Parser, etc.). Identify capabilities they have that this project lacks. Add the most valuable ones to the `TODO.md` brainstorming section. Prioritize features that provide clear competitive advantage.
 
 ### 7. Update Documentation
 Keep all project docs aligned with the current implementation:

@@ -108,6 +108,8 @@ pub struct BrowserOptions {
     pub load_user_blacklist: bool,
     /// Additional blacklist pattern files (one pattern per line)
     pub extra_blacklist_files: Vec<String>,
+    /// Post-load wait after fetch (milliseconds) for JS-heavy pages; also caps setTimeout flush
+    pub post_load_wait: Duration,
 }
 
 impl Default for BrowserOptions {
@@ -125,6 +127,7 @@ impl Default for BrowserOptions {
             respect_robots_txt: true,
             load_user_blacklist: true,
             extra_blacklist_files: Vec::new(),
+            post_load_wait: Duration::from_millis(0),
         }
     }
 }
@@ -402,11 +405,26 @@ impl Browser {
         if !self.options.enable_javascript {
             return html.to_string();
         }
-        let captured = crate::js::run_inline_scripts(html);
+        let wait_ms = self.options.post_load_wait.as_millis() as u64;
+        let captured = crate::js::run_inline_scripts(html, wait_ms);
         if captured.is_empty() {
             return html.to_string();
         }
         crate::js::inject_before_body_close(html, &captured)
+    }
+
+    /// Sleep for [`BrowserOptions::post_load_wait`] after a page fetch.
+    pub async fn post_load_wait(&self) {
+        if !self.options.post_load_wait.is_zero() {
+            tokio::time::sleep(self.options.post_load_wait).await;
+        }
+    }
+
+    /// Apply post-load wait, inline iframes, and run inline scripts.
+    pub async fn prepare_html(&self, html: &str, url: &str) -> Result<String> {
+        self.post_load_wait().await;
+        let html = self.inline_iframes(html, url).await?;
+        Ok(self.run_inline_scripts(&html))
     }
 }
 

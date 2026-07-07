@@ -151,8 +151,7 @@ impl McpServer {
     /// Handle a single MCP request: fetch URL and return Markdown
     pub async fn handle(&self, req: McpRequest) -> Result<McpResponse> {
         let html = self.browser.fetch(&req.url).await?;
-        let html = self.browser.inline_iframes(&html, &req.url).await?;
-        let html = self.browser.run_inline_scripts(&html);
+        let html = self.browser.prepare_html(&html, &req.url).await?;
         let mut markdown = PageToMarkdown::convert(&html, req.include_images, req.keep_header, req.main_content, &[])?;
         markdown = PageToMarkdown::absolutize_links(&markdown, &req.url);
 

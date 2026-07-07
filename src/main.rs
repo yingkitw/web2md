@@ -16,6 +16,8 @@ enum OutputFormat {
     Html,
     /// Emit structured JSON with markdown and metadata
     Json,
+    /// Emit plain text with Markdown syntax stripped (archival / NLP pipelines)
+    Text,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -72,7 +74,7 @@ enum Commands {
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
-        /// Output format: markdown or html
+        /// Output format: markdown, html, json, or text
         #[arg(short, long, value_enum, default_value = "markdown")]
         format: OutputFormat,
         /// Render Markdown with ANSI colors and formatting in the terminal
@@ -102,6 +104,9 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
+        /// Post-load wait in milliseconds before processing (also caps setTimeout callback delay)
+        #[arg(long)]
+        wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
@@ -148,6 +153,9 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
+        /// Post-load wait in milliseconds before processing (also caps setTimeout callback delay)
+        #[arg(long)]
+        wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
@@ -220,6 +228,9 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
+        /// Post-load wait in milliseconds before processing (also caps setTimeout callback delay)
+        #[arg(long)]
+        wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
@@ -277,6 +288,7 @@ async fn main() -> Result<()> {
             frontmatter,
             exclude_selector,
             javascript,
+            wait,
             no_blacklist,
             depth,
             ignore_robots,
@@ -289,6 +301,9 @@ async fn main() -> Result<()> {
             }
             if let Some(ms) = delay {
                 options.request_delay = Duration::from_millis(ms);
+            }
+            if let Some(ms) = wait {
+                options.post_load_wait = Duration::from_millis(ms);
             }
             if let Some(secs) = cache_ttl {
                 options.cache_ttl = Duration::from_secs(secs);
@@ -320,8 +335,7 @@ async fn main() -> Result<()> {
                 .await?;
             } else {
                 let html = browser.fetch(&url).await?;
-                let html = browser.inline_iframes(&html, &url).await?;
-                let html = browser.run_inline_scripts(&html);
+                let html = browser.prepare_html(&html, &url).await?;
 
                 let mut result = match format {
                     OutputFormat::Markdown => {
@@ -351,9 +365,14 @@ async fn main() -> Result<()> {
                         };
                         serde_json::to_string_pretty(&output)?
                     }
+                    OutputFormat::Text => {
+                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
+                        let md = PageToMarkdown::absolutize_links(&md, &url);
+                        PageToMarkdown::to_plain_text(&md)
+                    }
                 };
 
-                if frontmatter && matches!(format, OutputFormat::Markdown) {
+                if frontmatter && matches!(format, OutputFormat::Markdown | OutputFormat::Text) {
                     let meta = extract_metadata(&html);
                     if let Some(fm) = meta.to_frontmatter(Some(&url)) {
                         result = format!("{}{}", fm, result);
@@ -385,6 +404,7 @@ async fn main() -> Result<()> {
             cache_ttl,
             main_content,
             javascript,
+            wait,
             no_blacklist,
             ignore_robots,
             blacklist_file,
@@ -396,6 +416,9 @@ async fn main() -> Result<()> {
             }
             if let Some(ms) = delay {
                 options.request_delay = Duration::from_millis(ms);
+            }
+            if let Some(ms) = wait {
+                options.post_load_wait = Duration::from_millis(ms);
             }
             if let Some(secs) = cache_ttl {
                 options.cache_ttl = Duration::from_secs(secs);
@@ -488,6 +511,7 @@ async fn main() -> Result<()> {
             frontmatter,
             exclude_selector,
             javascript,
+            wait,
             no_blacklist,
             ignore_robots,
             blacklist_file,
@@ -513,6 +537,9 @@ async fn main() -> Result<()> {
             }
             if let Some(ms) = delay {
                 options.request_delay = Duration::from_millis(ms);
+            }
+            if let Some(ms) = wait {
+                options.post_load_wait = Duration::from_millis(ms);
             }
             if let Some(secs) = cache_ttl {
                 options.cache_ttl = Duration::from_secs(secs);
@@ -551,11 +578,10 @@ async fn main() -> Result<()> {
 
                 match browser.fetch(url).await {
                     Ok(html) => {
-                        let html = match browser.inline_iframes(&html, url).await {
-                            Ok(inlined) => inlined,
+                        let html = match browser.prepare_html(&html, url).await {
+                            Ok(prepared) => prepared,
                             Err(_) => html,
                         };
-                        let html = browser.run_inline_scripts(&html);
                         match PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector) {
                             Ok(md) => {
                                 let md = PageToMarkdown::absolutize_links(&md, url);
@@ -649,11 +675,10 @@ async fn crawl_fetch(
 
         match browser.fetch(&url).await {
             Ok(html) => {
-                let html = match browser.inline_iframes(&html, &url).await {
-                    Ok(inlined) => inlined,
+                let html = match browser.prepare_html(&html, &url).await {
+                    Ok(prepared) => prepared,
                     Err(_) => html,
                 };
-                let html = browser.run_inline_scripts(&html);
 
                 if level < depth {
                     for link in browser.same_origin_links(&html, &url, &root) {
@@ -750,8 +775,8 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
         io::stdout().flush()?;
 
         let html = match browser.fetch(&url).await {
-            Ok(h) => match browser.inline_iframes(&h, &url).await {
-                Ok(inlined) => inlined,
+            Ok(h) => match browser.prepare_html(&h, &url).await {
+                Ok(prepared) => prepared,
                 Err(_) => h,
             },
             Err(e) => {
@@ -762,7 +787,6 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
                 continue;
             }
         };
-        let html = browser.run_inline_scripts(&html);
 
         let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &[])?;
         let md = PageToMarkdown::absolutize_links(&md, &url);

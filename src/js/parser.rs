@@ -659,7 +659,7 @@ impl Parser {
                     "null" => Ok(Expr::Null),
                     "undefined" => Ok(Expr::Undefined),
                     "this" => Ok(Expr::This),
-                    "function" => self.parse_func_expr(),
+                    "function" => self.parse_func_expr_body(),
                     "new" => self.parse_new(),
                     _ => Err(ParseError(format!("unexpected keyword `{}`", k))),
                 }
@@ -740,8 +740,7 @@ impl Parser {
         }
     }
 
-    fn parse_func_expr(&mut self) -> PResult<Expr> {
-        self.expect_kw("function")?;
+    fn parse_func_expr_body(&mut self) -> PResult<Expr> {
         let name = if matches!(self.peek(), Token::Ident(_)) {
             Some(self.parse_ident()?)
         } else {

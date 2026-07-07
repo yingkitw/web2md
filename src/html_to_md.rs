@@ -1,550 +1,262 @@
 //! Lightweight HTML-to-Markdown converter used instead of external crates.
+//! Parses HTML with `scraper` (html5ever) for tolerance of malformed markup.
 
-use crate::html_util::{decode_html_entities, find_ci};
+use crate::html_util::decode_html_entities;
+use scraper::{ElementRef, Html, Node, Selector};
 
 /// Convert an HTML fragment to Markdown.
 pub fn parse_html(html: &str) -> String {
-    let mut parser = HtmlToMd::new(html);
-    let md = parser.parse_document();
-    clean_markdown(&md)
+    let document = Html::parse_document(html);
+    let body_sel = Selector::parse("body").expect("valid selector");
+    let mut out = String::new();
+    if let Some(body) = document.select(&body_sel).next() {
+        convert_children(body, &mut out, false, false);
+    }
+    clean_markdown(&out)
 }
 
-struct HtmlToMd<'a> {
-    html: &'a str,
-    pos: usize,
-    parents: Vec<String>,
+fn convert_children(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_code: bool) {
+    for child in element.children() {
+        match child.value() {
+            Node::Text(text) => append_text(out, text, in_pre, in_code),
+            Node::Element(_) => {
+                if let Some(el) = ElementRef::wrap(child) {
+                    convert_element(el, out, in_pre, in_code);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
-impl<'a> HtmlToMd<'a> {
-    fn new(html: &'a str) -> Self {
-        Self {
-            html,
-            pos: 0,
-            parents: Vec::new(),
+fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_code: bool) {
+    let tag = element.value().name();
+    match tag {
+        "br" => out.push_str("  \n"),
+        "hr" => {
+            out.push('\n');
+            out.push_str("---");
+            out.push('\n');
         }
-    }
-
-    fn parse_document(&mut self) -> String {
-        self.parse_nodes(false)
-    }
-
-    fn parse_nodes(&mut self, in_pre: bool) -> String {
-        let mut out = String::new();
-        while self.pos < self.html.len() {
-            if let Some(rel) = self.html[self.pos..].find('<') {
-                let abs = self.pos + rel;
-                if abs > self.pos {
-                    let text = &self.html[self.pos..abs];
-                    self.append_text(&mut out, text, in_pre);
+        "img" => {
+            let src = element.value().attr("src").unwrap_or("");
+            let alt = element.value().attr("alt").unwrap_or("");
+            let title = element
+                .value()
+                .attr("title")
+                .map(|t| format!(" \"{t}\""))
+                .unwrap_or_default();
+            out.push_str(&format!("![{alt}]({src}{title})"));
+        }
+        "pre" => {
+            out.push_str("\n```\n");
+            convert_children(element, out, true, false);
+            out.push_str("\n```\n");
+        }
+        "code" if in_pre => convert_children(element, out, true, true),
+        "code" => {
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, true);
+            out.push('`');
+            out.push_str(inner.trim());
+            out.push('`');
+        }
+        "p" => {
+            out.push_str("\n\n");
+            convert_children(element, out, in_pre, in_code);
+            out.push_str("\n\n");
+        }
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+            out.push_str("\n\n");
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false);
+            let inner = inner.trim();
+            match tag {
+                "h1" => {
+                    out.push_str(inner);
+                    out.push_str("\n==========\n");
                 }
-                self.pos = abs;
-                if self.html[self.pos..].starts_with("<!--") {
-                    if let Some(end) = self.html[self.pos..].find("-->") {
-                        self.pos += end + 3;
-                        continue;
-                    }
+                "h2" => {
+                    out.push_str(inner);
+                    out.push_str("\n----------\n");
                 }
-                if self.html[self.pos..].starts_with("<![CDATA[") {
-                    if let Some(end) = self.html[self.pos..].find("]]>") {
-                        let content = &self.html[self.pos + 9..self.pos + end];
-                        self.append_text(&mut out, content, in_pre);
-                        self.pos += end + 3;
-                        continue;
-                    }
-                }
-                if self.try_consume_close_tag() {
-                    break;
-                }
-                if let Some(node) = self.parse_element() {
-                    out.push_str(&node);
-                } else {
-                    // Malformed tag — treat '<' as text.
-                    self.append_text(&mut out, "<", in_pre);
-                    self.pos += 1;
-                }
-            } else {
-                self.append_text(&mut out, &self.html[self.pos..], in_pre);
-                self.pos = self.html.len();
+                "h3" => out.push_str(&format!("### {inner} ###\n")),
+                "h4" => out.push_str(&format!("#### {inner} ####\n")),
+                "h5" => out.push_str(&format!("##### {inner} #####\n")),
+                "h6" => out.push_str(&format!("###### {inner} ######\n")),
+                _ => out.push_str(inner),
+            }
+            out.push('\n');
+        }
+        "a" => {
+            let href = element.value().attr("href").unwrap_or("");
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false);
+            out.push_str(&format!("[{inner}]({href})"));
+        }
+        "strong" | "b" => {
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false);
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                out.push_str("**");
+                out.push_str(trimmed);
+                out.push_str("**");
             }
         }
-        out
-    }
-
-    fn try_consume_close_tag(&mut self) -> bool {
-        if !self.html[self.pos..].starts_with("</") {
-            return false;
-        }
-        let rest = &self.html[self.pos + 2..];
-        let name_end = rest
-            .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
-            .unwrap_or(rest.len());
-        if name_end == 0 {
-            return false;
-        }
-        let tag = rest[..name_end].to_ascii_lowercase();
-        if self.parents.last().is_some_and(|p| p == &tag) {
-            if let Some(gt) = self.html[self.pos..].find('>') {
-                self.pos += gt + 1;
-                return true;
+        "em" | "i" => {
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false);
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                out.push('*');
+                out.push_str(trimmed);
+                out.push('*');
             }
         }
-        false
-    }
-
-    fn parse_element(&mut self) -> Option<String> {
-        if !self.html[self.pos..].starts_with('<') {
-            return None;
+        "del" | "s" => {
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false);
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                out.push_str("~~");
+                out.push_str(trimmed);
+                out.push_str("~~");
+            }
         }
-        let tag_start = self.pos;
-        let gt = self.html[self.pos..].find('>')?;
-        let tag_str = &self.html[self.pos..=self.pos + gt];
-        self.pos += gt + 1;
-
-        if tag_str.starts_with("<!") || tag_str.starts_with("<?") {
-            return Some(String::new());
-        }
-
-        let tag_name = parse_tag_name(tag_str)?;
-        let attrs = tag_str;
-        let self_closing = tag_str.ends_with("/>") || is_void_tag(&tag_name);
-
-        let in_pre = self.parents.iter().any(|t| t == "pre");
-        let mut out = String::new();
-
-        match tag_name.as_str() {
-            "br" => out.push_str("  \n"),
-            "hr" => {
-                out.push('\n');
-                out.push_str("---");
-                out.push('\n');
-            }
-            "img" => {
-                let src = get_attr(attrs, "src").unwrap_or_default();
-                let alt = get_attr(attrs, "alt").unwrap_or_default();
-                let title = get_attr(attrs, "title").map(|t| format!(" \"{t}\"")).unwrap_or_default();
-                out.push_str(&format!("![{alt}]({src}{title})"));
-            }
-            "pre" => {
-                out.push_str("\n```\n");
-                if self_closing {
-                    out.push_str("\n```\n");
-                } else {
-                    self.parents.push(tag_name.clone());
-                    let inner = self.parse_nodes(true);
-                    self.parents.pop();
-                    out.push_str(&inner);
-                    out.push_str("\n```\n");
-                }
-                return Some(out);
-            }
-            "code" if in_pre => {
-                if self_closing {
-                    return Some(String::new());
-                }
-                self.parents.push(tag_name.clone());
-                let inner = self.parse_nodes(true);
-                self.parents.pop();
-                return Some(inner);
-            }
-            "code" => {
-                if self_closing {
-                    return Some("`".to_string());
-                }
-                self.parents.push(tag_name.clone());
-                let inner = self.parse_nodes(false);
-                self.parents.pop();
-                return Some(format!("`{inner}`"));
-            }
-            "p" => {
-                out.push_str("\n\n");
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    out.push_str(&self.parse_nodes(false));
-                    self.parents.pop();
-                }
-                out.push_str("\n\n");
-            }
-            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                out.push_str("\n\n");
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    let inner = self.parse_nodes(false).trim().to_string();
-                    self.parents.pop();
-                    match tag_name.as_str() {
-                        "h1" => {
-                            out.push_str(&inner);
-                            out.push_str("\n==========\n");
-                        }
-                        "h2" => {
-                            out.push_str(&inner);
-                            out.push_str("\n----------\n");
-                        }
-                        "h3" => out.push_str(&format!("### {inner} ###\n")),
-                        "h4" => out.push_str(&format!("#### {inner} ####\n")),
-                        "h5" => out.push_str(&format!("##### {inner} #####\n")),
-                        "h6" => out.push_str(&format!("###### {inner} ######\n")),
-                        _ => out.push_str(&inner),
-                    }
-                }
-                out.push('\n');
-            }
-            "a" => {
-                let href = get_attr(attrs, "href").unwrap_or_default();
-                if self_closing {
-                    out.push_str(&format!("[]({href})"));
-                } else {
-                    self.parents.push(tag_name.clone());
-                    let inner = self.parse_nodes(false);
-                    self.parents.pop();
-                    out.push_str(&format!("[{inner}]({href})"));
-                }
-            }
-            "strong" | "b" => {
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    let inner = self.parse_nodes(false);
-                    self.parents.pop();
-                    let trimmed = inner.trim();
-                    if !trimmed.is_empty() {
-                        out.push_str("**");
-                        out.push_str(trimmed);
-                        out.push_str("**");
-                    }
-                }
-            }
-            "em" | "i" => {
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    let inner = self.parse_nodes(false);
-                    self.parents.pop();
-                    let trimmed = inner.trim();
-                    if !trimmed.is_empty() {
-                        out.push('*');
-                        out.push_str(trimmed);
-                        out.push('*');
-                    }
-                }
-            }
-            "del" | "s" => {
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    let inner = self.parse_nodes(false);
-                    self.parents.pop();
-                    let trimmed = inner.trim();
-                    if !trimmed.is_empty() {
-                        out.push_str("~~");
-                        out.push_str(trimmed);
-                        out.push_str("~~");
-                    }
-                }
-            }
-            "blockquote" | "q" | "cite" => {
-                out.push('\n');
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    let inner = self.parse_nodes(false);
-                    self.parents.pop();
-                    for line in inner.lines() {
-                        let t = line.trim();
-                        if !t.is_empty() {
-                            out.push_str("> ");
-                            out.push_str(t);
-                            out.push('\n');
-                        }
-                    }
-                }
-            }
-            "ul" | "ol" | "menu" => {
-                out.push_str("\n\n");
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    out.push_str(&self.parse_list_items(&tag_name));
-                    self.parents.pop();
-                }
-                out.push_str("\n\n");
-            }
-            "li" => {
-                // Handled by parse_list_items; bare <li> outside a list.
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    out.push_str("* ");
-                    out.push_str(&self.parse_nodes(false).trim());
-                    self.parents.pop();
+        "blockquote" | "q" | "cite" => {
+            out.push('\n');
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false);
+            for line in inner.lines() {
+                let t = line.trim();
+                if !t.is_empty() {
+                    out.push_str("> ");
+                    out.push_str(t);
                     out.push('\n');
                 }
             }
-            "div" | "section" | "header" | "footer" | "article" | "main" | "nav" | "aside"
-            | "figure" | "figcaption" | "details" | "summary" => {
-                out.push_str("\n\n");
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    out.push_str(&self.parse_nodes(false));
-                    self.parents.pop();
-                }
-                out.push_str("\n\n");
-            }
-            "table" => {
-                out.push('\n');
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    out.push_str(&self.parse_table());
-                    self.parents.pop();
-                }
-                out.push('\n');
-            }
-            "html" | "head" | "body" | "span" | "label" | "small" | "sub" | "sup" | "time"
-            | "abbr" | "mark" | "td" | "th" | "tr" | "tbody" | "thead" | "tfoot" | "dl" | "dt"
-            | "dd" | "form" | "input" | "button" | "select" | "option" | "textarea" | "video"
-            | "audio" | "source" | "iframe" | "noscript" | "script" | "style" | "meta" | "link"
-            | "title" => {
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    out.push_str(&self.parse_nodes(false));
-                    self.parents.pop();
-                }
-            }
-            _ => {
-                if !self_closing {
-                    self.parents.push(tag_name.clone());
-                    out.push_str(&self.parse_nodes(false));
-                    self.parents.pop();
-                }
-            }
         }
-
-        let _ = tag_start;
-        Some(out)
-    }
-
-    fn parse_list_items(&mut self, list_type: &str) -> String {
-        let mut out = String::new();
-        let mut index = 1usize;
-        while self.pos < self.html.len() {
-            self.skip_ws_and_comments();
-            if self.try_consume_close_tag() {
-                break;
-            }
-            if !self.html[self.pos..].starts_with('<') {
-                self.pos += 1;
-                continue;
-            }
-            let Some(tag_name) = parse_tag_name(&self.html[self.pos..self.html.len().min(self.pos + 64)])
-            else {
-                self.pos += 1;
-                continue;
-            };
-            if tag_name != "li" {
-                break;
-            }
-            let gt = match self.html[self.pos..].find('>') {
-                Some(g) => g,
-                None => break,
-            };
-            self.pos += gt + 1;
-
-            if out.is_empty() || out.ends_with('\n') {
-                // ok
-            } else {
-                out.push('\n');
-            }
-            match list_type {
-                "ol" => {
-                    out.push_str(&format!("{index}. "));
-                    index += 1;
-                }
-                _ => out.push_str("* "),
-            }
-            self.parents.push("li".to_string());
-            let inner = self.parse_nodes(false);
-            self.parents.pop();
+        "ul" | "ol" | "menu" => convert_list(element, out, tag == "ol"),
+        "li" => {
+            out.push_str("* ");
+            let mut inner = String::new();
+            convert_children(element, &mut inner, in_pre, in_code);
             out.push_str(inner.trim());
             out.push('\n');
         }
-        out
+        "div" | "section" | "header" | "footer" | "article" | "main" | "nav" | "aside"
+        | "figure" | "figcaption" | "details" | "summary" => {
+            out.push_str("\n\n");
+            convert_children(element, out, in_pre, in_code);
+            out.push_str("\n\n");
+        }
+        "table" => {
+            out.push('\n');
+            out.push_str(&convert_table(element));
+            out.push('\n');
+        }
+        "html" | "head" | "body" | "span" | "label" | "small" | "sub" | "sup" | "time"
+        | "abbr" | "mark" | "td" | "th" | "tr" | "tbody" | "thead" | "tfoot" | "dl" | "dt"
+        | "dd" | "form" | "input" | "button" | "select" | "option" | "textarea" | "video"
+        | "audio" | "source" | "iframe" | "noscript" | "script" | "style" | "meta" | "link"
+        | "title" => convert_children(element, out, in_pre, in_code),
+        _ => convert_children(element, out, in_pre, in_code),
     }
+}
 
-    fn parse_table(&mut self) -> String {
-        let mut rows: Vec<Vec<String>> = Vec::new();
-        while self.pos < self.html.len() {
-            self.skip_ws_and_comments();
-            if self.try_consume_close_tag() {
-                break;
-            }
-            if !self.html[self.pos..].starts_with('<') {
-                self.pos += 1;
-                continue;
-            }
-            let Some(tag_name) = parse_tag_name(&self.html[self.pos..self.html.len().min(self.pos + 64)])
-            else {
-                self.pos += 1;
-                continue;
-            };
-            match tag_name.as_str() {
-                "tr" => {
-                    let gt = self.html[self.pos..].find('>').unwrap_or(0);
-                    self.pos += gt + 1;
-                    self.parents.push("tr".to_string());
-                    let row = self.parse_table_row();
-                    self.parents.pop();
-                    if !row.is_empty() {
-                        rows.push(row);
-                    }
-                }
-                "thead" | "tbody" | "tfoot" => {
-                    let gt = self.html[self.pos..].find('>').unwrap_or(0);
-                    self.pos += gt + 1;
-                    self.parents.push(tag_name.clone());
-                    // Continue loop to find tr elements.
-                }
-                _ => break,
-            }
+fn convert_list(element: ElementRef<'_>, out: &mut String, ordered: bool) {
+    out.push_str("\n\n");
+    let mut index = 1usize;
+    for child in element.children() {
+        let Some(li) = ElementRef::wrap(child) else {
+            continue;
+        };
+        if li.value().name() != "li" {
+            continue;
         }
-        if rows.is_empty() {
-            return String::new();
+        if ordered {
+            out.push_str(&format!("{index}. "));
+            index += 1;
+        } else {
+            out.push_str("* ");
         }
-        let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-        let mut out = String::new();
-        for (i, row) in rows.iter().enumerate() {
+        let mut inner = String::new();
+        convert_children(li, &mut inner, false, false);
+        out.push_str(inner.trim());
+        out.push('\n');
+    }
+    out.push_str("\n\n");
+}
+
+fn convert_table(element: ElementRef<'_>) -> String {
+    let tr_sel = Selector::parse("tr").expect("valid selector");
+    let cell_sel = Selector::parse("td, th").expect("valid selector");
+    let rows: Vec<Vec<String>> = element
+        .select(&tr_sel)
+        .map(|tr| {
+            tr.select(&cell_sel)
+                .map(|cell| {
+                    let mut inner = String::new();
+                    convert_children(cell, &mut inner, false, false);
+                    inner.trim().replace('\n', " ")
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|row: &Vec<String>| !row.is_empty())
+        .collect();
+    if rows.is_empty() {
+        return String::new();
+    }
+    let col_count = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut out = String::new();
+    for (i, row) in rows.iter().enumerate() {
+        out.push('|');
+        for c in 0..col_count {
+            let cell = row.get(c).map(|s| s.as_str()).unwrap_or("");
+            out.push(' ');
+            out.push_str(&cell.replace('|', "\\|"));
+            out.push_str(" |");
+        }
+        out.push('\n');
+        if i == 0 {
             out.push('|');
-            for c in 0..col_count {
-                let cell = row.get(c).map(|s| s.as_str()).unwrap_or("");
-                out.push(' ');
-                out.push_str(&cell.replace('|', "\\|"));
-                out.push_str(" |");
+            for _ in 0..col_count {
+                out.push_str(" --- |");
             }
             out.push('\n');
-            if i == 0 {
-                out.push('|');
-                for _ in 0..col_count {
-                    out.push_str(" --- |");
-                }
-                out.push('\n');
-            }
-        }
-        out
-    }
-
-    fn parse_table_row(&mut self) -> Vec<String> {
-        let mut cells = Vec::new();
-        while self.pos < self.html.len() {
-            self.skip_ws_and_comments();
-            if self.try_consume_close_tag() {
-                break;
-            }
-            if !self.html[self.pos..].starts_with('<') {
-                self.pos += 1;
-                continue;
-            }
-            let Some(tag_name) = parse_tag_name(&self.html[self.pos..self.html.len().min(self.pos + 64)])
-            else {
-                self.pos += 1;
-                continue;
-            };
-            if tag_name != "td" && tag_name != "th" {
-                break;
-            }
-            let gt = self.html[self.pos..].find('>').unwrap_or(0);
-            self.pos += gt + 1;
-            self.parents.push(tag_name.clone());
-            let inner = self.parse_nodes(false);
-            self.parents.pop();
-            cells.push(inner.trim().replace('\n', " "));
-        }
-        cells
-    }
-
-    fn should_escape_text(&self, in_pre: bool) -> bool {
-        !in_pre && !self.parents.iter().any(|p| p == "code")
-    }
-
-    fn append_text(&self, out: &mut String, text: &str, in_pre: bool) {
-        let text = if in_pre {
-            text.to_string()
-        } else {
-            decode_html_entities(text)
-        };
-        if in_pre {
-            out.push_str(&text);
-            return;
-        }
-        let collapsed = collapse_whitespace(&text);
-        if collapsed.is_empty() {
-            return;
-        }
-        let escaped = if self.should_escape_text(in_pre) {
-            escape_markdown_text(&collapsed, at_line_start(out))
-        } else {
-            collapsed
-        };
-        if !out.is_empty() {
-            let last = out.chars().last().unwrap();
-            let first = escaped.chars().next().unwrap();
-            if !last.is_whitespace() && !first.is_whitespace() {
-                out.push(' ');
-            }
-        }
-        out.push_str(&escaped);
-    }
-
-    fn skip_ws_and_comments(&mut self) {
-        while self.pos < self.html.len() {
-            if self.html[self.pos..].starts_with("<!--") {
-                if let Some(end) = self.html[self.pos..].find("-->") {
-                    self.pos += end + 3;
-                    continue;
-                }
-            }
-            if self.html.as_bytes().get(self.pos).is_some_and(|b| b.is_ascii_whitespace()) {
-                self.pos += 1;
-            } else {
-                break;
-            }
         }
     }
+    out
 }
 
-fn parse_tag_name(tag: &str) -> Option<String> {
-    let rest = tag.strip_prefix('<')?;
-    let rest = rest.strip_prefix('/').unwrap_or(rest);
-    if rest.is_empty() || rest.starts_with('!') {
-        return None;
+fn append_text(out: &mut String, text: &str, in_pre: bool, in_code: bool) {
+    let text = if in_pre {
+        text.to_string()
+    } else {
+        decode_html_entities(text)
+    };
+    if in_pre {
+        out.push_str(&text);
+        return;
     }
-    let end = rest
-        .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
-        .unwrap_or(rest.len());
-    if end == 0 {
-        return None;
+    let collapsed = collapse_whitespace(&text);
+    if collapsed.is_empty() {
+        return;
     }
-    Some(rest[..end].to_ascii_lowercase())
-}
-
-fn is_void_tag(name: &str) -> bool {
-    matches!(
-        name,
-        "area" | "base" | "br" | "col" | "embed" | "hr" | "img" | "input" | "link" | "meta"
-            | "param" | "source" | "track" | "wbr"
-    )
-}
-
-fn get_attr(tag: &str, name: &str) -> Option<String> {
-    let needle = format!("{name}=");
-    let pos = find_ci(tag, &needle)?;
-    let after = &tag[pos + needle.len()..];
-    let mut i = 0;
-    while i < after.len() && after.as_bytes()[i].is_ascii_whitespace() {
-        i += 1;
+    let escaped = if !in_code {
+        escape_markdown_text(&collapsed, at_line_start(out))
+    } else {
+        collapsed
+    };
+    if !in_code && !out.is_empty() {
+        let last = out.chars().last().unwrap();
+        let first = escaped.chars().next().unwrap();
+        if !last.is_whitespace() && !first.is_whitespace() {
+            out.push(' ');
+        }
     }
-    let quote = *after.as_bytes().get(i)? as char;
-    if quote != '"' && quote != '\'' {
-        // Unquoted attribute value.
-        let val_end = after[i..]
-            .find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
-            .unwrap_or(after.len() - i);
-        return Some(after[i..i + val_end].to_string());
-    }
-    let val_start = i + 1;
-    let val_end = after[val_start..].find(quote)? + val_start;
-    Some(after[val_start..val_end].to_string())
+    out.push_str(&escaped);
 }
 
 fn at_line_start(out: &str) -> bool {
@@ -703,5 +415,28 @@ mod tests {
         let md = parse_html("<p>run <code>*args</code> here</p>");
         assert!(md.contains("`*args`"));
         assert!(!md.contains(r"\*args"));
+    }
+
+    #[test]
+    fn handles_unclosed_tags() {
+        let md = parse_html("<div><p>First paragraph<p>Second paragraph</div>");
+        assert!(md.contains("First paragraph"));
+        assert!(md.contains("Second paragraph"));
+    }
+
+    #[test]
+    fn handles_mismatched_close_tags() {
+        let md = parse_html("<p>Content</div><p>More content</p>");
+        assert!(md.contains("Content"));
+        assert!(md.contains("More content"));
+    }
+
+    #[test]
+    fn converts_table() {
+        let md = parse_html(
+            "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+        );
+        assert!(md.contains("| A | B |"));
+        assert!(md.contains("| 1 | 2 |"));
     }
 }

@@ -6,13 +6,28 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 
 ## Non-Goals
 
-- Full DOM rendering / browser engine semantics
+- Full DOM rendering / browser engine semantics (no headless Chrome/Firefox)
 - Screenshot or PDF generation
 - Session/cookie persistence across requests
+- Replacing the in-house HTML-to-Markdown converter with third-party crates (`htmd`, `html2md`, etc.)
+
+## Technical Stack
+
+| Component | Implementation |
+|---|---|
+| HTTP client | `reqwest` + `tokio` |
+| HTML parsing | `scraper` 0.23 (html5ever) in `html_to_md.rs` |
+| Markdown rendering | `pulldown-cmark` (ANSI terminal via `render_markdown_ansi`) |
+| HTML utilities | `html_util.rs` — case-insensitive search, entity decoding |
+| Conversion pipeline | `markdown.rs` (`PageToMarkdown`) wraps `html_to_md::parse_html` |
+| CLI | `clap` 4.x |
+| Test HTTP mocking | `mockito` (dev) |
+
+No dedicated HTML-to-Markdown crate — conversion is implemented in-house with pre/post-processing in `PageToMarkdown`.
 
 ## Optional JS Execution
 
-When enabled (`--javascript` / `enable_javascript`), inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or other external engine. A pragmatic JS subset is supported (variables, closures, control flow, template literals, `document.write`, strings, arrays, `Math`, `JSON`). Unsupported features fail fast and are skipped, so a script can never break conversion. External (`src=`) and module scripts are not executed.
+When enabled (`--javascript` / `enable_javascript`), inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or other external engine. A pragmatic JS subset is supported (variables, closures, control flow, template literals, `document.write`, `setTimeout`, strings, arrays, `Math`, `JSON`). `setTimeout` callbacks run when their delay ≤ `--wait` (milliseconds). Unsupported features fail fast and are skipped, so a script can never break conversion. External (`src=`) and module scripts are not executed.
 
 ## URL Blacklist
 
@@ -65,6 +80,7 @@ web2md fetch <URL> [FLAGS]
   --format markdown    Output as Markdown (default)
   --format html        Output raw HTML
   --format json        Output structured JSON (markdown + metadata)
+  --format text        Output plain text (Markdown syntax stripped)
   --render             ANSI colors: bold headings, underlined links, colored code
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
@@ -74,6 +90,7 @@ web2md fetch <URL> [FLAGS]
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
   --javascript          Execute inline <script> blocks via the built-in JS interpreter
+  --wait MS             Post-load wait in milliseconds (also caps setTimeout callback delay)
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
@@ -101,9 +118,11 @@ web2md batch <FILE> [FLAGS]
   --frontmatter         Prepend YAML frontmatter (metadata) to each Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
   --javascript          Execute inline <script> blocks via the built-in JS interpreter
+  --wait MS             Post-load wait in milliseconds (also caps setTimeout callback delay)
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
+  --ignore-robots       Ignore robots.txt disallow rules and crawl-delay
 
 # MCP server (stdio JSON-RPC)
 web2md mcp
@@ -161,35 +180,45 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
 ## HTML Processing Pipeline
 
 1. **Browser.fetch()** → raw HTML
-2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content
-3. **PageToMarkdown.convert()** → Markdown
-   - Extract main content if `main_content` is true (`<article>`, `<main>`, `[role="main"]`, or readability fallback: text-density scoring of top-level `<div>`/`<section>` blocks, then paragraph-level sliding window scoring of `<p>` blocks)
+2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content (blacklisted URLs skipped)
+3. **Browser.post_load_wait()** → sleep `--wait` milliseconds after fetch (optional)
+4. **Browser.run_inline_scripts()** → evaluate inline `<script>` blocks when `--javascript` / `enable_javascript` (optional); flush `setTimeout` callbacks up to `--wait`
+5. **PageToMarkdown.convert()** → Markdown
+   - Extract main content if `main_content` is true (Trafilatura-style fallback: score semantic tags with bonus, top-level `<div>`/`<section>` blocks by text vs link density, paragraph clusters; pick best candidate; strip link-heavy boilerplate `<p>` blocks)
    - Strip `<script>`, `<style>`, `<iframe>`
    - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
+   - Strip elements matching `--exclude-selector` (`.class` or `#id`)
    - Extract code languages from `<code class="language-xxx">`
    - Strip `<img>` unless `include_images` is true
+   - **html_to_md::parse_html()** — DOM walk via `scraper`/html5ever:
+     - Headings, paragraphs, links, images, lists, tables, blockquotes, inline bold/italic
+     - HTML entity decoding (`&amp;`, `&#169;`, etc.)
+     - Markdown control-character escaping in plain text (`*`, `#`, `_`, etc.)
+     - Tolerant of malformed/unclosed tags (html5ever tree repair)
    - Inject languages into fenced code blocks (` ```rust `)
    - Deduplicate repeated paragraph-level blocks (>20 chars, first occurrence kept)
    - Collapse excessive whitespace
    - Extract comments from forum/thread pages (detects `class="comment"`, `id="comment-N"`, `data-testid="comment"`, `data-author`; extracts author + text + nesting depth; appends as `## Comments` section with blockquotes and indentation)
-   - Absolutize links: convert relative URLs in `[text](url)` patterns to absolute URLs using the page URL as base
-4. **render_markdown_ansi()** → ANSI-styled terminal output (when `--render` or `browse`)
+5. **PageToMarkdown.absolutize_links()** → convert relative URLs in `[text](url)` patterns to absolute URLs using the page URL as base
+6. **PageToMarkdown.to_plain_text()** → strip Markdown syntax when `--format text` (optional; uses `pulldown-cmark` event walk)
+7. **render_markdown_ansi()** → ANSI-styled terminal output (when `--render` or `browse`)
    - Headings: bold + color-coded by level
    - Links: underlined cyan (with `[N]` numbers in browse mode)
    - Tables: box-drawing characters (`┌─┬─┐`)
    - Code: light gray on dark background
    - Blockquotes: gray bar + italic
+   - `fix_raw_links()` post-pass catches multi-line `[text](url)` patterns
 
 ## Error Handling
 
 - Invalid URL → immediate error
 - HTTP non-2xx → error with status code
 - Timeout → error after 30s default (configurable)
-- Malformed HTML → best-effort Markdown extraction
+- Malformed HTML → best-effort Markdown extraction via html5ever tree repair (`scraper`)
 - Iframe fetch failure → silently omitted (no error)
 
 ## Quality Bar
 
-- All features have unit tests
+- All features have unit tests (221 tests across lib, main, and integration suites)
 - `cargo test` must pass before merge
 - Warnings noted but not blocking

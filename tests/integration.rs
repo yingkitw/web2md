@@ -31,6 +31,30 @@ async fn fetch_and_convert_to_markdown() {
 }
 
 #[tokio::test]
+async fn fetch_and_convert_to_plain_text() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/plain")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><h1>Heading</h1><p>Text with <strong>bold</strong>.</p></body></html>",
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let html = browser.fetch(&format!("{}/plain", server.url())).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
+    let text = PageToMarkdown::to_plain_text(&md);
+
+    assert!(text.contains("Heading"));
+    assert!(text.contains("bold"));
+    assert!(!text.contains("**"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn fetch_404_propagates_error() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
@@ -397,6 +421,35 @@ async fn js_enabled_captures_document_write() {
     assert!(md.contains("Static"));
     assert!(md.contains("a"));
     assert!(md.contains("b"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn settimeout_captures_delayed_content_with_wait() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/page")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            "<html><body><p>Static</p>\
+             <script>setTimeout(function(){document.write(\"<p>Delayed</p>\");}, 50);</script>\
+             </body></html>",
+        )
+        .create_async()
+        .await;
+
+    let mut opts = BrowserOptions::default();
+    opts.enable_javascript = true;
+    opts.post_load_wait = Duration::from_millis(100);
+    let browser = Browser::new(opts).unwrap();
+    let url = format!("{}/page", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let html = browser.prepare_html(&html, &url).await.unwrap();
+
+    assert!(html.contains("Delayed"));
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
+    assert!(md.contains("Delayed"));
     mock.assert_async().await;
 }
 

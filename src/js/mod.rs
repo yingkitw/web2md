@@ -22,11 +22,12 @@ pub use eval::Interpreter;
 /// so that one unsupported script cannot abort the rest. The returned string
 /// is intended to be injected back into the page so downstream conversion can
 /// see the JS-generated content.
-pub fn run_inline_scripts(html: &str) -> String {
+pub fn run_inline_scripts(html: &str, wait_ms: u64) -> String {
     let mut interp = Interpreter::new();
     for src in extract_inline_scripts(html) {
         let _ = interp.run_script(&src);
     }
+    interp.flush_timers(wait_ms);
     interp.document_html()
 }
 
@@ -225,8 +226,15 @@ mod tests {
         <script type="application/ld+json">{"x":1}</script>
         <script>for (var i=0;i<2;i++){document.write(i);}</script>
         "#;
-        let captured = run_inline_scripts(html);
+        let captured = run_inline_scripts(html, 0);
         assert_eq!(captured, "<p>Dynamic</p>01");
+    }
+
+    #[test]
+    fn settimeout_fires_within_wait_budget() {
+        let html = r#"<script>setTimeout(function(){document.write("late");}, 50);</script>"#;
+        assert_eq!(run_inline_scripts(html, 100), "late");
+        assert_eq!(run_inline_scripts(html, 10), "");
     }
 
     #[test]

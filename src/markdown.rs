@@ -35,6 +35,42 @@ fn extract_language_class(tag: &str) -> Option<String> {
     None
 }
 
+fn push_plain_fragment(out: &mut String, text: &str, after_block: bool) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !out.is_empty() && !after_block && !out.ends_with(' ') && !out.ends_with('\n') {
+        out.push(' ');
+    }
+    out.push_str(trimmed);
+}
+
+fn trim_trailing_plain_space(out: &mut String) {
+    while out.ends_with(' ') {
+        out.pop();
+    }
+}
+
+fn clean_plain_text(text: &str) -> String {
+    let mut out = String::new();
+    let mut blank_run = 0usize;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            blank_run += 1;
+            if blank_run <= 2 {
+                out.push('\n');
+            }
+        } else {
+            blank_run = 0;
+            out.push_str(trimmed);
+            out.push('\n');
+        }
+    }
+    out.trim().to_string()
+}
+
 /// Convert raw HTML to clean Markdown.
 /// Strips scripts, styles, and non-essential markup to minimize token output.
 pub struct PageToMarkdown;
@@ -121,6 +157,56 @@ impl PageToMarkdown {
         }
 
         result
+    }
+
+    /// Strip Markdown syntax and return plain text for archival or NLP pipelines.
+    pub fn to_plain_text(md: &str) -> String {
+        use pulldown_cmark::{Event, Options, Parser, TagEnd};
+
+        let parser = Parser::new_ext(md, Options::empty());
+        let mut out = String::with_capacity(md.len());
+        let mut after_block = false;
+
+        for event in parser {
+            match event {
+                Event::Text(text) | Event::Code(text) => {
+                    push_plain_fragment(&mut out, &text, after_block);
+                    after_block = false;
+                }
+                Event::SoftBreak => {
+                    if !out.is_empty() && !out.ends_with(' ') && !out.ends_with('\n') {
+                        out.push(' ');
+                    }
+                }
+                Event::HardBreak => {
+                    trim_trailing_plain_space(&mut out);
+                    out.push('\n');
+                    after_block = true;
+                }
+                Event::Rule => {
+                    trim_trailing_plain_space(&mut out);
+                    out.push_str("\n---\n");
+                    after_block = true;
+                }
+                Event::End(TagEnd::Paragraph)
+                | Event::End(TagEnd::Heading(_))
+                | Event::End(TagEnd::BlockQuote(_))
+                | Event::End(TagEnd::CodeBlock)
+                | Event::End(TagEnd::Table)
+                | Event::End(TagEnd::TableHead)
+                | Event::End(TagEnd::TableRow)
+                | Event::End(TagEnd::TableCell)
+                | Event::End(TagEnd::Item)
+                | Event::End(TagEnd::List(_)) => {
+                    trim_trailing_plain_space(&mut out);
+                    out.push('\n');
+                    after_block = true;
+                }
+                _ => {}
+            }
+        }
+
+        clean_plain_text(&out)
     }
 
     /// Remove `<img>` tags (case-insensitive). Self-closing (`/>`) or plain (`>`) both handled.
@@ -409,20 +495,51 @@ impl PageToMarkdown {
     }
 
     /// Extract the main content area from HTML.
-    /// Looks for `<article>`, `<main>`, or `<div role="main">` tags (in priority order).
-    /// Returns the inner HTML of the first match. If none found, returns the full HTML.
+    /// Trafilatura-style fallback chain: collect candidates from semantic tags, block
+    /// readability, and paragraph clustering; pick the highest-scoring result, then
+    /// strip link-heavy boilerplate paragraphs (jusText-style).
     fn extract_main_content(html: &str) -> String {
-        for (tag, close_tag) in [("article", "</article>"), ("main", "</main>")] {
-            if let Some(start) = find_ci(html, &format!("<{}", tag)) {
-                if let Some(gt) = html[start..].find('>') {
-                    let content_start = start + gt + 1;
-                    if let Some(end) = find_ci(&html[content_start..], close_tag) {
-                        return html[content_start..content_start + end].to_string();
-                    }
-                }
+        let mut candidates: Vec<(String, i64)> = Vec::new();
+        candidates.extend(Self::semantic_content_candidates(html));
+
+        for (content, _) in Self::find_top_level_blocks(html) {
+            candidates.push((content.clone(), Self::content_quality_score(&content)));
+        }
+
+        if let Some(cluster) = Self::paragraph_cluster_html(html) {
+            let score = Self::content_quality_score(&cluster);
+            candidates.push((cluster, score));
+        }
+
+        let best = candidates.into_iter().max_by_key(|(_, score)| *score);
+        if let Some((content, score)) = best {
+            if score > 100 {
+                return Self::strip_boilerplate_paragraphs(&content);
             }
         }
-        // Look for <div role="main">
+
+        html.to_string()
+    }
+
+    /// Score HTML fragments for main-content selection (text density minus link density).
+    fn content_quality_score(html: &str) -> i64 {
+        let text_len = Self::count_text_chars(html) as i64;
+        let link_text_len = Self::count_link_text_chars(html) as i64;
+        text_len - link_text_len
+    }
+
+    /// Collect inner HTML from semantic main-content tags.
+    fn semantic_content_candidates(html: &str) -> Vec<(String, i64)> {
+        const SEMANTIC_BONUS: i64 = 150;
+        let mut candidates = Vec::new();
+        for (tag, close_tag) in [("article", "</article>"), ("main", "</main>")] {
+            if let Some(content) = Self::extract_tag_inner(html, tag, close_tag) {
+                candidates.push((
+                    content.clone(),
+                    Self::content_quality_score(&content) + SEMANTIC_BONUS,
+                ));
+            }
+        }
         let mut i = 0;
         while i < html.len() {
             if let Some(pos) = find_ci(&html[i..], "<div") {
@@ -432,7 +549,11 @@ impl PageToMarkdown {
                     if find_ci(tag, "role=\"main\"").is_some() || find_ci(tag, "role='main'").is_some() {
                         let content_start = pos + gt + 1;
                         if let Some(end) = find_ci(&html[content_start..], "</div>") {
-                            return html[content_start..content_start + end].to_string();
+                            let content = html[content_start..content_start + end].to_string();
+                            candidates.push((
+                                content.clone(),
+                                Self::content_quality_score(&content) + SEMANTIC_BONUS,
+                            ));
                         }
                     }
                     i = pos + gt + 1;
@@ -441,60 +562,29 @@ impl PageToMarkdown {
             }
             break;
         }
-        // Readability fallback: score top-level <div> elements by text density
-        Self::readability_extract(html)
+        candidates
     }
 
-    /// Readability-based content extraction.
-    /// Scores top-level `<div>` and `<section>` blocks by text density and link density.
-    /// Falls back to paragraph-level scoring if no block-level candidate scores well.
-    /// Returns the inner HTML of the highest-scoring block, or the full HTML if no suitable block is found.
-    fn readability_extract(html: &str) -> String {
-        let candidates = Self::find_top_level_blocks(html);
-        if candidates.is_empty() {
-            return Self::paragraph_readability_extract(html);
-        }
-
-        let mut best_score = 0i64;
-        let mut best_html = None;
-
-        for (content, _tag) in &candidates {
-            let text_len = Self::count_text_chars(content) as i64;
-            let link_text_len = Self::count_link_text_chars(content) as i64;
-            // Score: text content minus link text (navigation penalized)
-            let score = text_len - link_text_len;
-            if score > best_score {
-                best_score = score;
-                best_html = Some(content.clone());
-            }
-        }
-
-        // Only use readability result if the best block has meaningful content (>100 chars of non-link text)
-        if best_score > 100 {
-            best_html.unwrap_or_else(|| html.to_string())
-        } else {
-            Self::paragraph_readability_extract(html)
-        }
+    fn extract_tag_inner(html: &str, tag: &str, close_tag: &str) -> Option<String> {
+        let start = find_ci(html, &format!("<{tag}"))?;
+        let gt = html[start..].find('>')?;
+        let content_start = start + gt + 1;
+        let end = find_ci(&html[content_start..], close_tag)?;
+        Some(html[content_start..content_start + end].to_string())
     }
 
-    /// Paragraph-level readability extraction.
-    /// Finds all `<p>` blocks, scores them by text length, and extracts the contiguous window
-    /// of paragraphs with the highest combined text density.
-    /// Falls back to the full HTML if no good paragraph cluster is found.
-    fn paragraph_readability_extract(html: &str) -> String {
+    /// Returns the highest-scoring contiguous paragraph window, if above threshold.
+    fn paragraph_cluster_html(html: &str) -> Option<String> {
         let paragraphs = Self::find_paragraph_blocks(html);
         if paragraphs.is_empty() {
-            return html.to_string();
+            return None;
         }
 
-        // Score each paragraph by text length (longer = more likely content)
         let scores: Vec<usize> = paragraphs
             .iter()
             .map(|(content, _, _)| Self::count_text_chars(content))
             .collect();
 
-        // Find the contiguous window with the highest total text score.
-        // Use a sliding window of up to 5 paragraphs to find the densest cluster.
         let window_size = 5.min(paragraphs.len());
         let mut best_start = 0;
         let mut best_score = 0usize;
@@ -507,15 +597,49 @@ impl PageToMarkdown {
             }
         }
 
-        // Only use paragraph extraction if the best window has meaningful content
         if best_score < 100 {
-            return html.to_string();
+            return None;
         }
 
         let end = (best_start + window_size).min(paragraphs.len());
         let html_start = paragraphs[best_start].1;
         let html_end = paragraphs[end - 1].2;
-        html[html_start..html_end].to_string()
+        Some(html[html_start..html_end].to_string())
+    }
+
+    /// Remove short or link-heavy `<p>` blocks (jusText-style boilerplate filter).
+    fn strip_boilerplate_paragraphs(html: &str) -> String {
+        let paragraphs = Self::find_paragraph_blocks(html);
+        if paragraphs.is_empty() {
+            return html.to_string();
+        }
+
+        let mut remove = vec![false; paragraphs.len()];
+        for (i, (inner, _, _)) in paragraphs.iter().enumerate() {
+            let text_len = Self::count_text_chars(inner) as i64;
+            let link_len = Self::count_link_text_chars(inner) as i64;
+            if text_len < 30 || (text_len > 0 && link_len * 2 >= text_len) {
+                remove[i] = true;
+            }
+        }
+
+        if !remove.iter().any(|&r| r) {
+            return html.to_string();
+        }
+
+        let mut out = String::with_capacity(html.len());
+        let mut last = 0;
+        for (i, (_, start, end)) in paragraphs.iter().enumerate() {
+            if !remove[i] {
+                out.push_str(&html[last..*start]);
+                out.push_str(&html[*start..*end]);
+            } else {
+                out.push_str(&html[last..*start]);
+            }
+            last = *end;
+        }
+        out.push_str(&html[last..]);
+        out
     }
 
     /// Find all `<p>` blocks in the HTML.
@@ -1286,6 +1410,23 @@ mod tests {
     }
 
     #[test]
+    fn fallback_chain_picks_highest_scoring_candidate() {
+        let html = r#"<article><p>Short.</p></article><div><p>This div block has substantially more article text than the short article tag above, so the fallback chain should prefer it as the main content candidate when scoring all sources together.</p><p>Another paragraph adds even more text density to ensure this block wins over the semantic article wrapper.</p></div>"#;
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
+        assert!(md.contains("substantially more article text"));
+        assert!(!md.contains("Short."));
+    }
+
+    #[test]
+    fn boilerplate_strips_link_heavy_paragraphs() {
+        let html = r#"<article><p><a href="/a">Link A</a> <a href="/b">Link B</a> <a href="/c">Link C</a></p><p>This is substantial article content with enough text to survive boilerplate stripping and represent the real main body of the page for extraction purposes.</p></article>"#;
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
+        assert!(md.contains("substantial article content"));
+        assert!(!md.contains("Link A"));
+        assert!(!md.contains("Link B"));
+    }
+
+    #[test]
     fn readability_extracts_content_div_from_layout() {
         let html = r#"<div><a href="/">Home</a><a href="/about">About</a><a href="/contact">Contact</a><a href="/blog">Blog</a><a href="/shop">Shop</a></div><div><h2>Article Title</h2><p>This is a substantial article body with enough text content to score well in the readability algorithm. It contains meaningful paragraphs of text that should be extracted as the main content of the page, far exceeding the navigation links above.</p><p>Another paragraph with additional content to further increase the text density score of this content block compared to the navigation block which consists mostly of short link texts.</p></div>"#;
         let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
@@ -1618,5 +1759,34 @@ mod tests {
         assert!(md.contains("Keep this"));
         assert!(!md.contains("Ad Title"));
         assert!(!md.contains("Ad content"));
+    }
+
+    #[test]
+    fn to_plain_text_strips_markdown_syntax() {
+        let md = "# Title\n\nHello **world** with [a link](https://example.com).";
+        let text = PageToMarkdown::to_plain_text(md);
+        assert!(text.contains("Title"));
+        assert!(text.contains("Hello world"));
+        assert!(text.contains("a link"));
+        assert!(!text.contains("**"));
+        assert!(!text.contains("](https://"));
+    }
+
+    #[test]
+    fn to_plain_text_preserves_code_content() {
+        let md = "Use `println!` in Rust.";
+        let text = PageToMarkdown::to_plain_text(md);
+        assert!(text.contains("println!"));
+        assert!(!text.contains('`'));
+    }
+
+    #[test]
+    fn to_plain_text_strips_list_markers() {
+        let md = "* one\n* two\n\nParagraph.";
+        let text = PageToMarkdown::to_plain_text(md);
+        assert!(text.contains("one"));
+        assert!(text.contains("two"));
+        assert!(text.contains("Paragraph"));
+        assert!(!text.contains("* one"));
     }
 }
