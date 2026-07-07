@@ -518,6 +518,10 @@ impl PageToMarkdown {
             }
         }
 
+        if let Some(structured) = crate::structured_content::extract_structured_content(html) {
+            return structured;
+        }
+
         html.to_string()
     }
 
@@ -1424,6 +1428,15 @@ mod tests {
         assert!(md.contains("substantial article content"));
         assert!(!md.contains("Link A"));
         assert!(!md.contains("Link B"));
+    }
+
+    #[test]
+    fn structured_metadata_fallback_when_heuristics_fail() {
+        let html = r#"<div><nav><a href="/">Home</a><a href="/about">About</a></nav></div>
+        <script type="application/ld+json">{"@type":"NewsArticle","articleBody":"<p>Structured article body from JSON-LD metadata that should be extracted when DOM heuristics cannot find a high-scoring content block on this page.</p>"}</script>"#;
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
+        assert!(md.contains("Structured article body from JSON-LD"));
+        assert!(!md.contains("About"));
     }
 
     #[test]

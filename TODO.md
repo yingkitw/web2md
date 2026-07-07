@@ -63,6 +63,9 @@
 - [x] Trafilatura-style fallback chain: multi-candidate scoring (semantic tags with bonus, block readability, paragraph clustering), best-candidate selection, jusText-style boilerplate paragraph stripping
 - [x] Post-load wait (`--wait` MS): delay after fetch before processing; `setTimeout` callbacks fire when delay ≤ wait budget (with `--javascript`)
 - [x] JS timer scheduling: `setInterval` (repeating within `--wait`) and `requestAnimationFrame` (~16ms) in the built-in interpreter
+- [x] `clearTimeout` / `clearInterval` for cancelling scheduled JS callbacks
+- [x] Structured content fallback: JSON-LD `articleBody` / `description`, `og:description`, and meta description when main-content heuristics fail
+- [x] Shared `html_meta` module: deduplicated JSON-LD and `<meta>` parsing used by `mcp.rs` and `structured_content.rs`
 
 ## In Progress
 
@@ -77,5 +80,3 @@ _Competitive gaps vs Trafilatura, Firecrawl, and Readability.js:_
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - PDF and plain-text output formats for archival pipelines — plain text done via `--format text`; PDF remains future work
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
-- `clearTimeout` / `clearInterval` for cancelling scheduled callbacks
-- Structured content extraction from Open Graph / Schema.org when main-content heuristics fail (Mercury Parser pattern)

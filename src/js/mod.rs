@@ -253,6 +253,24 @@ mod tests {
     }
 
     #[test]
+    fn cleartimeout_cancels_callback() {
+        let html = r#"<script>
+var id = setTimeout(function(){document.write("late");}, 50);
+clearTimeout(id);
+</script>"#;
+        assert_eq!(run_inline_scripts(html, 100), "");
+    }
+
+    #[test]
+    fn clearinterval_stops_repeats() {
+        let html = r#"<script>
+var id = setInterval(function(){ document.write("x"); }, 40);
+setTimeout(function(){ clearInterval(id); }, 60);
+</script>"#;
+        assert_eq!(run_inline_scripts(html, 100), "x");
+    }
+
+    #[test]
     fn inject_appends_before_body_close() {
         let html = "<html><body>hi</body></html>";
         let out = inject_before_body_close(html, "<p>x</p>");

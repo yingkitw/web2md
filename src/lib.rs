@@ -3,12 +3,14 @@ use std::time::Duration;
 
 mod browser;
 mod crawl;
+mod html_meta;
 mod html_to_md;
 mod html_util;
 mod js;
 mod markdown;
 mod mcp;
 mod robots;
+mod structured_content;
 mod url_blacklist;
 
 pub use browser::{extract_feed_links, parse_sitemap_urls, Browser, BrowserOptions};
@@ -20,6 +22,7 @@ pub use url_blacklist::{
 pub use js::{inject_before_body_close, run_inline_scripts, Interpreter};
 pub use markdown::PageToMarkdown;
 pub use mcp::{extract_metadata, McpRequest, McpResponse, McpServer, PageMetadata};
+pub use structured_content::extract_structured_content;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_USER_AGENT: &str = concat!(

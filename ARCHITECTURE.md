@@ -25,8 +25,10 @@ lib.rs
   │     ├── eval.rs    : Tree-walking evaluator with lexical scopes, closures, control flow, and builtins (document.write, strings, arrays, Math, JSON, console, global constructors)
   │     └── mod.rs     : run_inline_scripts(html, wait_ms) — extracts inline <script> blocks, runs them, flushes timer callbacks, returns document.write output; inject_before_body_close()
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding)
+  ├── html_meta.rs  : Shared `<meta>` and JSON-LD parsing (`iter_json_ld_blocks`, `extract_meta_content`, `extract_json_ld_field`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
-  ├── markdown.rs  : HTML → Markdown pipeline (strip scripts, styles, iframes, noise tags, comments; extract code languages; Trafilatura-style main-content fallback chain + boilerplate strip; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector; to_plain_text for --format text)
+  ├── structured_content.rs : JSON-LD / Open Graph fallback for `--main-content` when DOM heuristics fail
+  ├── markdown.rs  : HTML → Markdown pipeline (strip scripts, styles, iframes, noise tags, comments; extract code languages; Trafilatura-style main-content fallback chain + structured metadata fallback + boilerplate strip; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector; to_plain_text for --format text)
   └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
 
 main.rs (helpers)
@@ -56,7 +58,7 @@ URL ──► Browser.fetch() ──► raw HTML
                                   ▼
                           PageToMarkdown.convert()
                                   │
-                                  ├── extracts main content (if --main-content: Trafilatura-style fallback — semantic tags + block readability + paragraph clustering, best-candidate pick, jusText-style boilerplate strip)
+                                  ├── extracts main content (if --main-content: Trafilatura-style fallback — semantic tags + block readability + paragraph clustering, best-candidate pick, boilerplate strip, JSON-LD/OG structured fallback)
                                   ├── strips <script>, <style>, <iframe>
                                   ├── strips <nav>, <footer>, <aside>, <noscript>, <form>, <header> (unless keep_header)
                                   ├── strips HTML comments
@@ -90,7 +92,7 @@ URL ──► Browser.fetch() ──► raw HTML
 
 ## Key Decisions
 
-1. **Optional JS execution, in-house**: By default the crate does not execute JavaScript (keeping it lightweight and deterministic). With `--javascript` / `enable_javascript`, inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or external engine. The interpreter supports a pragmatic subset (variables, closures, control flow, template literals, `document.write`, `setTimeout`, `setInterval`, `requestAnimationFrame`, strings, arrays, `Math`, `JSON`); timer callbacks flush when scheduled time ≤ `--wait`. Scripts using unsupported features fail fast and are silently skipped, so they never break conversion. External and module scripts are not executed.
+1. **Optional JS execution, in-house**: By default the crate does not execute JavaScript (keeping it lightweight and deterministic). With `--javascript` / `enable_javascript`, inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or external engine. The interpreter supports a pragmatic subset (variables, closures, control flow, template literals, `document.write`, timer APIs including `clearTimeout`/`clearInterval`, strings, arrays, `Math`, `JSON`); timer callbacks flush when scheduled time ≤ `--wait`. Scripts using unsupported features fail fast and are silently skipped, so they never break conversion. External and module scripts are not executed.
 
 2. **In-house HTML-to-Markdown converter**: HTML-to-Markdown conversion uses `html_to_md.rs` — a DOM walker built on `scraper` (html5ever) for malformed-HTML tolerance. No dedicated HTML-to-Markdown crate (`html2md`, `htmd`, etc.). The converter handles headings, links, images, lists, tables, code blocks, entity decoding, and Markdown control-character escaping. Pre/post-processing in `PageToMarkdown` (noise stripping, main-content extraction, dedup, code language injection, forum comments, link absolutization) wraps `html_to_md::parse_html`.
 

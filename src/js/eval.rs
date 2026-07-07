@@ -106,9 +106,37 @@ enum Flow {
 }
 
 struct TimerEntry {
+    id: u64,
     fire_at_ms: u64,
     interval_ms: Option<u64>,
     callback: Value,
+}
+
+fn push_timer(
+    pending: &Rc<RefCell<Vec<TimerEntry>>>,
+    next_id: &Rc<RefCell<u64>>,
+    fire_at_ms: u64,
+    interval_ms: Option<u64>,
+    callback: Value,
+) -> Value {
+    let mut id_ref = next_id.borrow_mut();
+    *id_ref += 1;
+    let id = *id_ref;
+    pending.borrow_mut().push(TimerEntry {
+        id,
+        fire_at_ms,
+        interval_ms,
+        callback,
+    });
+    Value::Number(id as f64)
+}
+
+fn clear_timer(pending: &Rc<RefCell<Vec<TimerEntry>>>, args: &[Value]) -> Value {
+    let id = to_number(args.first().unwrap_or(&Value::Undefined)) as u64;
+    if id > 0 {
+        pending.borrow_mut().retain(|t| t.id != id);
+    }
+    Value::Undefined
 }
 
 /// A self-contained JS interpreter instance with its own global scope and
@@ -134,13 +162,14 @@ impl Interpreter {
         }));
         let doc_buf = Rc::new(RefCell::new(String::new()));
         let pending_timers = Rc::new(RefCell::new(Vec::new()));
+        let next_timer_id = Rc::new(RefCell::new(0u64));
         let me = Self {
             global: global.clone(),
             doc_buf: doc_buf.clone(),
             pending_timers: pending_timers.clone(),
             steps: 0,
         };
-        me.install_globals(&global, &doc_buf, &pending_timers);
+        me.install_globals(&global, &doc_buf, &pending_timers, &next_timer_id);
         me
     }
 
@@ -180,6 +209,7 @@ impl Interpreter {
                 let next = entry.fire_at_ms.saturating_add(interval);
                 if next <= max_delay_ms {
                     self.pending_timers.borrow_mut().push(TimerEntry {
+                        id: entry.id,
                         fire_at_ms: next,
                         interval_ms: Some(interval),
                         callback,
@@ -734,6 +764,7 @@ impl Interpreter {
         global: &ScopeRef,
         doc_buf: &Rc<RefCell<String>>,
         pending_timers: &Rc<RefCell<Vec<TimerEntry>>>,
+        next_timer_id: &Rc<RefCell<u64>>,
     ) {
         let mut g = global.borrow_mut();
 
@@ -848,22 +879,27 @@ impl Interpreter {
             })),
         );
         let timers_ref = pending_timers.clone();
+        let next_id_ref = next_timer_id.clone();
         g.vars.insert(
             "setTimeout".into(),
             Value::Native(Rc::new(move |args: &[Value]| {
                 let cb = args.first().cloned().unwrap_or(Value::Undefined);
                 let delay = to_number(args.get(1).unwrap_or(&Value::Number(0.0))).max(0.0) as u64;
                 if matches!(cb, Value::Func(_) | Value::Native(_)) {
-                    timers_ref.borrow_mut().push(TimerEntry {
-                        fire_at_ms: delay,
-                        interval_ms: None,
-                        callback: cb,
-                    });
+                    Ok(push_timer(
+                        &timers_ref,
+                        &next_id_ref,
+                        delay,
+                        None,
+                        cb,
+                    ))
+                } else {
+                    Ok(Value::Undefined)
                 }
-                Ok(Value::Undefined)
             })),
         );
         let timers_ref = pending_timers.clone();
+        let next_id_ref = next_timer_id.clone();
         g.vars.insert(
             "setInterval".into(),
             Value::Native(Rc::new(move |args: &[Value]| {
@@ -873,30 +909,36 @@ impl Interpreter {
                     return Ok(Value::Undefined);
                 }
                 if matches!(cb, Value::Func(_) | Value::Native(_)) {
-                    timers_ref.borrow_mut().push(TimerEntry {
-                        fire_at_ms: interval,
-                        interval_ms: Some(interval),
-                        callback: cb,
-                    });
+                    Ok(push_timer(
+                        &timers_ref,
+                        &next_id_ref,
+                        interval,
+                        Some(interval),
+                        cb,
+                    ))
+                } else {
+                    Ok(Value::Undefined)
                 }
-                Ok(Value::Undefined)
             })),
         );
         let timers_ref = pending_timers.clone();
+        let next_id_ref = next_timer_id.clone();
         g.vars.insert(
             "requestAnimationFrame".into(),
             Value::Native(Rc::new(move |args: &[Value]| {
                 let cb = args.first().cloned().unwrap_or(Value::Undefined);
                 if matches!(cb, Value::Func(_) | Value::Native(_)) {
-                    timers_ref.borrow_mut().push(TimerEntry {
-                        fire_at_ms: 16,
-                        interval_ms: None,
-                        callback: cb,
-                    });
+                    Ok(push_timer(&timers_ref, &next_id_ref, 16, None, cb))
+                } else {
+                    Ok(Value::Undefined)
                 }
-                Ok(Value::Undefined)
             })),
         );
+        let timers_ref = pending_timers.clone();
+        let clear = move |args: &[Value]| Ok(clear_timer(&timers_ref, args));
+        let clear_fn: NativeFn = Rc::new(clear);
+        g.vars.insert("clearTimeout".into(), Value::Native(clear_fn.clone()));
+        g.vars.insert("clearInterval".into(), Value::Native(clear_fn));
         g.vars.insert("undefined".into(), Value::Undefined);
         g.vars.insert("NaN".into(), Value::Number(f64::NAN));
         g.vars.insert("Infinity".into(), Value::Number(f64::INFINITY));

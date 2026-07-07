@@ -110,7 +110,7 @@ Example Cursor MCP config:
 - **Recursive crawl** (`--depth N`): BFS crawl of same-origin links from a start URL; writes one Markdown file per page to `--output` directory or prints separated sections to stdout
 - **robots.txt**: Honors Disallow rules and Crawl-delay from `/robots.txt` before fetching (use `--ignore-robots` to disable)
 - **Content deduplication**: Removes duplicate paragraph-level blocks to further reduce token output
-- **Main content extraction** (`--main-content`): Trafilatura-style fallback chain — scores semantic tags (`<article>`, `<main>`, `[role="main"]`), top-level `<div>`/`<section>` blocks (text vs link density), and paragraph clusters; picks the best candidate, then strips link-heavy boilerplate paragraphs
+- **Main content extraction** (`--main-content`): Trafilatura-style fallback chain — scores semantic tags (`<article>`, `<main>`, `[role="main"]`), top-level `<div>`/`<section>` blocks (text vs link density), and paragraph clusters; picks the best candidate, strips link-heavy boilerplate paragraphs; falls back to JSON-LD / Open Graph structured content when heuristics score poorly
 - **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)
 - **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
@@ -126,7 +126,7 @@ Example Cursor MCP config:
 - **Output to file** (`--output` flag): Write `fetch` output to a file instead of stdout
 - **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
 - **CSS selector targeting** (`--exclude-selector` flag): Strip HTML elements matching `.class` or `#id` selectors before conversion — remove ads, sidebars, and other noise elements
-- **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout`, `setInterval`, and `requestAnimationFrame` when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
+- **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, and `requestAnimationFrame` when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
 - **Post-load wait** (`--wait` MS): Pause after fetch before processing; caps which timer callbacks run (Firecrawl/Jina pattern for JS-heavy pages)
 
 ## Architecture

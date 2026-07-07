@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::html_meta::{extract_attr, extract_json_ld_field, extract_meta_content, iter_json_ld_blocks};
 use crate::html_util::find_ci;
 use crate::{Browser, BrowserOptions, PageToMarkdown};
 
@@ -243,37 +244,6 @@ fn extract_json_ld_image(html: &str) -> Option<String> {
     None
 }
 
-/// Iterate over all JSON-LD blocks in the HTML, parsing each as JSON.
-fn iter_json_ld_blocks(html: &str) -> impl Iterator<Item = serde_json::Value> + '_ {
-    let mut pos = 0usize;
-    std::iter::from_fn(move || {
-        while pos < html.len() {
-            let rest = &html[pos..];
-            let ld_pos = find_ci(rest, "application/ld+json")?;
-            let abs = pos + ld_pos;
-            let script_close = find_ci(&html[abs..], "</script>")?;
-            let block = &html[abs..abs + script_close];
-            let gt = block.find('>')?;
-            let json_content = &block[gt + 1..];
-            pos = abs + script_close + 9;
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(json_content) {
-                return Some(json);
-            }
-        }
-        None
-    })
-}
-
-/// Extract a string field from the first JSON-LD block that contains it.
-fn extract_json_ld_field(html: &str, field: &str) -> Option<String> {
-    for json in iter_json_ld_blocks(html) {
-        if let Some(val) = json.get(field).and_then(|v| v.as_str()) {
-            return Some(val.to_string());
-        }
-    }
-    None
-}
-
 /// Extract keywords/tags from HTML.
 /// Checks in order: multiple `<meta property="article:tag">` tags, `<meta name="keywords">`,
 /// and JSON-LD `keywords` (string, array, or comma-separated).
@@ -344,46 +314,6 @@ fn extract_title(html: &str) -> Option<String> {
         let rest = &html[start + 7..];
         find_ci(rest, "</title>").map(|end| rest[..end].trim().to_string())
     })
-}
-
-/// Extract `content` attribute from a `<meta>` tag matching the given attribute key/value pair.
-/// e.g. `extract_meta_content(html, "name", "description")` finds `<meta name="description" content="...">`.
-fn extract_meta_content(html: &str, attr_key: &str, attr_val: &str) -> Option<String> {
-    let mut i = 0;
-    while i < html.len() {
-        if let Some(pos) = find_ci(&html[i..], "<meta") {
-            let pos = i + pos;
-            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
-            let tag = &html[pos..=tag_end];
-            if find_ci(tag, &format!("{}=\"{}\"", attr_key, attr_val)).is_some()
-                || find_ci(tag, &format!("{}='{}'", attr_key, attr_val)).is_some()
-            {
-                return extract_attr(tag, "content");
-            }
-            i = tag_end + 1;
-        } else {
-            break;
-        }
-    }
-    None
-}
-
-/// Extract the value of an attribute from an HTML tag string.
-fn extract_attr(tag: &str, attr: &str) -> Option<String> {
-    let needle = format!("{}=", attr);
-    let pos = find_ci(tag, &needle)?;
-    let after = &tag[pos + needle.len()..];
-    let mut i = 0;
-    while i < after.len() && after.as_bytes()[i].is_ascii_whitespace() {
-        i += 1;
-    }
-    let quote = *after.as_bytes().get(i)? as char;
-    if quote != '"' && quote != '\'' {
-        return None;
-    }
-    let val_start = i + 1;
-    let val_end = after[val_start..].find(quote)? + val_start;
-    Some(after[val_start..val_end].to_string())
 }
 
 #[cfg(test)]
