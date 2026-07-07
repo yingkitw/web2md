@@ -51,6 +51,8 @@
 - [x] YAML frontmatter output: `--frontmatter` flag prepends metadata (title, description, author, date, etc.) as a YAML block at the top of Markdown output
 - [x] CSS selector targeting: `--exclude-selector` flag strips HTML elements matching `.class` or `#id` selectors before conversion
 - [x] Built-in JavaScript interpreter (`src/js/`): dependency-free lexer/parser/evaluator for a JS subset, executes inline `<script>` blocks when `--javascript` is set and folds `document.write` output into the page (replaces any need for boa/v8)
+- [x] URL blacklist filtering: skip known non-content URLs (ads, tracking pixels, analytics hosts) on iframe inlining, batch processing, and sitemap output; `--no-blacklist` to disable
+- [x] Recursive crawl: `--depth N` on `fetch` discovers and converts same-origin linked pages (BFS); `--output` writes to a directory
 
 ## In Progress
 
@@ -61,5 +63,6 @@
 - Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags
-- URL blacklist filtering: skip known non-content URLs (ads, tracking pixels, etc.)
-- Recursive crawl: `--depth N` to discover and convert same-domain linked pages
+- robots.txt respect: parse and honor crawl-delay / disallow rules before fetching
+- PDF and plain-text output formats for archival pipelines
+- Custom user blacklist file: load additional URL patterns from `~/.web2md/blacklist.txt`

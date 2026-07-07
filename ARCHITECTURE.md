@@ -7,13 +7,16 @@ main.rs
   ├── CLI parsing (clap)
   ├── <URL> (default) → browse_loop → Browser → PageToMarkdown → ANSI renderer → terminal
   ├── fetch command   → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → stdout
+  │                     ├── --depth N → BFS crawl via crawl.rs (same-origin links) → multiple Markdown outputs
   │                     └── --format json → extract_metadata → structured JSON output
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
   ├── batch command   → Browser → run_inline_scripts → PageToMarkdown → stdout or output directory
   └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction, run_inline_scripts() (gated by enable_javascript)
+  ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction, run_inline_scripts() (gated by enable_javascript), URL blacklist filtering on secondary fetches
+  ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; filter_blacklisted_urls() helper
+  ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
   ├── js/          : Built-in dependency-free JavaScript subset interpreter
   │     ├── ast.rs     : AST node types (expressions, statements, operators)
   │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)

@@ -98,6 +98,8 @@ pub struct BrowserOptions {
     pub request_delay: Duration,
     /// Cache TTL for fetched pages (zero = caching disabled)
     pub cache_ttl: Duration,
+    /// Skip known non-content URLs (ads, tracking pixels) on secondary fetches
+    pub filter_blacklisted_urls: bool,
 }
 
 impl Default for BrowserOptions {
@@ -111,6 +113,7 @@ impl Default for BrowserOptions {
             headers: Vec::new(),
             request_delay: Duration::from_millis(0),
             cache_ttl: Duration::from_secs(0),
+            filter_blacklisted_urls: true,
         }
     }
 }
@@ -161,6 +164,11 @@ impl Browser {
             }
         }
         *guard = Some(Instant::now());
+    }
+
+    /// Returns true when URL blacklist filtering is enabled and the URL is blocked.
+    pub fn is_url_blocked(&self, url: &str) -> bool {
+        self.options.filter_blacklisted_urls && crate::is_blacklisted(url)
     }
 
     /// Fetch raw HTML from a URL
@@ -245,9 +253,13 @@ impl Browser {
 
                     let replacement = if let Some(url) = src {
                         let resolved = resolve_iframe_src(base_url, &url);
-                        match self.fetch(&resolved).await {
-                            Ok(content) => content,
-                            Err(_) => String::new(),
+                        if self.is_url_blocked(&resolved) {
+                            String::new()
+                        } else {
+                            match self.fetch(&resolved).await {
+                                Ok(content) => content,
+                                Err(_) => String::new(),
+                            }
                         }
                     } else {
                         String::new()
@@ -510,6 +522,55 @@ mod tests {
 
         assert!(inlined.contains("Nested"));
         assert!(!inlined.contains("<iframe"));
+        iframe_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_skips_blacklisted_iframe_src() {
+        let mut server = mockito::Server::new_async().await;
+        let iframe_mock = server
+            .mock("GET", "/pixel.gif")
+            .with_status(200)
+            .with_header("content-type", "image/gif")
+            .with_body("GIF89a")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let browser = Browser::new(BrowserOptions::default()).unwrap();
+        let html = r#"<html><body><p>Main</p><iframe src="/pixel.gif"></iframe></body></html>"#;
+        let inlined = browser
+            .inline_iframes(html, &server.url())
+            .await
+            .unwrap();
+
+        assert!(inlined.contains("Main"));
+        assert!(!inlined.contains("GIF89a"));
+        assert!(!inlined.contains("<iframe"));
+        iframe_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_fetches_blacklisted_iframe_when_filter_disabled() {
+        let mut server = mockito::Server::new_async().await;
+        let iframe_mock = server
+            .mock("GET", "/pixel.gif")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<p>Pixel content</p>")
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.filter_blacklisted_urls = false;
+        let browser = Browser::new(opts).unwrap();
+        let html = r#"<html><body><iframe src="/pixel.gif"></iframe></body></html>"#;
+        let inlined = browser
+            .inline_iframes(html, &server.url())
+            .await
+            .unwrap();
+
+        assert!(inlined.contains("Pixel content"));
         iframe_mock.assert_async().await;
     }
 

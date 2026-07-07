@@ -1,5 +1,9 @@
-use web2md::{extract_feed_links, extract_metadata, parse_sitemap_urls, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use std::time::Duration;
+use url::Url;
+use web2md::{
+    extract_feed_links, extract_metadata, normalize_crawl_url, parse_sitemap_urls,
+    same_origin_links, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+};
 
 #[tokio::test]
 async fn fetch_and_convert_to_markdown() {
@@ -394,4 +398,140 @@ async fn js_enabled_captures_document_write() {
     assert!(md.contains("a"));
     assert!(md.contains("b"));
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn blacklisted_iframe_not_inlined_in_pipeline() {
+    let mut server = mockito::Server::new_async().await;
+    let iframe_mock = server
+        .mock("GET", "/beacon")
+        .with_status(200)
+        .with_body("TRACKED")
+        .expect(0)
+        .create_async()
+        .await;
+
+    let main_mock = server
+        .mock("GET", "/page")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(r#"<html><body><h1>Article</h1><iframe src="/beacon"></iframe></body></html>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/page", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let html = browser.inline_iframes(&html, &url).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
+
+    assert!(md.contains("Article"));
+    assert!(!md.contains("TRACKED"));
+    iframe_mock.assert_async().await;
+    main_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn recursive_crawl_depth_one_discovers_same_origin_links() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+
+    let root = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            r#"<html><body>
+                <p>Root page</p>
+                <a href="{}/a">A</a>
+                <a href="{}/b">B</a>
+                <a href="https://other.example.com/x">External</a>
+            </body></html>"#,
+            base, base
+        ))
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let root_url = format!("{}/", base);
+    let origin = Url::parse(&root_url).unwrap();
+
+    let html = browser.fetch(&root_url).await.unwrap();
+    let links = same_origin_links(&html, &root_url, &origin);
+    assert_eq!(links.len(), 2);
+    assert!(links.iter().any(|u| u.ends_with("/a")));
+    assert!(links.iter().any(|u| u.ends_with("/b")));
+
+    root.assert_async().await;
+}
+
+#[tokio::test]
+async fn recursive_crawl_depth_two_reaches_nested_page() {
+    use std::collections::{HashSet, VecDeque};
+
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+
+    let page_c = server
+        .mock("GET", "/c")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body><p>Page C nested</p></body></html>")
+        .create_async()
+        .await;
+
+    let page_a = server
+        .mock("GET", "/a")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            r#"<html><body><p>Page A</p><a href="{}/c">C</a></body></html>"#,
+            base
+        ))
+        .create_async()
+        .await;
+
+    let root = server
+        .mock("GET", "/")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            r#"<html><body><p>Root</p><a href="{}/a">A</a></body></html>"#,
+            base
+        ))
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let root_url = format!("{}/", base);
+    let origin = Url::parse(&root_url).unwrap();
+
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::from([(root_url.clone(), 0u32)]);
+    let depth = 2u32;
+    let mut fetched = Vec::new();
+
+    while let Some((url, level)) = queue.pop_front() {
+        let key = normalize_crawl_url(&url, &url).unwrap_or(url.clone());
+        if !visited.insert(key) {
+            continue;
+        }
+        let html = browser.fetch(&url).await.unwrap();
+        fetched.push(url.clone());
+        if level < depth {
+            for link in same_origin_links(&html, &url, &origin) {
+                let link_key = normalize_crawl_url(&link, &link).unwrap_or(link.clone());
+                if !visited.contains(&link_key) {
+                    queue.push_back((link, level + 1));
+                }
+            }
+        }
+    }
+
+    assert_eq!(fetched.len(), 3);
+    assert!(fetched.iter().any(|u| u.ends_with("/c")));
+
+    root.assert_async().await;
+    page_a.assert_async().await;
+    page_c.assert_async().await;
 }

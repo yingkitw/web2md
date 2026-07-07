@@ -14,6 +14,26 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 
 When enabled (`--javascript` / `enable_javascript`), inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or other external engine. A pragmatic JS subset is supported (variables, closures, control flow, template literals, `document.write`, strings, arrays, `Math`, `JSON`). Unsupported features fail fast and are skipped, so a script can never break conversion. External (`src=`) and module scripts are not executed.
 
+## URL Blacklist
+
+By default (`filter_blacklisted_urls: true`), Web2MD skips known non-content URLs:
+
+- **Iframe inlining**: blacklisted `src` URLs are not fetched (empty replacement)
+- **Batch processing**: blacklisted URLs in the input file are skipped with a log message
+- **Sitemap output**: blacklisted URLs are filtered from printed results
+
+Primary user-requested URLs (explicit `fetch` or browse navigation) are always fetched. Use `--no-blacklist` on `fetch`, `browse`, or `batch` to disable filtering.
+
+## Recursive Crawl
+
+`fetch --depth N` performs a breadth-first crawl of same-origin links starting from the given URL:
+
+- **Depth 0** (default): single-page fetch (existing behavior)
+- **Depth N > 0**: fetch the start page, extract `<a href>` links on the same host, convert each to Markdown, and repeat up to N link hops
+- External links, `mailto:`, fragments, and blacklisted URLs are not followed
+- Output: `--output <dir>` writes one `.md` file per page; without `--output`, pages are printed separated by `---` headers
+- Requires markdown output format (`--format json` / `--format html` are incompatible with `--depth`)
+
 ## CLI
 
 ```bash
@@ -40,6 +60,8 @@ web2md fetch <URL> [FLAGS]
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
   --javascript          Execute inline <script> blocks via the built-in JS interpreter
+  --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
+  --depth N             Recursively crawl same-origin links up to N levels (markdown only)
 
 # Sitemap/feed discovery
 web2md sitemap <URL> [FLAGS]
@@ -62,6 +84,7 @@ web2md batch <FILE> [FLAGS]
   --frontmatter         Prepend YAML frontmatter (metadata) to each Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
   --javascript          Execute inline <script> blocks via the built-in JS interpreter
+  --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
 
 # MCP server (stdio JSON-RPC)
 web2md mcp

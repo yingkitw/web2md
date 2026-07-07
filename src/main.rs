@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use url::Url;
-use web2md::{extract_metadata, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{extract_metadata, filter_blacklisted_urls, parse_sitemap_urls, same_origin_links, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
@@ -89,7 +90,7 @@ enum Commands {
         /// Extract only main content from <article>, <main>, or [role=main] elements
         #[arg(long)]
         main_content: bool,
-        /// Write output to file instead of stdout
+        /// Write output to file instead of stdout (or directory when --depth > 0)
         #[arg(short, long)]
         output: Option<String>,
         /// Prepend YAML frontmatter (metadata) to Markdown output
@@ -101,8 +102,13 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
+        /// Disable URL blacklist filtering for ads/tracking pixels
+        #[arg(long)]
+        no_blacklist: bool,
+        /// Recursively crawl same-origin links up to N levels deep (markdown output only)
+        #[arg(long, default_value = "0")]
+        depth: u32,
     },
-    /// Interactive terminal browser (Lynx-like)
     Browse {
         /// Starting URL
         url: String,
@@ -133,6 +139,9 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
+        /// Disable URL blacklist filtering for ads/tracking pixels
+        #[arg(long)]
+        no_blacklist: bool,
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
@@ -193,6 +202,9 @@ enum Commands {
         /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
         #[arg(long)]
         javascript: bool,
+        /// Disable URL blacklist filtering for ads/tracking pixels
+        #[arg(long)]
+        no_blacklist: bool,
     },
 }
 
@@ -227,6 +239,8 @@ async fn main() -> Result<()> {
             frontmatter,
             exclude_selector,
             javascript,
+            no_blacklist,
+            depth,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -241,59 +255,81 @@ async fn main() -> Result<()> {
             options.cookies = cookie;
             options.headers = header;
             options.enable_javascript = javascript;
+            options.filter_blacklisted_urls = !no_blacklist;
             let browser = Browser::new(options)?;
-            let html = browser.fetch(&url).await?;
-            let html = browser.inline_iframes(&html, &url).await?;
-            let html = browser.run_inline_scripts(&html);
 
-            let mut result = match format {
-                OutputFormat::Markdown => {
-                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
-                    let md = PageToMarkdown::absolutize_links(&md, &url);
-                    if render {
-                        render_markdown_ansi(&md, false).0
-                    } else {
-                        md
+            if depth > 0 {
+                if !matches!(format, OutputFormat::Markdown) {
+                    anyhow::bail!("--depth requires markdown output format");
+                }
+                crawl_fetch(
+                    &browser,
+                    &url,
+                    depth,
+                    max_length,
+                    include_images,
+                    keep_header,
+                    main_content,
+                    frontmatter,
+                    &exclude_selector,
+                    output_file.as_deref(),
+                    render,
+                )
+                .await?;
+            } else {
+                let html = browser.fetch(&url).await?;
+                let html = browser.inline_iframes(&html, &url).await?;
+                let html = browser.run_inline_scripts(&html);
+
+                let mut result = match format {
+                    OutputFormat::Markdown => {
+                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
+                        let md = PageToMarkdown::absolutize_links(&md, &url);
+                        if render {
+                            render_markdown_ansi(&md, false).0
+                        } else {
+                            md
+                        }
+                    }
+                    OutputFormat::Html => html.clone(),
+                    OutputFormat::Json => {
+                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
+                        let md = PageToMarkdown::absolutize_links(&md, &url);
+                        let meta = extract_metadata(&html);
+                        let output = CliJsonOutput {
+                            markdown: md,
+                            title: meta.title,
+                            description: meta.description,
+                            author: meta.author,
+                            published_date: meta.published_date,
+                            image: meta.image,
+                            headline: meta.headline,
+                            site_name: meta.site_name,
+                            keywords: meta.keywords,
+                        };
+                        serde_json::to_string_pretty(&output)?
+                    }
+                };
+
+                if frontmatter && matches!(format, OutputFormat::Markdown) {
+                    let meta = extract_metadata(&html);
+                    if let Some(fm) = meta.to_frontmatter(Some(&url)) {
+                        result = format!("{}{}", fm, result);
                     }
                 }
-                OutputFormat::Html => html.clone(),
-                OutputFormat::Json => {
-                    let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
-                    let md = PageToMarkdown::absolutize_links(&md, &url);
-                    let meta = extract_metadata(&html);
-                    let output = CliJsonOutput {
-                        markdown: md,
-                        title: meta.title,
-                        description: meta.description,
-                        author: meta.author,
-                        published_date: meta.published_date,
-                        image: meta.image,
-                        headline: meta.headline,
-                        site_name: meta.site_name,
-                        keywords: meta.keywords,
-                    };
-                    serde_json::to_string_pretty(&output)?
-                }
-            };
 
-            if frontmatter && matches!(format, OutputFormat::Markdown) {
-                let meta = extract_metadata(&html);
-                if let Some(fm) = meta.to_frontmatter(Some(&url)) {
-                    result = format!("{}{}", fm, result);
+                if let Some(max) = max_length {
+                    if result.len() > max {
+                        result = format!("{}\n\n[truncated]", &result[..max]);
+                    }
                 }
-            }
 
-            if let Some(max) = max_length {
-                if result.len() > max {
-                    result = format!("{}\n\n[truncated]", &result[..max]);
+                if let Some(path) = output_file {
+                    std::fs::write(&path, &result)?;
+                    eprintln!("Written to {}", path);
+                } else {
+                    println!("{}", result);
                 }
-            }
-
-            if let Some(path) = output_file {
-                std::fs::write(&path, &result)?;
-                eprintln!("Written to {}", path);
-            } else {
-                println!("{}", result);
             }
         }
         Some(Commands::Browse {
@@ -307,6 +343,7 @@ async fn main() -> Result<()> {
             cache_ttl,
             main_content,
             javascript,
+            no_blacklist,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -321,6 +358,7 @@ async fn main() -> Result<()> {
             options.cookies = cookie;
             options.headers = header;
             options.enable_javascript = javascript;
+            options.filter_blacklisted_urls = !no_blacklist;
             browse_loop(url, options, include_images, keep_header, main_content).await?;
         }
         Some(Commands::Mcp) => {
@@ -350,7 +388,7 @@ async fn main() -> Result<()> {
             // Try fetching sitemap.xml
             match browser.fetch(&sitemap_url).await {
                 Ok(xml) => {
-                    let sitemap_urls = web2md::parse_sitemap_urls(&xml);
+                    let sitemap_urls = filter_blacklisted_urls(parse_sitemap_urls(&xml));
                     if !sitemap_urls.is_empty() {
                         println!("# Sitemap URLs from {}\n", sitemap_url);
                         for u in &sitemap_urls {
@@ -401,6 +439,7 @@ async fn main() -> Result<()> {
             frontmatter,
             exclude_selector,
             javascript,
+            no_blacklist,
         }) => {
             let content = std::fs::read_to_string(&file)
                 .context("Failed to read batch file")?;
@@ -429,6 +468,7 @@ async fn main() -> Result<()> {
             options.cookies = cookie;
             options.headers = header;
             options.enable_javascript = javascript;
+            options.filter_blacklisted_urls = !no_blacklist;
             let browser = Browser::new(options)?;
 
             // Create output directory if specified
@@ -439,9 +479,16 @@ async fn main() -> Result<()> {
             let total = urls.len();
             let mut succeeded = 0;
             let mut failed = 0;
+            let mut skipped = 0;
 
             for (i, url) in urls.iter().enumerate() {
                 eprintln!("[{}/{}] {}", i + 1, total, url);
+
+                if browser.is_url_blocked(url) {
+                    eprintln!("  Skipped (blacklisted URL)");
+                    skipped += 1;
+                    continue;
+                }
 
                 match browser.fetch(url).await {
                     Ok(html) => {
@@ -486,10 +533,124 @@ async fn main() -> Result<()> {
                 }
             }
 
-            eprintln!("\nDone: {}/{} succeeded, {} failed", succeeded, total, failed);
+            eprintln!("\nDone: {}/{} succeeded, {} failed, {} skipped", succeeded, total, failed, skipped);
         }
     }
 
+    Ok(())
+}
+
+/// Recursively fetch and convert same-origin pages up to `depth` link hops.
+async fn crawl_fetch(
+    browser: &Browser,
+    start_url: &str,
+    depth: u32,
+    max_length: Option<usize>,
+    include_images: bool,
+    keep_header: bool,
+    main_content: bool,
+    frontmatter: bool,
+    exclude_selector: &[String],
+    output_dir: Option<&str>,
+    render: bool,
+) -> Result<()> {
+    let root = Url::parse(start_url).context("Invalid URL")?;
+    let start = web2md::normalize_crawl_url(start_url, start_url)
+        .unwrap_or_else(|| start_url.to_string());
+
+    if let Some(dir) = output_dir {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let mut visited = HashSet::new();
+    let mut queue = VecDeque::from([(start.clone(), 0u32)]);
+    let mut succeeded = 0usize;
+    let mut failed = 0usize;
+    let mut skipped = 0usize;
+
+    while let Some((url, level)) = queue.pop_front() {
+        let key = web2md::normalize_crawl_url(&url, &url).unwrap_or_else(|| url.clone());
+        if !visited.insert(key) {
+            continue;
+        }
+
+        if browser.is_url_blocked(&url) {
+            eprintln!("Skipped (blacklisted): {}", url);
+            skipped += 1;
+            continue;
+        }
+
+        eprintln!("[depth {}] {}", level, url);
+
+        match browser.fetch(&url).await {
+            Ok(html) => {
+                let html = match browser.inline_iframes(&html, &url).await {
+                    Ok(inlined) => inlined,
+                    Err(_) => html,
+                };
+                let html = browser.run_inline_scripts(&html);
+
+                if level < depth {
+                    for link in same_origin_links(&html, &url, &root) {
+                        let link_key =
+                            web2md::normalize_crawl_url(&link, &link).unwrap_or(link.clone());
+                        if !visited.contains(&link_key) {
+                            queue.push_back((link, level + 1));
+                        }
+                    }
+                }
+
+                match PageToMarkdown::convert(
+                    &html,
+                    include_images,
+                    keep_header,
+                    main_content,
+                    exclude_selector,
+                ) {
+                    Ok(md) => {
+                        let mut md = PageToMarkdown::absolutize_links(&md, &url);
+                        if frontmatter {
+                            let meta = extract_metadata(&html);
+                            if let Some(fm) = meta.to_frontmatter(Some(&url)) {
+                                md = format!("{}{}", fm, md);
+                            }
+                        }
+                        if let Some(max) = max_length {
+                            if md.len() > max {
+                                md = format!("{}\n\n[truncated]", &md[..max]);
+                            }
+                        }
+                        if render {
+                            md = render_markdown_ansi(&md, false).0;
+                        }
+
+                        if let Some(dir) = output_dir {
+                            let filename = url_to_filename(&url);
+                            let path = format!("{}/{}", dir, filename);
+                            std::fs::write(&path, &md)?;
+                            eprintln!("  → {}", path);
+                        } else {
+                            println!("---\n# {}\n\n{}", url, md);
+                        }
+                        succeeded += 1;
+                    }
+                    Err(e) => {
+                        eprintln!("  Error converting: {}", e);
+                        failed += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("  Error fetching: {}", e);
+                failed += 1;
+            }
+        }
+    }
+
+    eprintln!(
+        "\nCrawl done: {} succeeded, {} failed, {} skipped",
+        succeeded, failed, skipped
+    );
     Ok(())
 }
 
