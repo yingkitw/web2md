@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::markdown::find_ci;
+use crate::html_util::find_ci;
 use crate::{Browser, BrowserOptions, PageToMarkdown};
 
 /// MCP tool request schema

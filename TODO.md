@@ -24,10 +24,11 @@
 - [x] Table rendering: box-drawing characters for terminal display
 - [x] Numbered links in browse mode: `[N]` prefix before each link
 - [x] Fix empty-text links not getting numbered
-- [x] Fix raw `[text](url)` Markdown links from html2md multi-line output
+- [x] Fix raw `[text](url)` Markdown links from multi-line converter output
 - [x] Rate limiting / polite delay between requests (`--delay` flag)
 - [x] Noise tag stripping: `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, HTML comments
-- [x] Competitive intelligence: compared html2md vs htmd, html-to-markdown, Readability.js
+- [x] Competitive intelligence: compared HTML-to-Markdown tools (Readability.js, etc.); in-house converter retained
+- [x] Replace `html2md` dependency with in-house `html_to_md` module
 - [x] Code language detection: `<code class="language-xxx">` → ` ```xxx ` fenced blocks
 - [x] Deploy release binaries: optimized release profile + GitHub Actions CI/release workflows
 - [x] Metadata extraction: meta description, Open Graph description, author in MCP response
@@ -53,6 +54,10 @@
 - [x] Built-in JavaScript interpreter (`src/js/`): dependency-free lexer/parser/evaluator for a JS subset, executes inline `<script>` blocks when `--javascript` is set and folds `document.write` output into the page (replaces any need for boa/v8)
 - [x] URL blacklist filtering: skip known non-content URLs (ads, tracking pixels, analytics hosts) on iframe inlining, batch processing, and sitemap output; `--no-blacklist` to disable
 - [x] Recursive crawl: `--depth N` on `fetch` discovers and converts same-origin linked pages (BFS); `--output` writes to a directory
+- [x] robots.txt respect: parse and honor Disallow rules and Crawl-delay before fetching; `--ignore-robots` to disable
+- [x] Custom user blacklist file: load additional URL patterns from `~/.web2md/blacklist.txt` and `--blacklist-file`; `--no-user-blacklist` to skip the default file
+- [x] Shared `html_util` module: extracted `find_ci` and HTML entity decoding for the in-house converter
+- [x] Markdown control-character escaping in `html_to_md` (list/heading markers in raw text)
 
 ## In Progress
 
@@ -60,9 +65,9 @@
 
 ## Brainstorming
 
-- Switch to htmd crate for richer conversion options (heading styles, skip tags, faithful mode)
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
-- Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags
-- robots.txt respect: parse and honor crawl-delay / disallow rules before fetching
+- Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags in `html_to_md`
 - PDF and plain-text output formats for archival pipelines
-- Custom user blacklist file: load additional URL patterns from `~/.web2md/blacklist.txt`
+- Trafilatura-style fallback chain: heuristic scoring → readability-lxml port → jusText-style boilerplate removal (competitive gap vs Firecrawl/Trafilatura)
+- `--wait` / post-load delay for JS-rendered SPAs (Firecrawl/Jina pattern; our interpreter only handles inline scripts today)
+- `--wait` / post-load delay for JS-rendered SPAs (Firecrawl/Jina pattern; our interpreter only handles inline scripts today)

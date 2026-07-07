@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use url::Url;
 
 use crate::is_blacklisted;
-use crate::markdown::find_ci;
+use crate::html_util::find_ci;
 
 /// Extract absolute HTTP(S) links from `<a href="...">` tags in HTML.
 pub fn extract_page_links(html: &str, base_url: &str) -> Vec<String> {

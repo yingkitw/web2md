@@ -24,6 +24,10 @@ By default (`filter_blacklisted_urls: true`), Web2MD skips known non-content URL
 
 Primary user-requested URLs (explicit `fetch` or browse navigation) are always fetched. Use `--no-blacklist` on `fetch`, `browse`, or `batch` to disable filtering.
 
+### Custom blacklist file
+
+When URL filtering is enabled, Web2MD also loads `~/.web2md/blacklist.txt` if it exists. Each non-empty, non-comment line is a host suffix (e.g. `evil-tracker.com`) or path fragment (e.g. `/ads/`). Use `--blacklist-file <path>` for additional pattern files and `--no-user-blacklist` to skip the default file.
+
 ## Recursive Crawl
 
 `fetch --depth N` performs a breadth-first crawl of same-origin links starting from the given URL:
@@ -33,6 +37,16 @@ Primary user-requested URLs (explicit `fetch` or browse navigation) are always f
 - External links, `mailto:`, fragments, and blacklisted URLs are not followed
 - Output: `--output <dir>` writes one `.md` file per page; without `--output`, pages are printed separated by `---` headers
 - Requires markdown output format (`--format json` / `--format html` are incompatible with `--depth`)
+
+## robots.txt
+
+By default, Web2MD fetches `/robots.txt` once per origin and:
+
+- **Blocks** fetches to paths matched by a `Disallow` rule for `*` or the Web2MD user-agent
+- **Waits** the greater of `--delay` and `Crawl-delay` (seconds) between requests to that host
+- Missing or unreadable robots.txt → all paths allowed
+- `/robots.txt` itself is always fetchable (no circular check)
+- Use `--ignore-robots` on `fetch`, `browse`, or `batch` to disable
 
 ## CLI
 
@@ -61,7 +75,10 @@ web2md fetch <URL> [FLAGS]
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
   --javascript          Execute inline <script> blocks via the built-in JS interpreter
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
+  --blacklist-file PATH Additional blacklist pattern file (repeatable)
+  --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
   --depth N             Recursively crawl same-origin links up to N levels (markdown only)
+  --ignore-robots       Ignore robots.txt disallow rules and crawl-delay
 
 # Sitemap/feed discovery
 web2md sitemap <URL> [FLAGS]
@@ -85,6 +102,8 @@ web2md batch <FILE> [FLAGS]
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
   --javascript          Execute inline <script> blocks via the built-in JS interpreter
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
+  --blacklist-file PATH Additional blacklist pattern file (repeatable)
+  --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
 
 # MCP server (stdio JSON-RPC)
 web2md mcp

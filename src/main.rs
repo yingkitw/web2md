@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use url::Url;
-use web2md::{extract_metadata, filter_blacklisted_urls, parse_sitemap_urls, same_origin_links, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
+use web2md::{extract_metadata, parse_sitemap_urls, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown};
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
@@ -108,6 +108,15 @@ enum Commands {
         /// Recursively crawl same-origin links up to N levels deep (markdown output only)
         #[arg(long, default_value = "0")]
         depth: u32,
+        /// Ignore robots.txt disallow rules and crawl-delay
+        #[arg(long)]
+        ignore_robots: bool,
+        /// Additional blacklist pattern file (one host or path pattern per line)
+        #[arg(long)]
+        blacklist_file: Vec<String>,
+        /// Do not load ~/.web2md/blacklist.txt
+        #[arg(long)]
+        no_user_blacklist: bool,
     },
     Browse {
         /// Starting URL
@@ -142,6 +151,15 @@ enum Commands {
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
+        /// Ignore robots.txt disallow rules and crawl-delay
+        #[arg(long)]
+        ignore_robots: bool,
+        /// Additional blacklist pattern file (one host or path pattern per line)
+        #[arg(long)]
+        blacklist_file: Vec<String>,
+        /// Do not load ~/.web2md/blacklist.txt
+        #[arg(long)]
+        no_user_blacklist: bool,
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
@@ -205,7 +223,27 @@ enum Commands {
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
+        /// Ignore robots.txt disallow rules and crawl-delay
+        #[arg(long)]
+        ignore_robots: bool,
+        /// Additional blacklist pattern file (one host or path pattern per line)
+        #[arg(long)]
+        blacklist_file: Vec<String>,
+        /// Do not load ~/.web2md/blacklist.txt
+        #[arg(long)]
+        no_user_blacklist: bool,
     },
+}
+
+fn apply_blacklist_options(
+    options: &mut BrowserOptions,
+    no_blacklist: bool,
+    no_user_blacklist: bool,
+    blacklist_file: Vec<String>,
+) {
+    options.filter_blacklisted_urls = !no_blacklist;
+    options.load_user_blacklist = !no_user_blacklist;
+    options.extra_blacklist_files = blacklist_file;
 }
 
 #[tokio::main]
@@ -241,6 +279,9 @@ async fn main() -> Result<()> {
             javascript,
             no_blacklist,
             depth,
+            ignore_robots,
+            blacklist_file,
+            no_user_blacklist,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -255,7 +296,8 @@ async fn main() -> Result<()> {
             options.cookies = cookie;
             options.headers = header;
             options.enable_javascript = javascript;
-            options.filter_blacklisted_urls = !no_blacklist;
+            apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
+            options.respect_robots_txt = !ignore_robots;
             let browser = Browser::new(options)?;
 
             if depth > 0 {
@@ -344,6 +386,9 @@ async fn main() -> Result<()> {
             main_content,
             javascript,
             no_blacklist,
+            ignore_robots,
+            blacklist_file,
+            no_user_blacklist,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -358,7 +403,8 @@ async fn main() -> Result<()> {
             options.cookies = cookie;
             options.headers = header;
             options.enable_javascript = javascript;
-            options.filter_blacklisted_urls = !no_blacklist;
+            apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
+            options.respect_robots_txt = !ignore_robots;
             browse_loop(url, options, include_images, keep_header, main_content).await?;
         }
         Some(Commands::Mcp) => {
@@ -388,7 +434,10 @@ async fn main() -> Result<()> {
             // Try fetching sitemap.xml
             match browser.fetch(&sitemap_url).await {
                 Ok(xml) => {
-                    let sitemap_urls = filter_blacklisted_urls(parse_sitemap_urls(&xml));
+                    let sitemap_urls: Vec<String> = parse_sitemap_urls(&xml)
+                        .into_iter()
+                        .filter(|u| !browser.is_url_blocked(u))
+                        .collect();
                     if !sitemap_urls.is_empty() {
                         println!("# Sitemap URLs from {}\n", sitemap_url);
                         for u in &sitemap_urls {
@@ -440,6 +489,9 @@ async fn main() -> Result<()> {
             exclude_selector,
             javascript,
             no_blacklist,
+            ignore_robots,
+            blacklist_file,
+            no_user_blacklist,
         }) => {
             let content = std::fs::read_to_string(&file)
                 .context("Failed to read batch file")?;
@@ -468,7 +520,8 @@ async fn main() -> Result<()> {
             options.cookies = cookie;
             options.headers = header;
             options.enable_javascript = javascript;
-            options.filter_blacklisted_urls = !no_blacklist;
+            apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
+            options.respect_robots_txt = !ignore_robots;
             let browser = Browser::new(options)?;
 
             // Create output directory if specified
@@ -486,6 +539,12 @@ async fn main() -> Result<()> {
 
                 if browser.is_url_blocked(url) {
                     eprintln!("  Skipped (blacklisted URL)");
+                    skipped += 1;
+                    continue;
+                }
+
+                if !browser.robots_allows(url).await? {
+                    eprintln!("  Skipped (robots.txt)");
                     skipped += 1;
                     continue;
                 }
@@ -580,6 +639,12 @@ async fn crawl_fetch(
             continue;
         }
 
+        if !browser.robots_allows(&url).await? {
+            eprintln!("Skipped (robots.txt): {}", url);
+            skipped += 1;
+            continue;
+        }
+
         eprintln!("[depth {}] {}", level, url);
 
         match browser.fetch(&url).await {
@@ -591,7 +656,7 @@ async fn crawl_fetch(
                 let html = browser.run_inline_scripts(&html);
 
                 if level < depth {
-                    for link in same_origin_links(&html, &url, &root) {
+                    for link in browser.same_origin_links(&html, &url, &root) {
                         let link_key =
                             web2md::normalize_crawl_url(&link, &link).unwrap_or(link.clone());
                         if !visited.contains(&link_key) {
@@ -1057,7 +1122,7 @@ fn render_ansi_table(rows: &[Vec<String>], aligns: &[pulldown_cmark::Alignment])
 }
 
 /// Post-process rendered output to catch raw `[text](url)` Markdown link patterns
-/// that pulldown-cmark didn't parse as Link events (e.g., multi-line links from html2md).
+/// that pulldown-cmark didn't parse as Link events (e.g., multi-line links from HTML conversion).
 fn fix_raw_links(
     text: &str,
     number_links: bool,

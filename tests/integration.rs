@@ -535,3 +535,38 @@ async fn recursive_crawl_depth_two_reaches_nested_page() {
     page_a.assert_async().await;
     page_c.assert_async().await;
 }
+
+#[tokio::test]
+async fn robots_txt_blocks_disallowed_paths() {
+    let mut server = mockito::Server::new_async().await;
+    let _robots = server
+        .mock("GET", "/robots.txt")
+        .with_status(200)
+        .with_header("content-type", "text/plain")
+        .with_body("User-agent: *\nDisallow: /hidden/\n")
+        .create_async()
+        .await;
+
+    let allowed = server
+        .mock("GET", "/visible")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body><p>Visible</p></body></html>")
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let visible = browser
+        .fetch(&format!("{}/visible", server.url()))
+        .await
+        .unwrap();
+    let md = PageToMarkdown::convert(&visible, false, false, false, &[]).unwrap();
+    assert!(md.contains("Visible"));
+
+    assert!(!browser
+        .robots_allows(&format!("{}/hidden/page", server.url()))
+        .await
+        .unwrap());
+
+    allowed.assert_async().await;
+}

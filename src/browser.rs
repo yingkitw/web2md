@@ -5,7 +5,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use url::Url;
 
+use crate::url_blacklist::BlacklistPatterns;
 use crate::{DEFAULT_TIMEOUT, DEFAULT_USER_AGENT};
+use crate::robots::{is_robots_txt_url, robots_origin, RobotsTxt};
 
 /// Parse URLs from sitemap XML content.
 /// Extracts all `<loc>` tag values from sitemap.xml format.
@@ -100,6 +102,12 @@ pub struct BrowserOptions {
     pub cache_ttl: Duration,
     /// Skip known non-content URLs (ads, tracking pixels) on secondary fetches
     pub filter_blacklisted_urls: bool,
+    /// Fetch and honor robots.txt disallow rules and crawl-delay
+    pub respect_robots_txt: bool,
+    /// Load `~/.web2md/blacklist.txt` when present
+    pub load_user_blacklist: bool,
+    /// Additional blacklist pattern files (one pattern per line)
+    pub extra_blacklist_files: Vec<String>,
 }
 
 impl Default for BrowserOptions {
@@ -114,6 +122,9 @@ impl Default for BrowserOptions {
             request_delay: Duration::from_millis(0),
             cache_ttl: Duration::from_secs(0),
             filter_blacklisted_urls: true,
+            respect_robots_txt: true,
+            load_user_blacklist: true,
+            extra_blacklist_files: Vec::new(),
         }
     }
 }
@@ -123,8 +134,10 @@ impl Default for BrowserOptions {
 pub struct Browser {
     client: Client,
     options: BrowserOptions,
+    blacklist: BlacklistPatterns,
     last_request: Mutex<Option<Instant>>,
     cache: Mutex<HashMap<String, (String, Instant)>>,
+    robots_cache: Mutex<HashMap<String, RobotsTxt>>,
 }
 
 impl Browser {
@@ -137,17 +150,84 @@ impl Browser {
             .build()
             .context("Failed to build HTTP client")?;
 
+        let mut custom = BlacklistPatterns::default();
+        if options.load_user_blacklist {
+            if let Some(path) = crate::url_blacklist::default_user_blacklist_path() {
+                if path.is_file() {
+                    custom = custom.merge(BlacklistPatterns::load_file(&path)?);
+                }
+            }
+        }
+        for path in &options.extra_blacklist_files {
+            custom = custom.merge(BlacklistPatterns::load_file(std::path::Path::new(path))?);
+        }
+        let blacklist = BlacklistPatterns::builtin().merge(custom);
+
         Ok(Self {
             client,
             options,
+            blacklist,
             last_request: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
+            robots_cache: Mutex::new(HashMap::new()),
         })
     }
 
-    /// Enforce the configured polite delay between requests.
-    async fn enforce_delay(&self) {
-        let delay = self.options.request_delay;
+    /// Same-origin links from HTML, excluding URLs blocked by the active blacklist.
+    pub fn same_origin_links(&self, html: &str, page_url: &str, root: &Url) -> Vec<String> {
+        crate::crawl::extract_page_links(html, page_url)
+            .into_iter()
+            .filter(|url| crate::crawl::is_same_origin(url, root) && !self.is_url_blocked(url))
+            .collect()
+    }
+
+    /// Returns false when robots.txt disallows fetching `url`.
+    pub async fn robots_allows(&self, url: &str) -> Result<bool> {
+        if !self.options.respect_robots_txt {
+            return Ok(true);
+        }
+        let parsed = Url::parse(url).context("Invalid URL")?;
+        if is_robots_txt_url(&parsed) {
+            return Ok(true);
+        }
+        let Some(origin) = robots_origin(&parsed) else {
+            return Ok(true);
+        };
+        let rules = self.robots_for_origin(&origin).await?;
+        Ok(rules.is_allowed(url))
+    }
+
+    async fn robots_for_origin(&self, origin: &str) -> Result<RobotsTxt> {
+        {
+            let cache = self.robots_cache.lock().unwrap();
+            if let Some(rules) = cache.get(origin) {
+                return Ok(rules.clone());
+            }
+        }
+
+        let robots_url = Url::parse(origin)
+            .context("Invalid robots origin")?
+            .join("/robots.txt")
+            .context("Invalid robots.txt URL")?
+            .to_string();
+        let rules = match self.fetch_raw(&robots_url).await {
+            Ok(body) => RobotsTxt::parse(&body, &self.options.user_agent),
+            Err(_) => RobotsTxt::allow_all(),
+        };
+
+        self.robots_cache
+            .lock()
+            .unwrap()
+            .insert(origin.to_string(), rules.clone());
+        Ok(rules)
+    }
+
+    /// Enforce delay from CLI `--delay` and robots.txt crawl-delay (whichever is greater).
+    async fn enforce_delay(&self, robots_delay: Option<Duration>) {
+        let delay = self
+            .options
+            .request_delay
+            .max(robots_delay.unwrap_or(Duration::ZERO));
         if delay.is_zero() {
             return;
         }
@@ -168,7 +248,7 @@ impl Browser {
 
     /// Returns true when URL blacklist filtering is enabled and the URL is blocked.
     pub fn is_url_blocked(&self, url: &str) -> bool {
-        self.options.filter_blacklisted_urls && crate::is_blacklisted(url)
+        self.options.filter_blacklisted_urls && self.blacklist.is_blacklisted(url)
     }
 
     /// Fetch raw HTML from a URL
@@ -180,8 +260,24 @@ impl Browser {
             }
         }
 
-        self.enforce_delay().await;
+        let parsed = Url::parse(url).context("Invalid URL")?;
+        let robots_delay = if self.options.respect_robots_txt && !is_robots_txt_url(&parsed) {
+            let origin = robots_origin(&parsed).context("Invalid URL host")?;
+            let rules = self.robots_for_origin(&origin).await?;
+            if !rules.is_allowed(url) {
+                anyhow::bail!("Blocked by robots.txt: {url}");
+            }
+            rules.crawl_delay()
+        } else {
+            None
+        };
 
+        self.enforce_delay(robots_delay).await;
+        self.fetch_raw(url).await
+    }
+
+    /// HTTP GET without robots.txt checks (used for robots.txt itself).
+    async fn fetch_raw(&self, url: &str) -> Result<String> {
         let parsed = Url::parse(url).context("Invalid URL")?;
 
         let mut req = self.client.get(parsed.clone());
@@ -235,7 +331,7 @@ impl Browser {
         let mut i = 0;
 
         while i < html.len() {
-            if let Some(start) = crate::markdown::find_ci(&html[i..], "<iframe") {
+            if let Some(start) = crate::html_util::find_ci(&html[i..], "<iframe") {
                 let start = i + start;
                 result.push_str(&html[i..start]);
 
@@ -248,7 +344,7 @@ impl Browser {
                             && !s.starts_with("#")
                     });
 
-                    let close_end = crate::markdown::find_ci(&html[tag_end..], "</iframe>")
+                    let close_end = crate::html_util::find_ci(&html[tag_end..], "</iframe>")
                         .map(|p| tag_end + p + "</iframe>".len());
 
                     let replacement = if let Some(url) = src {
@@ -335,7 +431,7 @@ fn find_tag_end(html: &str, start: usize) -> Option<usize> {
 
 /// Extract `src="..."` or `src='...'` from an HTML tag string.
 fn extract_src(tag: &str) -> Option<String> {
-    let src_pos = crate::markdown::find_ci(tag, "src=")?;
+    let src_pos = crate::html_util::find_ci(tag, "src=")?;
     let after = &tag[src_pos + 4..];
 
     let mut i = 0;
@@ -572,6 +668,87 @@ mod tests {
 
         assert!(inlined.contains("Pixel content"));
         iframe_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_respects_robots_disallow() {
+        let mut server = mockito::Server::new_async().await;
+        let robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_header("content-type", "text/plain")
+            .with_body("User-agent: *\nDisallow: /private/\n")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let blocked = server
+            .mock("GET", "/private/secret")
+            .with_status(200)
+            .with_body("secret")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let browser = Browser::new(BrowserOptions::default()).unwrap();
+        let target = format!("{}/private/secret", server.url());
+        assert!(
+            !browser.robots_allows(&target).await.unwrap(),
+            "expected robots.txt to disallow {target}"
+        );
+        let err = browser.fetch(&target).await.unwrap_err().to_string();
+        assert!(err.contains("robots.txt"));
+
+        robots.assert_async().await;
+        blocked.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_ignore_robots_fetches_disallowed_path() {
+        let mut server = mockito::Server::new_async().await;
+        let _robots = server
+            .mock("GET", "/robots.txt")
+            .with_status(200)
+            .with_body("User-agent: *\nDisallow: /private/\n")
+            .create_async()
+            .await;
+
+        let private = server
+            .mock("GET", "/private/page")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Private</body></html>")
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.respect_robots_txt = false;
+        let browser = Browser::new(opts).unwrap();
+        let html = browser
+            .fetch(&format!("{}/private/page", server.url()))
+            .await
+            .unwrap();
+        assert!(html.contains("Private"));
+        private.assert_async().await;
+    }
+
+    #[test]
+    fn browser_loads_custom_blacklist_file() {
+        let dir = std::env::temp_dir().join(format!("web2md-bl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("extra.txt");
+        std::fs::write(&file, "evil-tracker.test\n/blocked-path/\n").unwrap();
+
+        let mut opts = BrowserOptions::default();
+        opts.load_user_blacklist = false;
+        opts.extra_blacklist_files = vec![file.to_string_lossy().into_owned()];
+        let browser = Browser::new(opts).unwrap();
+
+        assert!(browser.is_url_blocked("https://cdn.evil-tracker.test/pixel"));
+        assert!(browser.is_url_blocked("https://example.com/blocked-path/page"));
+        assert!(!browser.is_url_blocked("https://example.com/blog/post"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

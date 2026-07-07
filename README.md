@@ -99,8 +99,9 @@ Example Cursor MCP config:
 - **Table rendering**: Markdown tables drawn with box-drawing characters (`┌─┬─┐`)
 - **Iframe inlining**: Fetches `<iframe src="...">` content and embeds it into the parent page
 - **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>`, HTML comments, and excessive whitespace (use `--keep-header` to preserve `<header>`)
-- **URL blacklist**: Skips known ad/tracking/analytics URLs on iframe inlining, batch jobs, and sitemap output (use `--no-blacklist` to disable)
+- **URL blacklist**: Skips known ad/tracking/analytics URLs on iframe inlining, batch jobs, and sitemap output (use `--no-blacklist` to disable); extend via `~/.web2md/blacklist.txt` or `--blacklist-file`
 - **Recursive crawl** (`--depth N`): BFS crawl of same-origin links from a start URL; writes one Markdown file per page to `--output` directory or prints separated sections to stdout
+- **robots.txt**: Honors Disallow rules and Crawl-delay from `/robots.txt` before fetching (use `--ignore-robots` to disable)
 - **Content deduplication**: Removes duplicate paragraph-level blocks to further reduce token output
 - **Main content extraction** (`--main-content`): Extracts `<article>`, `<main>`, or `[role="main"]` content; falls back to readability scoring (text-density vs link-density) on `<div>`/`<section>` blocks, then paragraph-level sliding window scoring on `<p>` blocks for pages without semantic tags
 - **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)

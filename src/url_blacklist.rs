@@ -1,7 +1,10 @@
+use std::path::Path;
+
+use anyhow::{Context, Result};
 use url::Url;
 
 /// Host suffixes commonly used for ads, analytics, and tracking pixels.
-const BLACKLISTED_HOST_SUFFIXES: &[&str] = &[
+const BUILTIN_HOST_SUFFIXES: &[&str] = &[
     "doubleclick.net",
     "googlesyndication.com",
     "googleadservices.com",
@@ -24,7 +27,7 @@ const BLACKLISTED_HOST_SUFFIXES: &[&str] = &[
 ];
 
 /// Path fragments that indicate non-content resources (pixels, beacons, ads).
-const BLACKLISTED_PATH_FRAGMENTS: &[&str] = &[
+const BUILTIN_PATH_FRAGMENTS: &[&str] = &[
     "/pixel",
     "/beacon",
     "/track",
@@ -42,51 +45,115 @@ const BLACKLISTED_PATH_FRAGMENTS: &[&str] = &[
     "favicon.ico",
 ];
 
-/// Returns true when a URL is a known non-content resource (ad, tracker, pixel).
-pub fn is_blacklisted(url: &str) -> bool {
-    let parsed = match Url::parse(url) {
-        Ok(u) => u,
-        Err(_) => return matches_non_content_path(url),
-    };
+/// User-configurable and built-in URL blacklist patterns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlacklistPatterns {
+    host_suffixes: Vec<String>,
+    path_fragments: Vec<String>,
+}
 
-    if let Some(host) = parsed.host_str() {
-        let host = host.to_ascii_lowercase();
-        if BLACKLISTED_HOST_SUFFIXES
-            .iter()
-            .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
-        {
-            return true;
+impl BlacklistPatterns {
+    /// Built-in ad/tracker patterns shipped with Web2MD.
+    pub fn builtin() -> Self {
+        Self {
+            host_suffixes: BUILTIN_HOST_SUFFIXES.iter().map(|s| s.to_string()).collect(),
+            path_fragments: BUILTIN_PATH_FRAGMENTS.iter().map(|s| s.to_string()).collect(),
         }
     }
 
-    let path_query = format!(
-        "{}{}",
-        parsed.path().to_ascii_lowercase(),
-        parsed.query().map(|q| format!("?{q}")).unwrap_or_default()
-    );
-    if matches_path_fragments(&path_query) {
-        return true;
+    /// Parse blacklist file content (one pattern per line, `#` comments).
+    pub fn parse_file(content: &str) -> Self {
+        let mut patterns = Self::default();
+        for line in content.lines() {
+            let line = line.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            if line.contains('/') {
+                patterns.path_fragments.push(line.to_ascii_lowercase());
+            } else {
+                patterns
+                    .host_suffixes
+                    .push(line.trim_start_matches('.').to_ascii_lowercase());
+            }
+        }
+        patterns
     }
 
-    false
+    /// Load patterns from a file on disk.
+    pub fn load_file(path: &Path) -> Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read blacklist file {}", path.display()))?;
+        Ok(Self::parse_file(&content))
+    }
+
+    /// Merge another pattern set into this one (deduplicated).
+    pub fn merge(mut self, other: Self) -> Self {
+        for suffix in other.host_suffixes {
+            if !self.host_suffixes.contains(&suffix) {
+                self.host_suffixes.push(suffix);
+            }
+        }
+        for frag in other.path_fragments {
+            if !self.path_fragments.contains(&frag) {
+                self.path_fragments.push(frag);
+            }
+        }
+        self
+    }
+
+    /// Returns true when a URL matches any host suffix or path fragment.
+    pub fn is_blacklisted(&self, url: &str) -> bool {
+        let parsed = match Url::parse(url) {
+            Ok(u) => u,
+            Err(_) => return self.matches_path_fragments(&url.to_ascii_lowercase()),
+        };
+
+        if let Some(host) = parsed.host_str() {
+            let host = host.to_ascii_lowercase();
+            if self.host_suffixes.iter().any(|suffix| {
+                host == *suffix || host.ends_with(&format!(".{suffix}"))
+            }) {
+                return true;
+            }
+        }
+
+        let path_query = format!(
+            "{}{}",
+            parsed.path().to_ascii_lowercase(),
+            parsed
+                .query()
+                .map(|q| format!("?{q}"))
+                .unwrap_or_default()
+        );
+        self.matches_path_fragments(&path_query)
+    }
+
+    fn matches_path_fragments(&self, lower: &str) -> bool {
+        self.path_fragments.iter().any(|frag| lower.contains(frag))
+    }
 }
 
-/// Remove blacklisted URLs from a list (e.g. sitemap or batch input).
+/// Default user blacklist path: `~/.web2md/blacklist.txt`.
+pub fn default_user_blacklist_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|home| {
+        std::path::PathBuf::from(home)
+            .join(".web2md")
+            .join("blacklist.txt")
+    })
+}
+
+/// Returns true when a URL is blocked by the built-in blacklist.
+pub fn is_blacklisted(url: &str) -> bool {
+    BlacklistPatterns::builtin().is_blacklisted(url)
+}
+
+/// Remove blacklisted URLs from a list using the built-in patterns.
 pub fn filter_blacklisted_urls(urls: impl IntoIterator<Item = String>) -> Vec<String> {
+    let patterns = BlacklistPatterns::builtin();
     urls.into_iter()
-        .filter(|u| !is_blacklisted(u))
+        .filter(|u| !patterns.is_blacklisted(u))
         .collect()
-}
-
-fn matches_non_content_path(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    matches_path_fragments(&lower)
-}
-
-fn matches_path_fragments(lower: &str) -> bool {
-    BLACKLISTED_PATH_FRAGMENTS
-        .iter()
-        .any(|frag| lower.contains(frag))
 }
 
 #[cfg(test)]
@@ -128,5 +195,22 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert!(filtered.contains(&"https://example.com/article".to_string()));
         assert!(filtered.contains(&"https://example.com/about".to_string()));
+    }
+
+    #[test]
+    fn parse_file_host_and_path_patterns() {
+        let content = "# ads\nbadtracker.com\n/welcome-spam/\n";
+        let patterns = BlacklistPatterns::parse_file(content);
+        assert!(patterns.is_blacklisted("https://cdn.badtracker.com/pixel"));
+        assert!(patterns.is_blacklisted("https://example.com/welcome-spam/page"));
+        assert!(!patterns.is_blacklisted("https://example.com/blog"));
+    }
+
+    #[test]
+    fn merge_combines_custom_with_builtin() {
+        let custom = BlacklistPatterns::parse_file("evil.example\n");
+        let merged = BlacklistPatterns::builtin().merge(custom);
+        assert!(merged.is_blacklisted("https://evil.example/track"));
+        assert!(merged.is_blacklisted("https://doubleclick.net/ad"));
     }
 }

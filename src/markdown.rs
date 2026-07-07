@@ -1,26 +1,7 @@
 use anyhow::Result;
 use url::Url;
 
-/// Case-insensitive byte search. Returns byte position of `needle` in `haystack`.
-pub(crate) fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
-    if needle.is_empty() {
-        return Some(0);
-    }
-    let needle_lower: Vec<u8> = needle.bytes().map(|b| b.to_ascii_lowercase()).collect();
-    let h = haystack.as_bytes();
-    if needle_lower.len() > h.len() {
-        return None;
-    }
-    'outer: for i in 0..=h.len() - needle_lower.len() {
-        for (j, &n) in needle_lower.iter().enumerate() {
-            if h[i + j].to_ascii_lowercase() != n {
-                continue 'outer;
-            }
-        }
-        return Some(i);
-    }
-    None
-}
+use crate::html_util::find_ci;
 
 /// Normalize a Markdown block for deduplication comparison.
 /// Collapses whitespace and trims, so blocks differing only in spacing are treated as duplicates.
@@ -77,7 +58,7 @@ impl PageToMarkdown {
         let html = Self::strip_by_selectors(&html, exclude_selectors);
         let languages = Self::extract_code_languages(&html);
         let html = if include_images { html } else { Self::strip_img_tags(&html) };
-        let md = html2md::parse_html(&html);
+        let md = crate::html_to_md::parse_html(&html);
         let md = Self::inject_code_languages(&md, &languages);
         let md = Self::deduplicate_blocks(&md);
         let md = Self::clean(&md);
@@ -786,7 +767,7 @@ impl PageToMarkdown {
             if let Some(a) = author {
                 out.push_str(&format!("{}**{}**:\n\n", indent, a));
             }
-            let comment_md = html2md::parse_html(text);
+            let comment_md = crate::html_to_md::parse_html(text);
             let comment_md = Self::clean(&comment_md);
             for line in comment_md.lines() {
                 out.push_str(&format!("{}> {}\n", indent, line));

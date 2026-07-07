@@ -15,15 +15,18 @@ main.rs
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction, run_inline_scripts() (gated by enable_javascript), URL blacklist filtering on secondary fetches
-  ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; filter_blacklisted_urls() helper
+  ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
+  ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser
   ├── js/          : Built-in dependency-free JavaScript subset interpreter
   │     ├── ast.rs     : AST node types (expressions, statements, operators)
   │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)
   │     ├── parser.rs  : Recursive-descent parser → Vec<Stmt>
   │     ├── eval.rs    : Tree-walking evaluator with lexical scopes, closures, control flow, and builtins (document.write, strings, arrays, Math, JSON, console, global constructors)
   │     └── mod.rs     : run_inline_scripts(html) — extracts inline <script> blocks, runs them, returns document.write output; inject_before_body_close()
-  ├── markdown.rs  : HTML → Markdown conversion (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback + paragraph-level sliding window; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector)
+  ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding)
+  ├── html_to_md.rs : In-house HTML → Markdown converter (headings, links, images, lists, code blocks, tables, inline formatting)
+  ├── markdown.rs  : HTML → Markdown pipeline (strip scripts, styles, iframes, noise tags, comments; extract code languages; main content extraction with readability fallback + paragraph-level sliding window; dedup; images; forum comment extraction with author attribution and nesting; link URL absolutization; CSS selector exclusion via --exclude-selector)
   └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
 
 main.rs (helpers)
@@ -59,6 +62,7 @@ URL ──► Browser.fetch() ──► raw HTML
                                   ├── strips HTML comments
                                   ├── extracts code languages from <code class="language-xxx">
                                   ├── strips <img> (unless include_images)
+                                  ├── html_to_md::parse_html() — in-house HTML → Markdown
                                   ├── injects languages into fenced code blocks
                                   ├── deduplicates repeated paragraph blocks
                                   └── collapses excessive whitespace
@@ -81,7 +85,7 @@ URL ──► Browser.fetch() ──► raw HTML
 
 1. **Optional JS execution, in-house**: By default the crate does not execute JavaScript (keeping it lightweight and deterministic). With `--javascript` / `enable_javascript`, inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or external engine. The interpreter supports a pragmatic subset (variables, closures, control flow, template literals, `document.write`, strings, arrays, `Math`, `JSON`); scripts using unsupported features fail fast and are silently skipped, so they never break conversion. External and module scripts are not executed.
 
-2. **html2md crate**: Delegates HTML parsing to a mature, lightweight library rather than building a custom parser.
+2. **In-house HTML-to-Markdown converter**: HTML-to-Markdown conversion uses `html_to_md.rs` — a lightweight string-based walker with no external HTML parser dependency. Pre/post-processing in `PageToMarkdown` (noise stripping, main-content extraction, dedup, code language injection, etc.) wraps `html_to_md::parse_html`.
 
 3. **Iframe inlining**: Instead of discarding `<iframe>` tags (which removes embedded content like widgets and videos), we fetch the `src` URL and inject the content into the parent HTML. This provides a more complete page representation at the cost of additional HTTP requests.
 
