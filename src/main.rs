@@ -785,13 +785,16 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
         println!("\x1b[7m WEB2MD \x1b[0m \x1b[90m{}\x1b[0m\n", url);
         io::stdout().flush()?;
 
+        print!("\x1b[90mFetching...\x1b[0m");
+        io::stdout().flush()?;
+
         let html = match browser.fetch(&url).await {
             Ok(h) => match browser.prepare_html(&h, &url).await {
                 Ok(prepared) => prepared,
                 Err(_) => h,
             },
             Err(e) => {
-                println!("\x1b[91mError: {}\x1b[0m", e);
+                println!("\r\x1b[2K\x1b[91mError: {}\x1b[0m", e);
                 println!("\nPress Enter to continue...");
                 let mut _buf = String::new();
                 let _ = stdin_lock.read_line(&mut _buf);
@@ -799,14 +802,38 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
             }
         };
 
-        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &[])?;
-        let md = PageToMarkdown::absolutize_links(&md, &url);
-        let (rendered, links) = render_markdown_ansi(&md, true);
-        println!("{}", rendered);
+        print!("\r\x1b[2K\x1b[90mConverting...\x1b[0m");
+        io::stdout().flush()?;
+
+        let mut renderer = AnsiRenderer::new(true);
+        let page_url = url.clone();
+        let mut first_block = true;
+        PageToMarkdown::convert_progressive(
+            &html,
+            include_images,
+            keep_header,
+            main_content,
+            &[],
+            |block| {
+                if first_block {
+                    print!("\r\x1b[2K");
+                    first_block = false;
+                }
+                let block = PageToMarkdown::absolutize_links(&block, &page_url);
+                let rendered = renderer.render_chunk(&block);
+                let trimmed = rendered.trim_end();
+                if !trimmed.is_empty() {
+                    print!("{trimmed}\n");
+                }
+                let _ = io::stdout().flush();
+            },
+        )?;
+
+        let links = renderer.into_links();
 
         println!(
             "\n\x1b[90m[q]uit [b]ack [f]orward [u]rl [1-{}] follow link\x1b[0m",
-            links.len().min(20)
+            links.len()
         );
         print!("\x1b[1m> \x1b[0m");
         io::stdout().flush()?;
@@ -841,7 +868,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
             }
             num => {
                 if let Ok(n) = num.parse::<usize>() {
-                    if n > 0 && n <= links.len().min(20) {
+                    if n > 0 && n <= links.len() {
                         let target = resolve_url(&url, &links[n - 1]);
                         history.truncate(current + 1);
                         history.push(target);
@@ -874,166 +901,224 @@ fn resolve_url(base: &str, relative: &str) -> String {
     relative.to_string()
 }
 
-/// Render Markdown with ANSI escape codes for terminal display.
-/// Markdown syntax is stripped; visual effects (bold, color, underline) replace it.
-fn render_markdown_ansi(md: &str, number_links: bool) -> (String, Vec<String>) {
-    use pulldown_cmark::{Alignment, Event, Options, Tag, TagEnd};
+/// Incremental ANSI Markdown renderer for progressive browse output.
+struct AnsiRenderer {
+    link_counter: usize,
+    links: Vec<String>,
+    number_links: bool,
+    out: String,
+    pending_link: Option<(usize, String)>,
+    in_table: bool,
+    table_rows: Vec<Vec<String>>,
+    current_row: Vec<String>,
+    current_cell: String,
+    col_alignments: Vec<pulldown_cmark::Alignment>,
+    _in_header: bool,
+}
 
-    let mut out = String::new();
-    let mut link_counter: usize = 0;
-    let mut links: Vec<String> = Vec::new();
-    let mut pending_link: Option<(usize, String)> = None;
-
-    // Table buffering state
-    let mut in_table = false;
-    let mut table_rows: Vec<Vec<String>> = Vec::new();
-    let mut current_row: Vec<String> = Vec::new();
-    let mut current_cell = String::new();
-    let mut col_alignments: Vec<Alignment> = Vec::new();
-    let mut _in_header = false;
-
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_TABLES);
-    let parser = pulldown_cmark::Parser::new_ext(md, opts);
-
-    for event in parser {
-        match event {
-            Event::Start(tag) => match tag {
-                Tag::Heading { level, .. } => {
-                    let c = match level {
-                        pulldown_cmark::HeadingLevel::H1 => "\x1b[1;91m",
-                        pulldown_cmark::HeadingLevel::H2 => "\x1b[1;93m",
-                        pulldown_cmark::HeadingLevel::H3 => "\x1b[1;92m",
-                        pulldown_cmark::HeadingLevel::H4 => "\x1b[1;94m",
-                        pulldown_cmark::HeadingLevel::H5 => "\x1b[1;95m",
-                        pulldown_cmark::HeadingLevel::H6 => "\x1b[1;96m",
-                    };
-                    out.push_str(c);
-                }
-                Tag::Strong => out.push_str("\x1b[1m"),
-                Tag::Emphasis => out.push_str("\x1b[3m"),
-                Tag::Link { dest_url, .. } => {
-                    if number_links && !in_table {
-                        link_counter += 1;
-                        pending_link = Some((link_counter, dest_url.to_string()));
-                    }
-                    if in_table {
-                        current_cell.push_str("\x1b[4;36m");
-                    } else {
-                        out.push_str("\x1b[4;36m");
-                    }
-                }
-                Tag::BlockQuote(_) => out.push_str("\x1b[90m▌ \x1b[3m"),
-                Tag::CodeBlock(_) => out.push_str("\x1b[48;5;235;38;5;250m"),
-                Tag::List(_) => {}
-                Tag::Item => out.push_str("  • "),
-                Tag::Table(aligns) => {
-                    in_table = true;
-                    col_alignments = aligns.to_vec();
-                }
-                Tag::TableHead => _in_header = true,
-                Tag::TableRow => current_row = Vec::new(),
-                Tag::TableCell => current_cell.clear(),
-                _ => {}
-            },
-            Event::End(tag) => match tag {
-                TagEnd::Heading(_) => out.push_str("\x1b[0m\n"),
-                TagEnd::Paragraph => {
-                    if in_table {
-                        // strip trailing newline inside cells
-                    } else {
-                        out.push('\n');
-                    }
-                }
-                TagEnd::Strong | TagEnd::Emphasis => {
-                    if in_table {
-                        current_cell.push_str("\x1b[0m");
-                    } else {
-                        out.push_str("\x1b[0m");
-                    }
-                }
-                TagEnd::Link => {
-                    if in_table {
-                        current_cell.push_str("\x1b[0m");
-                    } else {
-                        out.push_str("\x1b[0m");
-                        if let Some((n, _)) = pending_link.take() {
-                            link_counter = n - 1;
-                        }
-                    }
-                }
-                TagEnd::BlockQuote(_) => out.push_str("\x1b[0m\n"),
-                TagEnd::CodeBlock => out.push_str("\x1b[0m\n"),
-                TagEnd::Item => {}
-                TagEnd::TableCell => {
-                    current_row.push(std::mem::take(&mut current_cell));
-                }
-                TagEnd::TableRow => {
-                    table_rows.push(std::mem::take(&mut current_row));
-                }
-                TagEnd::TableHead => {
-                    _in_header = false;
-                    // pulldown-cmark omits TableRow/TableRowEnd inside TableHead,
-                    // so flush any buffered cells as a header row
-                    if !current_row.is_empty() {
-                        table_rows.push(std::mem::take(&mut current_row));
-                    }
-                }
-                TagEnd::Table => {
-                    in_table = false;
-                    out.push_str(&render_ansi_table(&table_rows, &col_alignments));
-                    table_rows.clear();
-                    col_alignments.clear();
-                }
-                _ => {}
-            },
-            Event::Text(text) => {
-                if in_table {
-                    current_cell.push_str(&text);
-                } else {
-                    if let Some((n, url)) = pending_link.take() {
-                        links.push(url);
-                        out.push_str(&format!("\x1b[33m[{}]\x1b[0m ", n));
-                    }
-                    out.push_str(&text);
-                }
-            }
-            Event::Code(code) => {
-                let s = format!("\x1b[38;5;250m{}\x1b[0m", code);
-                if in_table {
-                    current_cell.push_str(&s);
-                } else {
-                    out.push_str(&s);
-                }
-            }
-            Event::Html(html) => {
-                if in_table {
-                    current_cell.push_str(&html);
-                } else {
-                    out.push_str(&html);
-                }
-            }
-            Event::SoftBreak => {
-                if in_table {
-                    current_cell.push(' ');
-                } else {
-                    out.push(' ');
-                }
-            }
-            Event::HardBreak => {
-                if in_table {
-                    current_cell.push('\n');
-                } else {
-                    out.push('\n');
-                }
-            }
-            Event::Rule => out.push_str("\x1b[90m────────────────────────────────────────\x1b[0m\n"),
-            _ => {}
+impl AnsiRenderer {
+    fn new(number_links: bool) -> Self {
+        Self {
+            link_counter: 0,
+            links: Vec::new(),
+            number_links,
+            out: String::new(),
+            pending_link: None,
+            in_table: false,
+            table_rows: Vec::new(),
+            current_row: Vec::new(),
+            current_cell: String::new(),
+            col_alignments: Vec::new(),
+            _in_header: false,
         }
     }
 
-    out = fix_raw_links(&out, number_links, &mut link_counter, &mut links);
-    (out, links)
+    fn render_chunk(&mut self, md: &str) -> String {
+        use pulldown_cmark::{Event, Options, Tag, TagEnd};
+
+        self.out.clear();
+        let mut opts = Options::empty();
+        opts.insert(Options::ENABLE_TABLES);
+        let parser = pulldown_cmark::Parser::new_ext(md, opts);
+
+        for event in parser {
+            match event {
+                Event::Start(tag) => match tag {
+                    Tag::Heading { level, .. } => {
+                        let c = match level {
+                            pulldown_cmark::HeadingLevel::H1 => "\x1b[1;91m",
+                            pulldown_cmark::HeadingLevel::H2 => "\x1b[1;93m",
+                            pulldown_cmark::HeadingLevel::H3 => "\x1b[1;92m",
+                            pulldown_cmark::HeadingLevel::H4 => "\x1b[1;94m",
+                            pulldown_cmark::HeadingLevel::H5 => "\x1b[1;95m",
+                            pulldown_cmark::HeadingLevel::H6 => "\x1b[1;96m",
+                        };
+                        self.out.push_str(c);
+                    }
+                    Tag::Strong => self.out.push_str("\x1b[1m"),
+                    Tag::Emphasis => self.out.push_str("\x1b[3m"),
+                    Tag::Link { dest_url, .. } => {
+                        if self.number_links && !self.in_table {
+                            self.link_counter += 1;
+                            self.pending_link = Some((self.link_counter, dest_url.to_string()));
+                        }
+                        if self.in_table {
+                            self.current_cell.push_str("\x1b[4;36m");
+                        } else {
+                            self.out.push_str("\x1b[4;36m");
+                        }
+                    }
+                    Tag::BlockQuote(_) => self.out.push_str("\x1b[90m▌ \x1b[3m"),
+                    Tag::CodeBlock(_) => self.out.push_str("\x1b[48;5;235;38;5;250m"),
+                    Tag::List(_) => {}
+                    Tag::Item => self.out.push_str("  • "),
+                    Tag::Table(aligns) => {
+                        self.in_table = true;
+                        self.col_alignments = aligns.to_vec();
+                    }
+                    Tag::TableHead => self._in_header = true,
+                    Tag::TableRow => self.current_row = Vec::new(),
+                    Tag::TableCell => self.current_cell.clear(),
+                    _ => {}
+                },
+                Event::End(tag) => match tag {
+                    TagEnd::Heading(_) => self.out.push_str("\x1b[0m\n"),
+                    TagEnd::Paragraph => {
+                        if !self.in_table {
+                            self.out.push('\n');
+                        }
+                    }
+                    TagEnd::Strong | TagEnd::Emphasis => {
+                        if self.in_table {
+                            self.current_cell.push_str("\x1b[0m");
+                        } else {
+                            self.out.push_str("\x1b[0m");
+                        }
+                    }
+                    TagEnd::Link => {
+                        if self.in_table {
+                            self.current_cell.push_str("\x1b[0m");
+                        } else {
+                            if let Some((n, url)) = self.pending_link.take() {
+                                self.links.push(url.clone());
+                                self.out
+                                    .push_str(&format!("\x1b[33m[{}]\x1b[0m ", n));
+                                self.out.push_str(&fallback_link_label(&url));
+                            }
+                            self.out.push_str("\x1b[0m");
+                        }
+                    }
+                    TagEnd::BlockQuote(_) => self.out.push_str("\x1b[0m\n"),
+                    TagEnd::CodeBlock => self.out.push_str("\x1b[0m\n"),
+                    TagEnd::Item => {}
+                    TagEnd::TableCell => {
+                        self.current_row.push(std::mem::take(&mut self.current_cell));
+                    }
+                    TagEnd::TableRow => {
+                        self.table_rows.push(std::mem::take(&mut self.current_row));
+                    }
+                    TagEnd::TableHead => {
+                        self._in_header = false;
+                        if !self.current_row.is_empty() {
+                            self.table_rows.push(std::mem::take(&mut self.current_row));
+                        }
+                    }
+                    TagEnd::Table => {
+                        self.in_table = false;
+                        self.out.push_str(&render_ansi_table(
+                            &self.table_rows,
+                            &self.col_alignments,
+                        ));
+                        self.table_rows.clear();
+                        self.col_alignments.clear();
+                    }
+                    _ => {}
+                },
+                Event::Text(text) => {
+                    if self.in_table {
+                        self.current_cell.push_str(&text);
+                    } else if let Some((n, url)) = self.pending_link.take() {
+                        self.links.push(url);
+                        self.out
+                            .push_str(&format!("\x1b[33m[{}]\x1b[0m ", n));
+                        self.out.push_str(&text);
+                    } else {
+                        self.out.push_str(&text);
+                    }
+                }
+                Event::Code(code) => {
+                    let s = format!("\x1b[38;5;250m{}\x1b[0m", code);
+                    if self.in_table {
+                        self.current_cell.push_str(&s);
+                    } else {
+                        self.out.push_str(&s);
+                    }
+                }
+                Event::Html(html) => {
+                    if self.in_table {
+                        self.current_cell.push_str(&html);
+                    } else {
+                        self.out.push_str(&html);
+                    }
+                }
+                Event::SoftBreak => {
+                    if self.in_table {
+                        self.current_cell.push(' ');
+                    } else {
+                        self.out.push(' ');
+                    }
+                }
+                Event::HardBreak => {
+                    if self.in_table {
+                        self.current_cell.push('\n');
+                    } else {
+                        self.out.push('\n');
+                    }
+                }
+                Event::Rule => {
+                    self.out.push_str(
+                        "\x1b[90m────────────────────────────────────────\x1b[0m\n",
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        self.out = fix_raw_links(
+            &self.out,
+            self.number_links,
+            &mut self.link_counter,
+            &mut self.links,
+        );
+        std::mem::take(&mut self.out)
+    }
+
+    fn into_links(self) -> Vec<String> {
+        self.links
+    }
+}
+
+/// Render Markdown with ANSI escape codes for terminal display.
+/// Markdown syntax is stripped; visual effects (bold, color, underline) replace it.
+fn render_markdown_ansi(md: &str, number_links: bool) -> (String, Vec<String>) {
+    let mut renderer = AnsiRenderer::new(number_links);
+    let rendered = renderer.render_chunk(md);
+    (rendered, renderer.into_links())
+}
+
+/// Display label for links with no visible anchor text.
+fn fallback_link_label(url: &str) -> String {
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(segments) = parsed.path_segments() {
+            if let Some(seg) = segments.filter(|s| !s.is_empty()).last() {
+                return seg.replace('-', " ");
+            }
+        }
+        if let Some(host) = parsed.host_str() {
+            return host.to_string();
+        }
+    }
+    url.to_string()
 }
 
 /// Strip ANSI escape sequences from a string to get the visual width.
@@ -1197,28 +1282,30 @@ fn fix_raw_links(
                         if k < chars.len() && chars[k] == ')' {
                             let link_text: String = chars[text_start..link_text_end].iter().collect();
                             let trimmed = link_text.trim();
-                            // Skip empty text, pure digits (already numbered or footnotes),
-                            // and URLs that don't look like URLs
-                            if !trimmed.is_empty()
-                                && !trimmed.chars().all(|c| c.is_ascii_digit())
+                            let url: String = chars[url_start..k].iter().collect();
+                            let url_trimmed = url.trim();
+                            let looks_like_url = url_trimmed.contains('.')
+                                || url_trimmed.contains("://")
+                                || url_trimmed.starts_with('/');
+                            if looks_like_url
+                                && (trimmed.is_empty()
+                                    || !trimmed.chars().all(|c| c.is_ascii_digit()))
                             {
-                                let url: String = chars[url_start..k].iter().collect();
-                                let url_trimmed = url.trim();
-                                if url_trimmed.contains('.')
-                                    || url_trimmed.contains("://")
-                                    || url_trimmed.starts_with('/')
-                                {
-                                    if number_links {
-                                        *counter += 1;
-                                        links.push(url_trimmed.to_string());
-                                        result.push_str(&format!("\x1b[33m[{}]\x1b[0m ", *counter));
-                                    }
-                                    result.push_str("\x1b[4;36m");
-                                    result.push_str(trimmed);
-                                    result.push_str("\x1b[0m");
-                                    i = k + 1;
-                                    continue;
+                                let display = if trimmed.is_empty() {
+                                    fallback_link_label(url_trimmed)
+                                } else {
+                                    trimmed.to_string()
+                                };
+                                if number_links {
+                                    *counter += 1;
+                                    links.push(url_trimmed.to_string());
+                                    result.push_str(&format!("\x1b[33m[{}]\x1b[0m ", *counter));
                                 }
+                                result.push_str("\x1b[4;36m");
+                                result.push_str(&display);
+                                result.push_str("\x1b[0m");
+                                i = k + 1;
+                                continue;
                             }
                         }
                     }
@@ -1317,12 +1404,23 @@ mod tests {
     }
 
     #[test]
-    fn fix_raw_links_skips_empty_link_text() {
-        let input = "[](https://example.com)";
+    fn fix_raw_links_labels_empty_url_links() {
+        let input = "[](https://example.com/case-studies/wimbledon)";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, true, &mut counter, &mut links);
+        assert_eq!(counter, 1);
+        assert_eq!(links, vec!["https://example.com/case-studies/wimbledon"]);
+        assert!(output.contains("wimbledon"));
+    }
+
+    #[test]
+    fn fix_raw_links_skips_empty_href() {
+        let input = "[not a url]()";
         let mut counter = 0;
         let mut links = Vec::new();
         let output = fix_raw_links(input, false, &mut counter, &mut links);
-        assert_eq!(output, "[](https://example.com)");
+        assert_eq!(output, "[not a url]()");
     }
 
     #[test]

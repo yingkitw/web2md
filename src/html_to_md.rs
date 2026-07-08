@@ -10,18 +10,73 @@ pub fn parse_html(html: &str) -> String {
     let body_sel = Selector::parse("body").expect("valid selector");
     let mut out = String::new();
     if let Some(body) = document.select(&body_sel).next() {
-        convert_children(body, &mut out, false, false);
+        convert_children(body, &mut out, false, false, false);
     }
     clean_markdown(&out)
 }
 
-fn convert_children(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_code: bool) {
+/// Convert HTML to Markdown, invoking `on_block` once per top-level content block.
+pub fn parse_html_progressive(html: &str, mut on_block: impl FnMut(String)) {
+    let document = Html::parse_document(html);
+    let body_sel = Selector::parse("body").expect("valid selector");
+    if let Some(body) = document.select(&body_sel).next() {
+        let root = unwrap_progressive_root(body);
+        emit_progressive_blocks(root, &mut on_block);
+    }
+}
+
+/// Skip single wrapper containers so progressive output is not one giant block.
+fn unwrap_progressive_root(mut element: ElementRef<'_>) -> ElementRef<'_> {
+    loop {
+        let mut child_elements = Vec::new();
+        let mut has_text = false;
+        for child in element.children() {
+            match child.value() {
+                Node::Text(text) => {
+                    if !collapse_whitespace(&decode_html_entities(text)).is_empty() {
+                        has_text = true;
+                    }
+                }
+                Node::Element(_) => {
+                    if let Some(el) = ElementRef::wrap(child) {
+                        child_elements.push(el);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if has_text || child_elements.len() != 1 {
+            break;
+        }
+        let only = child_elements[0];
+        if !matches!(
+            only.value().name(),
+            "div" | "section" | "main" | "article" | "span"
+        ) {
+            break;
+        }
+        element = only;
+    }
+    element
+}
+
+fn emit_progressive_blocks(element: ElementRef<'_>, on_block: &mut impl FnMut(String)) {
     for child in element.children() {
         match child.value() {
-            Node::Text(text) => append_text(out, text, in_pre, in_code),
+            Node::Text(text) => {
+                let collapsed = collapse_whitespace(&decode_html_entities(text));
+                if !collapsed.is_empty() {
+                    on_block(collapsed);
+                }
+            }
             Node::Element(_) => {
                 if let Some(el) = ElementRef::wrap(child) {
-                    convert_element(el, out, in_pre, in_code);
+                    let mut block = String::new();
+                    convert_element(el, &mut block, false, false, false);
+                    let cleaned = clean_markdown(&block);
+                    if !cleaned.is_empty() {
+                        on_block(cleaned);
+                    }
                 }
             }
             _ => {}
@@ -29,7 +84,33 @@ fn convert_children(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_
     }
 }
 
-fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_code: bool) {
+fn convert_children(
+    element: ElementRef<'_>,
+    out: &mut String,
+    in_pre: bool,
+    in_code: bool,
+    in_anchor: bool,
+) {
+    for child in element.children() {
+        match child.value() {
+            Node::Text(text) => append_text(out, text, in_pre, in_code),
+            Node::Element(_) => {
+                if let Some(el) = ElementRef::wrap(child) {
+                    convert_element(el, out, in_pre, in_code, in_anchor);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn convert_element(
+    element: ElementRef<'_>,
+    out: &mut String,
+    in_pre: bool,
+    in_code: bool,
+    in_anchor: bool,
+) {
     let tag = element.value().name();
     match tag {
         "br" => out.push_str("  \n"),
@@ -39,37 +120,47 @@ fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_c
             out.push('\n');
         }
         "img" => {
-            let src = element.value().attr("src").unwrap_or("");
-            let alt = element.value().attr("alt").unwrap_or("");
-            let title = element
-                .value()
-                .attr("title")
-                .map(|t| format!(" \"{t}\""))
-                .unwrap_or_default();
-            out.push_str(&format!("![{alt}]({src}{title})"));
+            if in_anchor {
+                if let Some(alt) = element.value().attr("alt") {
+                    if !alt.is_empty() {
+                        append_text(out, alt, in_pre, in_code);
+                    }
+                }
+            } else {
+                ensure_inline_break(out);
+                let src = element.value().attr("src").unwrap_or("");
+                let alt = element.value().attr("alt").unwrap_or("");
+                let title = element
+                    .value()
+                    .attr("title")
+                    .map(|t| format!(" \"{t}\""))
+                    .unwrap_or_default();
+                out.push_str(&format!("![{alt}]({src}{title})"));
+            }
         }
         "pre" => {
             out.push_str("\n```\n");
-            convert_children(element, out, true, false);
+            convert_children(element, out, true, false, in_anchor);
             out.push_str("\n```\n");
         }
-        "code" if in_pre => convert_children(element, out, true, true),
+        "code" if in_pre => convert_children(element, out, true, true, in_anchor),
         "code" => {
+            ensure_inline_break(out);
             let mut inner = String::new();
-            convert_children(element, &mut inner, false, true);
+            convert_children(element, &mut inner, false, true, in_anchor);
             out.push('`');
             out.push_str(inner.trim());
             out.push('`');
         }
         "p" => {
             out.push_str("\n\n");
-            convert_children(element, out, in_pre, in_code);
+            convert_children(element, out, in_pre, in_code, in_anchor);
             out.push_str("\n\n");
         }
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
             out.push_str("\n\n");
             let mut inner = String::new();
-            convert_children(element, &mut inner, false, false);
+            convert_children(element, &mut inner, false, false, in_anchor);
             let inner = inner.trim();
             match tag {
                 "h1" => {
@@ -90,13 +181,20 @@ fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_c
         }
         "a" => {
             let href = element.value().attr("href").unwrap_or("");
+            if href.is_empty() || href == "#" {
+                convert_children(element, out, in_pre, in_code, in_anchor);
+                return;
+            }
+            ensure_inline_break(out);
             let mut inner = String::new();
-            convert_children(element, &mut inner, false, false);
-            out.push_str(&format!("[{inner}]({href})"));
+            convert_children(element, &mut inner, false, false, true);
+            let label = link_label(element, &inner, href);
+            out.push_str(&format!("[{label}]({href})"));
         }
         "strong" | "b" => {
+            ensure_inline_break(out);
             let mut inner = String::new();
-            convert_children(element, &mut inner, false, false);
+            convert_children(element, &mut inner, false, false, in_anchor);
             let trimmed = inner.trim();
             if !trimmed.is_empty() {
                 out.push_str("**");
@@ -106,7 +204,7 @@ fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_c
         }
         "em" | "i" => {
             let mut inner = String::new();
-            convert_children(element, &mut inner, false, false);
+            convert_children(element, &mut inner, false, false, in_anchor);
             let trimmed = inner.trim();
             if !trimmed.is_empty() {
                 out.push('*');
@@ -116,7 +214,7 @@ fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_c
         }
         "del" | "s" => {
             let mut inner = String::new();
-            convert_children(element, &mut inner, false, false);
+            convert_children(element, &mut inner, false, false, in_anchor);
             let trimmed = inner.trim();
             if !trimmed.is_empty() {
                 out.push_str("~~");
@@ -127,7 +225,7 @@ fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_c
         "blockquote" | "q" | "cite" => {
             out.push('\n');
             let mut inner = String::new();
-            convert_children(element, &mut inner, false, false);
+            convert_children(element, &mut inner, false, false, in_anchor);
             for line in inner.lines() {
                 let t = line.trim();
                 if !t.is_empty() {
@@ -141,14 +239,14 @@ fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_c
         "li" => {
             out.push_str("* ");
             let mut inner = String::new();
-            convert_children(element, &mut inner, in_pre, in_code);
+            convert_children(element, &mut inner, in_pre, in_code, in_anchor);
             out.push_str(inner.trim());
             out.push('\n');
         }
         "div" | "section" | "header" | "footer" | "article" | "main" | "nav" | "aside"
         | "figure" | "figcaption" | "details" | "summary" => {
             out.push_str("\n\n");
-            convert_children(element, out, in_pre, in_code);
+            convert_children(element, out, in_pre, in_code, in_anchor);
             out.push_str("\n\n");
         }
         "table" => {
@@ -160,9 +258,40 @@ fn convert_element(element: ElementRef<'_>, out: &mut String, in_pre: bool, in_c
         | "abbr" | "mark" | "td" | "th" | "tr" | "tbody" | "thead" | "tfoot" | "dl" | "dt"
         | "dd" | "form" | "input" | "button" | "select" | "option" | "textarea" | "video"
         | "audio" | "source" | "iframe" | "noscript" | "script" | "style" | "meta" | "link"
-        | "title" => convert_children(element, out, in_pre, in_code),
-        _ => convert_children(element, out, in_pre, in_code),
+        | "title" => convert_children(element, out, in_pre, in_code, in_anchor),
+        _ => convert_children(element, out, in_pre, in_code, in_anchor),
     }
+}
+
+/// Pick link text from inner content or accessibility / URL fallbacks.
+fn link_label(element: ElementRef<'_>, inner: &str, href: &str) -> String {
+    let collapsed = inner.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !collapsed.is_empty() {
+        return collapsed;
+    }
+    for attr in ["aria-label", "title", "label"] {
+        if let Some(val) = element.value().attr(attr) {
+            let trimmed = val.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    href_label_from_url(href)
+}
+
+fn href_label_from_url(href: &str) -> String {
+    if let Ok(url) = url::Url::parse(href) {
+        if let Some(segments) = url.path_segments() {
+            if let Some(seg) = segments.filter(|s| !s.is_empty()).last() {
+                return seg.replace('-', " ");
+            }
+        }
+        if let Some(host) = url.host_str() {
+            return host.to_string();
+        }
+    }
+    href.to_string()
 }
 
 fn convert_list(element: ElementRef<'_>, out: &mut String, ordered: bool) {
@@ -182,7 +311,7 @@ fn convert_list(element: ElementRef<'_>, out: &mut String, ordered: bool) {
             out.push_str("* ");
         }
         let mut inner = String::new();
-        convert_children(li, &mut inner, false, false);
+        convert_children(li, &mut inner, false, false, false);
         out.push_str(inner.trim());
         out.push('\n');
     }
@@ -198,7 +327,7 @@ fn convert_table(element: ElementRef<'_>) -> String {
             tr.select(&cell_sel)
                 .map(|cell| {
                     let mut inner = String::new();
-                    convert_children(cell, &mut inner, false, false);
+                    convert_children(cell, &mut inner, false, false, false);
                     inner.trim().replace('\n', " ")
                 })
                 .collect::<Vec<_>>()
@@ -312,6 +441,21 @@ fn collapse_whitespace(text: &str) -> String {
     out.trim().to_string()
 }
 
+/// Insert a line break between adjacent inline Markdown (links/images) and a space elsewhere.
+fn ensure_inline_break(out: &mut String) {
+    if out.is_empty() {
+        return;
+    }
+    if out.ends_with(')') {
+        out.push('\n');
+        return;
+    }
+    match out.chars().last() {
+        Some(c) if !c.is_whitespace() => out.push(' '),
+        _ => {}
+    }
+}
+
 fn clean_markdown(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut blank_run = 0usize;
@@ -328,7 +472,12 @@ fn clean_markdown(text: &str) -> String {
             out.push('\n');
         }
     }
-    out.trim().to_string()
+    separate_adjacent_markdown(&out.trim().to_string())
+}
+
+/// Break concatenated `[link](url)[link2](url)` patterns onto separate lines.
+fn separate_adjacent_markdown(text: &str) -> String {
+    text.replace(")[", ")\n[")
 }
 
 #[cfg(test)]
@@ -344,6 +493,34 @@ mod tests {
     fn converts_link() {
         let md = parse_html(r#"<a href="/about">About</a>"#);
         assert!(md.contains("[About](/about)"));
+    }
+
+    #[test]
+    fn link_uses_aria_label_when_text_empty() {
+        let md = parse_html(
+            r#"<a href="https://example.com/trial" aria-label="Try the product"></a>"#,
+        );
+        assert!(md.contains("[Try the product](https://example.com/trial)"));
+    }
+
+    #[test]
+    fn link_inside_anchor_uses_img_alt_not_nested_image() {
+        let md = parse_html(
+            r#"<a href="/case-study"><img src="logo.png" alt="Wimbledon logo"><span>Explore Wimbledon</span></a>"#,
+        );
+        assert!(md.contains("[Wimbledon logo Explore Wimbledon](/case-study)"));
+        assert!(!md.contains("![Wimbledon logo]"));
+    }
+
+    #[test]
+    fn adjacent_links_get_line_breaks() {
+        let md = parse_html(
+            r#"<div><a href="/one">First</a><a href="/two">Second</a></div>"#,
+        );
+        assert!(md.contains("[First](/one)"));
+        assert!(md.contains("[Second](/two)"));
+        assert!(!md.contains("(/one)[Second]"));
+        assert!(md.contains('\n'));
     }
 
     #[test]
@@ -438,5 +615,15 @@ mod tests {
         );
         assert!(md.contains("| A | B |"));
         assert!(md.contains("| 1 | 2 |"));
+    }
+
+    #[test]
+    fn parse_html_progressive_emits_multiple_blocks() {
+        let html = r#"<body><div><h1>Title</h1><p>First</p><p>Second</p></div></body>"#;
+        let mut blocks = Vec::new();
+        parse_html_progressive(html, |block| blocks.push(block));
+        assert!(blocks.len() >= 2, "expected multiple blocks, got {:?}", blocks);
+        assert!(blocks.iter().any(|b| b.contains("Title")));
+        assert!(blocks.iter().any(|b| b.contains("First")));
     }
 }

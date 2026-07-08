@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use url::Url;
 
 use crate::html_util::find_ci;
@@ -105,6 +106,50 @@ impl PageToMarkdown {
         } else {
             Ok(md)
         }
+    }
+
+    /// Convert HTML to Markdown progressively, invoking `on_block` for each content block.
+    pub fn convert_progressive(
+        html: &str,
+        include_images: bool,
+        keep_header: bool,
+        main_content: bool,
+        exclude_selectors: &[String],
+        mut on_block: impl FnMut(String),
+    ) -> Result<()> {
+        let original_html = html.to_string();
+        let html = if main_content {
+            Self::extract_main_content(&original_html)
+        } else {
+            original_html.clone()
+        };
+        let html = Self::strip_scripts_and_styles(&html);
+        let html = Self::strip_iframe_tags(&html);
+        let html = Self::strip_noise_tags(&html, keep_header);
+        let html = Self::strip_html_comments(&html);
+        let html = Self::strip_by_selectors(&html, exclude_selectors);
+        let languages = Self::extract_code_languages(&html);
+        let html = if include_images { html } else { Self::strip_img_tags(&html) };
+
+        let mut lang_idx = 0usize;
+        let mut seen = HashSet::new();
+        crate::html_to_md::parse_html_progressive(&html, |block| {
+            let block = Self::inject_code_languages_from(&block, &languages, &mut lang_idx);
+            let block = Self::clean(&block);
+            if block.is_empty() {
+                return;
+            }
+            let key = normalize_block(&block);
+            if !seen.insert(key) {
+                return;
+            }
+            on_block(block);
+        });
+
+        if let Some(comments) = Self::extract_comments(&original_html) {
+            on_block(comments);
+        }
+        Ok(())
     }
 
     /// Convert relative URLs in Markdown links to absolute URLs using the given base URL.
@@ -443,21 +488,24 @@ impl PageToMarkdown {
     }
 
     /// Inject language annotations into fenced code blocks that lack them.
-    /// Pairs with `extract_code_languages` — languages are matched in order.
     fn inject_code_languages(md: &str, languages: &[String]) -> String {
+        let mut lang_idx = 0;
+        Self::inject_code_languages_from(md, languages, &mut lang_idx)
+    }
+
+    fn inject_code_languages_from(md: &str, languages: &[String], lang_idx: &mut usize) -> String {
         if languages.is_empty() {
             return md.to_string();
         }
         let mut result = String::with_capacity(md.len());
-        let mut lang_idx = 0;
         let lines: Vec<&str> = md.lines().collect();
         let mut i = 0;
         while i < lines.len() {
             let line = lines[i];
             let trimmed = line.trim();
-            if trimmed == "```" && lang_idx < languages.len() {
-                result.push_str(&format!("```{}", languages[lang_idx]));
-                lang_idx += 1;
+            if trimmed == "```" && *lang_idx < languages.len() {
+                result.push_str(&format!("```{}", languages[*lang_idx]));
+                *lang_idx += 1;
             } else {
                 result.push_str(line);
             }
@@ -1209,6 +1257,21 @@ mod tests {
         let html = "<p>Hello world</p>";
         let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(md.contains("Hello world"));
+    }
+
+    #[test]
+    fn convert_progressive_emits_blocks() {
+        let html = "<body><div><h1>Title</h1><p>One</p><p>Two</p></div></body>";
+        let mut blocks = Vec::new();
+        PageToMarkdown::convert_progressive(html, false, false, false, &[], |b| {
+            blocks.push(b);
+        })
+        .unwrap();
+        assert!(blocks.len() >= 2);
+        let joined = blocks.join("\n");
+        assert!(joined.contains("Title"));
+        assert!(joined.contains("One"));
+        assert!(joined.contains("Two"));
     }
 
     #[test]
