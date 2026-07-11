@@ -59,6 +59,12 @@ pub struct PageMetadata {
     pub canonical_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Extraction confidence in `0.0..=1.0` (set when Markdown is available).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extraction_quality: Option<f64>,
+    /// Coarse page type: `article`, `forum`, `product`, or `page`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_type: Option<String>,
 }
 
 impl PageMetadata {
@@ -109,12 +115,25 @@ impl PageMetadata {
         if let Some(ref language) = self.language {
             lines.push(format!("language: \"{}\"", escape_yaml_string(language)));
         }
+        if let Some(quality) = self.extraction_quality {
+            lines.push(format!("extraction_quality: {:.2}", quality));
+        }
+        if let Some(ref page_type) = self.page_type {
+            lines.push(format!("page_type: \"{}\"", escape_yaml_string(page_type)));
+        }
 
         if lines.is_empty() {
             None
         } else {
             Some(format!("---\n{}\n---\n\n", lines.join("\n")))
         }
+    }
+
+    /// Attach extraction quality and page type derived from HTML + Markdown.
+    pub fn with_content_signals(mut self, html: &str, markdown: &str) -> Self {
+        self.extraction_quality = Some(PageToMarkdown::extraction_quality(html, markdown));
+        self.page_type = Some(PageToMarkdown::detect_page_type(html).to_string());
+        self
     }
 }
 
@@ -127,6 +146,11 @@ pub fn truncate_with_marker(text: &str, max: usize) -> String {
     }
 }
 
+/// Extract metadata from HTML, then attach extraction quality and page type using Markdown.
+pub fn extract_page_metadata(html: &str, markdown: &str) -> PageMetadata {
+    extract_metadata(html).with_content_signals(html, markdown)
+}
+
 /// Escape double quotes and backslashes in a YAML string value.
 fn escape_yaml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -134,11 +158,13 @@ fn escape_yaml_string(s: &str) -> String {
 
 /// Extract metadata (title, description, author, publication date, image, headline, site name, keywords, categories, excerpt, canonical URL, language) from HTML.
 pub fn extract_metadata(html: &str) -> PageMetadata {
-    let title = extract_title(html);
+    let title = extract_title(html).or_else(|| extract_dublin_core(html, "title"));
     let description = extract_meta_content(html, "name", "description")
-        .or_else(|| extract_meta_content(html, "property", "og:description"));
+        .or_else(|| extract_meta_content(html, "property", "og:description"))
+        .or_else(|| extract_dublin_core(html, "description"));
     let author = extract_meta_content(html, "name", "author")
-        .or_else(|| extract_json_ld_author(html));
+        .or_else(|| extract_json_ld_author(html))
+        .or_else(|| extract_dublin_core(html, "creator"));
     let published_date = extract_published_date(html);
     let image = extract_meta_content(html, "property", "og:image")
         .or_else(|| extract_json_ld_image(html));
@@ -163,6 +189,8 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         excerpt,
         canonical_url,
         language,
+        extraction_quality: None,
+        page_type: None,
     }
 }
 
@@ -189,7 +217,7 @@ impl McpServer {
             markdown = truncate_with_marker(&markdown, max);
         }
 
-        let meta = extract_metadata(&html);
+        let meta = extract_page_metadata(&html, &markdown);
 
         Ok(McpResponse {
             url: req.url,
@@ -201,12 +229,19 @@ impl McpServer {
 
 /// Extract publication date from HTML.
 /// Checks in order: `<meta property="article:published_time">`, `<meta name="article:published_time">`,
-/// `<time datetime="...">`, and JSON-LD `"datePublished":"..."`.
+/// `<time datetime="...">`, JSON-LD `"datePublished"`, then Dublin Core `DC.date` / `dcterms.date`.
 fn extract_published_date(html: &str) -> Option<String> {
     extract_meta_content(html, "property", "article:published_time")
         .or_else(|| extract_meta_content(html, "name", "article:published_time"))
         .or_else(|| extract_time_datetime(html))
         .or_else(|| extract_json_ld_field(html, "datePublished"))
+        .or_else(|| extract_dublin_core(html, "date"))
+}
+
+/// Dublin Core / DCTERMS meta fallback (`DC.{field}` or `dcterms.{field}`).
+fn extract_dublin_core(html: &str, field: &str) -> Option<String> {
+    extract_meta_content(html, "name", &format!("DC.{}", field))
+        .or_else(|| extract_meta_content(html, "name", &format!("dcterms.{}", field)))
 }
 
 /// Extract `datetime` attribute from the first `<time>` tag.
@@ -872,6 +907,54 @@ mod tests {
     }
 
     #[test]
+    fn extract_metadata_dublin_core_fallbacks() {
+        let html = r#"<html><head>
+            <meta name="DC.title" content="DC Title">
+            <meta name="DC.creator" content="DC Author">
+            <meta name="DC.date" content="2026-07-11">
+            <meta name="DC.description" content="DC Description">
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.title, Some("DC Title".to_string()));
+        assert_eq!(meta.author, Some("DC Author".to_string()));
+        assert_eq!(meta.published_date, Some("2026-07-11".to_string()));
+        assert_eq!(meta.description, Some("DC Description".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_dcterms_creator_fallback() {
+        let html = r#"<html><head><meta name="dcterms.creator" content="Terms Author"></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.author, Some("Terms Author".to_string()));
+    }
+
+    #[test]
+    fn extract_metadata_meta_author_takes_priority_over_dublin_core() {
+        let html = r#"<html><head>
+            <meta name="author" content="Meta Author">
+            <meta name="DC.creator" content="DC Author">
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.author, Some("Meta Author".to_string()));
+    }
+
+    #[test]
+    fn extract_page_metadata_includes_quality_and_type() {
+        let html = r#"<html><head><title>Story</title>
+            <meta name="author" content="Jane">
+            <meta property="article:published_time" content="2026-07-11">
+        </head><body><article><h1>Story</h1>
+        <p>This is a substantial article body with enough text for a confident extraction score that agents can trust when deciding whether to fall back to an LLM.</p>
+        </article></body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, true, &[]).unwrap();
+        let meta = extract_page_metadata(html, &md);
+        assert_eq!(meta.page_type.as_deref(), Some("article"));
+        let quality = meta.extraction_quality.unwrap();
+        assert!(quality >= 0.5, "expected meaningful quality, got {quality}");
+        assert!(quality <= 1.0);
+    }
+
+    #[test]
     fn frontmatter_includes_all_fields() {
         let meta = PageMetadata {
             title: Some("Test Title".to_string()),
@@ -886,6 +969,8 @@ mod tests {
             excerpt: Some("Short summary".to_string()),
             canonical_url: Some("https://example.com/page".to_string()),
             language: Some("en".to_string()),
+            extraction_quality: Some(0.85),
+            page_type: Some("article".to_string()),
         };
         let fm = meta.to_frontmatter(Some("https://example.com/page")).unwrap();
         assert!(fm.starts_with("---\n"));
@@ -902,6 +987,8 @@ mod tests {
         assert!(fm.contains("excerpt: \"Short summary\""));
         assert!(fm.contains("canonical_url: \"https://example.com/page\""));
         assert!(fm.contains("language: \"en\""));
+        assert!(fm.contains("extraction_quality: 0.85"));
+        assert!(fm.contains("page_type: \"article\""));
         assert!(fm.ends_with("---\n\n"));
     }
 

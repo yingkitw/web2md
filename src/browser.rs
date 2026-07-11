@@ -34,9 +34,10 @@ pub fn parse_sitemap_urls(xml: &str) -> Vec<String> {
     urls
 }
 
-/// Extract feed URLs (RSS/Atom) from HTML <link> tags.
-/// Looks for <link rel="alternate" type="application/rss+xml" href="...">
-/// and <link rel="alternate" type="application/atom+xml" href="...">.
+/// Extract feed URLs (RSS/Atom/JSON Feed) from HTML <link> tags.
+/// Looks for <link rel="alternate" type="application/rss+xml" href="...">,
+/// <link rel="alternate" type="application/atom+xml" href="...">,
+/// and <link rel="alternate" type="application/feed+json" href="...">.
 pub fn extract_feed_links(html: &str) -> Vec<String> {
     let mut feeds = Vec::new();
     let mut pos = 0;
@@ -45,7 +46,9 @@ pub fn extract_feed_links(html: &str) -> Vec<String> {
             let start = pos + start;
             if let Some(end) = html[start..].find('>') {
                 let tag = &html[start..=start + end];
-                if (tag.contains("application/rss+xml") || tag.contains("application/atom+xml"))
+                if (tag.contains("application/rss+xml")
+                    || tag.contains("application/atom+xml")
+                    || tag.contains("application/feed+json"))
                     && tag.contains("alternate")
                 {
                     if let Some(href) = extract_attr(tag, "href") {

@@ -4,6 +4,54 @@ use url::Url;
 
 use crate::html_util::{find_ci, strip_html_tags};
 
+/// Count characters that appear as Markdown link labels `[text](url)`.
+fn markdown_link_text_chars(md: &str) -> usize {
+    let mut total = 0usize;
+    let bytes = md.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'[' {
+            if let Some(close) = md[i + 1..].find(']') {
+                let label = &md[i + 1..i + 1 + close];
+                let after = &md[i + 1 + close..];
+                if after.starts_with("](") {
+                    if let Some(end) = after[2..].find(')') {
+                        let _ = end;
+                        total += label.chars().count();
+                        i += 1 + close + 2 + end + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    total
+}
+
+/// True when any JSON-LD `@type` equals `type_name` (case-insensitive).
+fn json_ld_type_contains(html: &str, type_name: &str) -> bool {
+    for json in crate::html_meta::iter_json_ld_blocks(html) {
+        if let Some(t) = json.get("@type") {
+            if let Some(s) = t.as_str() {
+                if s.eq_ignore_ascii_case(type_name) {
+                    return true;
+                }
+            }
+            if let Some(arr) = t.as_array() {
+                if arr.iter().any(|v| {
+                    v.as_str()
+                        .map(|s| s.eq_ignore_ascii_case(type_name))
+                        .unwrap_or(false)
+                }) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Normalize a Markdown block for deduplication comparison.
 /// Collapses whitespace and trims, so blocks differing only in spacing are treated as duplicates.
 fn normalize_block(block: &str) -> String {
@@ -106,6 +154,88 @@ impl PageToMarkdown {
         } else {
             Ok(md)
         }
+    }
+
+    /// Estimate extraction confidence in `0.0..=1.0` from source HTML and resulting Markdown.
+    /// Higher scores mean agents can trust the Markdown; lower scores suggest LLM fallback.
+    pub fn extraction_quality(html: &str, markdown: &str) -> f64 {
+        let md = markdown.trim();
+        if md.is_empty() {
+            return 0.0;
+        }
+
+        let mut score = 0.0;
+
+        // Substantive length (cap contribution at ~500 chars)
+        let len = md.chars().count();
+        score += ((len as f64) / 500.0).min(1.0) * 0.30;
+
+        // Structure signals in Markdown
+        if md.lines().any(|l| l.starts_with('#')) {
+            score += 0.15;
+        }
+        if md.contains("\n\n") || len > 120 {
+            score += 0.10;
+        }
+
+        // Metadata / semantic HTML cues
+        if find_ci(html, "<article").is_some()
+            || find_ci(html, "<main").is_some()
+            || find_ci(html, "role=\"main\"").is_some()
+            || find_ci(html, "role='main'").is_some()
+        {
+            score += 0.15;
+        }
+        if find_ci(html, "<title").is_some() {
+            score += 0.05;
+        }
+        if crate::html_meta::extract_meta_content(html, "name", "author").is_some()
+            || crate::html_meta::extract_json_ld_field(html, "author").is_some()
+        {
+            score += 0.05;
+        }
+        if crate::html_meta::extract_meta_content(html, "property", "article:published_time")
+            .is_some()
+            || crate::html_meta::extract_json_ld_field(html, "datePublished").is_some()
+        {
+            score += 0.05;
+        }
+
+        // Prefer prose over link-heavy chrome
+        let link_chars = markdown_link_text_chars(md);
+        let link_ratio = if len == 0 {
+            1.0
+        } else {
+            (link_chars as f64) / (len as f64)
+        };
+        score += (1.0 - link_ratio.min(1.0)) * 0.15;
+
+        // Very short extractions are capped
+        if len < 40 {
+            score = score.min(0.30);
+        }
+
+        ((score * 100.0).round() / 100.0).clamp(0.0, 1.0)
+    }
+
+    /// Classify the page as `article`, `forum`, `product`, or `page`.
+    pub fn detect_page_type(html: &str) -> &'static str {
+        if Self::looks_like_forum_page(html) {
+            return "forum";
+        }
+        if json_ld_type_contains(html, "Product") {
+            return "product";
+        }
+        if find_ci(html, "<article").is_some()
+            || json_ld_type_contains(html, "Article")
+            || json_ld_type_contains(html, "NewsArticle")
+            || json_ld_type_contains(html, "BlogPosting")
+            || crate::html_meta::extract_meta_content(html, "property", "article:published_time")
+                .is_some()
+        {
+            return "article";
+        }
+        "page"
     }
 
     /// Convert HTML to Markdown progressively, invoking `on_block` for each content block.
@@ -1662,6 +1792,45 @@ mod tests {
         </body></html>"#;
         let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
         assert!(!md.contains("## Comments"));
+    }
+
+    #[test]
+    fn extraction_quality_empty_markdown_is_zero() {
+        assert_eq!(PageToMarkdown::extraction_quality("<html></html>", ""), 0.0);
+    }
+
+    #[test]
+    fn extraction_quality_rewards_article_content() {
+        let html = r#"<html><head><title>T</title><meta name="author" content="A">
+            <meta property="article:published_time" content="2026-01-01"></head>
+            <body><article><h1>Title</h1><p>Long enough prose for a confident extraction quality score with headings and metadata present on the page.</p></article></body></html>"#;
+        let md = "# Title\n\nLong enough prose for a confident extraction quality score with headings and metadata present on the page.";
+        let q = PageToMarkdown::extraction_quality(html, md);
+        assert!(q >= 0.6, "got {q}");
+    }
+
+    #[test]
+    fn detect_page_type_article_forum_product() {
+        assert_eq!(
+            PageToMarkdown::detect_page_type("<html><body><article><p>x</p></article></body></html>"),
+            "article"
+        );
+        assert_eq!(
+            PageToMarkdown::detect_page_type(
+                r#"<html><body><div class="comment"></div><div class="comment-body"></div></body></html>"#
+            ),
+            "forum"
+        );
+        assert_eq!(
+            PageToMarkdown::detect_page_type(
+                r#"<html><head><script type="application/ld+json">{"@type":"Product","name":"Widget"}</script></head><body></body></html>"#
+            ),
+            "product"
+        );
+        assert_eq!(
+            PageToMarkdown::detect_page_type("<html><body><p>Hello</p></body></html>"),
+            "page"
+        );
     }
 
     #[test]

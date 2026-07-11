@@ -70,6 +70,9 @@
 - [x] Article categories/sections: `article:section` meta tags and JSON-LD `articleSection` (string or array) in MCP response, `--format json`, and YAML frontmatter
 - [x] RSS/Atom feed parsing: `feed` subcommand fetches RSS 2.0 or Atom feeds and converts entries to Markdown (or `--json`); supports `--max-entries` and `--output`
 - [x] Codebase audit: unified `PageMetadata` via serde flatten (MCP + CLI JSON), shared meta-property collector / tag stripper / truncate helper, shared `build_browser_options` CLI wiring, removed dead `follow_redirects`
+- [x] Dublin Core metadata fallbacks: `DC.title` / `dcterms.title`, `DC.creator` / `dcterms.creator`, `DC.date` / `dcterms.date`, `DC.description` / `dcterms.description`
+- [x] JSON Feed parsing: `parse_feed` accepts JSON Feed 1/1.1; `feed` subcommand and `sitemap --feeds` discover `application/feed+json` links
+- [x] Extraction quality score (0.0–1.0) and page-type classification (`article` / `forum` / `product` / `page`) in MCP, `--format json`, and YAML frontmatter
 
 ## In Progress
 
@@ -86,7 +89,4 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
 - Language detection on extracted text content (Trafilatura optional add-on)
 - CSV/XML-TEI export formats for corpus pipelines
-- Extraction quality / confidence score (0.0–1.0) so agents can flag weak extractions for LLM fallback (rs-trafilatura / Firecrawl html-extractor pattern)
-- Page-type classification (article, forum, product, documentation, listing) with type-specific extraction profiles
-- Dublin Core metadata (`DC.title`, `DC.creator`, `DC.date`) as additional fallback for author/title/date
-- JSON Feed (`application/feed+json`) parsing alongside RSS/Atom
+- Page-type-specific extraction profiles (specialize convert path per `page_type`)

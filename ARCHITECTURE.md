@@ -16,7 +16,7 @@ main.rs
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction, run_inline_scripts() (gated by enable_javascript), URL blacklist filtering on secondary fetches
-  ├── feed.rs      : RSS 2.0 / Atom feed parser (`parse_feed`) and Markdown converter (`feed_to_markdown`)
+  ├── feed.rs      : RSS 2.0 / Atom / JSON Feed parser (`parse_feed`) and Markdown converter (`feed_to_markdown`)
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
   ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser
@@ -29,8 +29,8 @@ lib.rs
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding, `strip_html_tags`)
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
-  ├── markdown.rs  : PageToMarkdown — HTML→Markdown pipeline (main-content heuristics, JSON-LD/OG structured fallback, forum comments, dedup, link absolutization, --exclude-selector)
-  └── mcp.rs       : JSON-RPC server wrapper; `PageMetadata` (shared via serde flatten with MCP/CLI JSON); `truncate_with_marker`; extract_metadata() public function
+  ├── markdown.rs  : PageToMarkdown — HTML→Markdown pipeline; `extraction_quality()` / `detect_page_type()`; main-content heuristics; forum comments; dedup; link absolutization
+  └── mcp.rs       : JSON-RPC server; `PageMetadata` (serde flatten); `extract_metadata` / `extract_page_metadata` (adds extraction_quality + page_type); `truncate_with_marker`
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)

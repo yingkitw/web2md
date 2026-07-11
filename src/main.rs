@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use url::Url;
 use web2md::{
-    extract_feed_links, extract_metadata, feed_to_markdown, normalize_crawl_url, parse_feed,
+    extract_feed_links, extract_page_metadata, feed_to_markdown, normalize_crawl_url, parse_feed,
     parse_sitemap_urls, truncate_with_marker, Browser, BrowserOptions, McpRequest, McpServer,
     PageMetadata, PageToMarkdown,
 };
@@ -178,9 +178,9 @@ enum Commands {
         #[arg(long)]
         feeds: bool,
     },
-    /// Fetch an RSS or Atom feed and convert entries to Markdown
+    /// Fetch an RSS, Atom, or JSON Feed and convert entries to Markdown
     Feed {
-        /// Feed URL (RSS 2.0 or Atom)
+        /// Feed URL (RSS 2.0, Atom, or JSON Feed)
         url: String,
         /// Request timeout in seconds
         #[arg(short, long)]
@@ -393,7 +393,7 @@ async fn main() -> Result<()> {
                     OutputFormat::Json => {
                         let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
                         let md = PageToMarkdown::absolutize_links(&md, &url);
-                        let meta = extract_metadata(&html);
+                        let meta = extract_page_metadata(&html, &md);
                         let output = CliJsonOutput {
                             markdown: md,
                             meta,
@@ -408,7 +408,7 @@ async fn main() -> Result<()> {
                 };
 
                 if frontmatter && matches!(format, OutputFormat::Markdown | OutputFormat::Text) {
-                    let meta = extract_metadata(&html);
+                    let meta = extract_page_metadata(&html, &result);
                     if let Some(fm) = meta.to_frontmatter(Some(&url)) {
                         result = format!("{}{}", fm, result);
                     }
@@ -543,7 +543,7 @@ async fn main() -> Result<()> {
             let browser = Browser::new(options)?;
 
             let xml = browser.fetch(&url).await.context("Failed to fetch feed")?;
-            let mut feed = parse_feed(&xml).context("URL did not contain a valid RSS or Atom feed")?;
+            let mut feed = parse_feed(&xml).context("URL did not contain a valid RSS, Atom, or JSON Feed")?;
             if let Some(max) = max_entries {
                 feed.entries.truncate(max);
             }
@@ -678,7 +678,7 @@ async fn main() -> Result<()> {
                             Ok(md) => {
                                 let md = PageToMarkdown::absolutize_links(&md, url);
                                 let md = if frontmatter {
-                                    let meta = extract_metadata(&html);
+                                    let meta = extract_page_metadata(&html, &md);
                                     if let Some(fm) = meta.to_frontmatter(Some(url)) {
                                         format!("{}{}", fm, md)
                                     } else {
@@ -792,7 +792,7 @@ async fn crawl_fetch(
                     Ok(md) => {
                         let mut md = PageToMarkdown::absolutize_links(&md, &url);
                         if frontmatter {
-                            let meta = extract_metadata(&html);
+                            let meta = extract_page_metadata(&html, &md);
                             if let Some(fm) = meta.to_frontmatter(Some(&url)) {
                                 md = format!("{}{}", fm, md);
                             }

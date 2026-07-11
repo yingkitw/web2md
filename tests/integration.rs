@@ -358,6 +358,7 @@ async fn feed_discovery_from_html_page() {
         .with_body(r#"<html><head>
             <link rel="alternate" type="application/rss+xml" href="/blog/rss.xml">
             <link rel="alternate" type="application/atom+xml" href="/blog/atom.xml">
+            <link rel="alternate" type="application/feed+json" href="/blog/feed.json">
         </head><body><h1>Blog</h1></body></html>"#)
         .create_async()
         .await;
@@ -366,9 +367,10 @@ async fn feed_discovery_from_html_page() {
     let html = browser.fetch(&format!("{}/blog", server.url())).await.unwrap();
     let feeds = extract_feed_links(&html);
 
-    assert_eq!(feeds.len(), 2);
+    assert_eq!(feeds.len(), 3);
     assert!(feeds.contains(&"/blog/rss.xml".to_string()));
     assert!(feeds.contains(&"/blog/atom.xml".to_string()));
+    assert!(feeds.contains(&"/blog/feed.json".to_string()));
     mock.assert_async().await;
 }
 
@@ -438,6 +440,43 @@ async fn feed_command_parses_atom() {
         feed.entries[0].link.as_deref(),
         Some("https://example.com/atom-entry")
     );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn feed_command_parses_json_feed() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/feed.json")
+        .with_status(200)
+        .with_header("content-type", "application/feed+json")
+        .with_body(r#"{
+            "version": "https://jsonfeed.org/version/1.1",
+            "title": "JSON Feed Test",
+            "home_page_url": "https://example.com/",
+            "items": [
+                {
+                    "id": "1",
+                    "url": "https://example.com/post",
+                    "title": "Hello JSON Feed",
+                    "content_text": "Body from JSON Feed",
+                    "date_published": "2026-07-11T12:00:00Z"
+                }
+            ]
+        }"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let body = browser.fetch(&format!("{}/feed.json", server.url())).await.unwrap();
+    let feed = parse_feed(&body).expect("should parse JSON Feed");
+    let md = feed_to_markdown(&feed);
+
+    assert_eq!(feed.title.as_deref(), Some("JSON Feed Test"));
+    assert_eq!(feed.entries.len(), 1);
+    assert!(md.contains("# JSON Feed Test"));
+    assert!(md.contains("## [Hello JSON Feed](https://example.com/post)"));
+    assert!(md.contains("Body from JSON Feed"));
     mock.assert_async().await;
 }
 

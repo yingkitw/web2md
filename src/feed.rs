@@ -1,9 +1,9 @@
-//! RSS 2.0 and Atom feed parsing and Markdown conversion.
+//! RSS 2.0, Atom, and JSON Feed parsing and Markdown conversion.
 
 use crate::html_meta::extract_attr;
 use crate::html_util::{decode_html_entities, find_ci, strip_html_tags};
 
-/// A single entry/item from an RSS or Atom feed.
+/// A single entry/item from an RSS, Atom, or JSON Feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedEntry {
     pub title: Option<String>,
@@ -12,7 +12,7 @@ pub struct FeedEntry {
     pub summary: Option<String>,
 }
 
-/// A parsed RSS or Atom feed.
+/// A parsed RSS, Atom, or JSON Feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Feed {
     pub title: Option<String>,
@@ -20,16 +20,20 @@ pub struct Feed {
     pub entries: Vec<FeedEntry>,
 }
 
-/// Parse RSS 2.0 or Atom XML into a [`Feed`].
+/// Parse RSS 2.0, Atom, or JSON Feed content into a [`Feed`].
 /// Returns `None` when the document is not a recognized feed.
-pub fn parse_feed(xml: &str) -> Option<Feed> {
-    if find_ci(xml, "<feed").is_some() && find_ci(xml, "<entry").is_some()
-        || find_ci(xml, "<feed").is_some() && find_ci(xml, "</feed>").is_some()
-    {
-        return Some(parse_atom(xml));
+pub fn parse_feed(content: &str) -> Option<Feed> {
+    let trimmed = content.trim_start();
+    if trimmed.starts_with('{') {
+        return parse_json_feed(trimmed);
     }
-    if find_ci(xml, "<rss").is_some() || find_ci(xml, "<channel").is_some() {
-        return Some(parse_rss(xml));
+    if find_ci(content, "<feed").is_some()
+        && (find_ci(content, "<entry").is_some() || find_ci(content, "</feed>").is_some())
+    {
+        return Some(parse_atom(content));
+    }
+    if find_ci(content, "<rss").is_some() || find_ci(content, "<channel").is_some() {
+        return Some(parse_rss(content));
     }
     None
 }
@@ -74,6 +78,58 @@ pub fn feed_to_markdown(feed: &Feed) -> String {
     }
 
     out.trim_end().to_string()
+}
+
+/// Parse a [JSON Feed](https://www.jsonfeed.org/) document (version 1 / 1.1).
+fn parse_json_feed(json_str: &str) -> Option<Feed> {
+    let json: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    // Require items array (or empty) and either version or title to avoid mistaking random JSON.
+    let items = json.get("items")?.as_array()?;
+    if json.get("version").is_none() && json.get("title").is_none() {
+        return None;
+    }
+
+    let title = json
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let link = json
+        .get("home_page_url")
+        .or_else(|| json.get("feed_url"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let entries = items
+        .iter()
+        .map(|item| FeedEntry {
+            title: item
+                .get("title")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            link: item
+                .get("url")
+                .or_else(|| item.get("external_url"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            published: item
+                .get("date_published")
+                .or_else(|| item.get("date_modified"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            summary: item
+                .get("content_text")
+                .or_else(|| item.get("summary"))
+                .or_else(|| item.get("content_html"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        })
+        .collect();
+
+    Some(Feed {
+        title,
+        link,
+        entries,
+    })
 }
 
 fn parse_rss(xml: &str) -> Feed {
@@ -341,6 +397,44 @@ mod tests {
     fn parse_non_feed_returns_none() {
         assert!(parse_feed("<html><body>Not a feed</body></html>").is_none());
         assert!(parse_feed("").is_none());
+        assert!(parse_feed(r#"{"hello":"world"}"#).is_none());
+    }
+
+    #[test]
+    fn parse_json_feed_basic() {
+        let json = r#"{
+            "version": "https://jsonfeed.org/version/1.1",
+            "title": "JSON Feed Blog",
+            "home_page_url": "https://example.com/",
+            "items": [
+                {
+                    "id": "1",
+                    "url": "https://example.com/1",
+                    "title": "First Item",
+                    "content_text": "Plain text body",
+                    "date_published": "2026-07-11T12:00:00Z"
+                },
+                {
+                    "id": "2",
+                    "title": "Second Item",
+                    "summary": "Short summary",
+                    "external_url": "https://example.com/2"
+                }
+            ]
+        }"#;
+        let feed = parse_feed(json).unwrap();
+        assert_eq!(feed.title.as_deref(), Some("JSON Feed Blog"));
+        assert_eq!(feed.link.as_deref(), Some("https://example.com/"));
+        assert_eq!(feed.entries.len(), 2);
+        assert_eq!(feed.entries[0].title.as_deref(), Some("First Item"));
+        assert_eq!(feed.entries[0].link.as_deref(), Some("https://example.com/1"));
+        assert_eq!(
+            feed.entries[0].published.as_deref(),
+            Some("2026-07-11T12:00:00Z")
+        );
+        assert_eq!(feed.entries[0].summary.as_deref(), Some("Plain text body"));
+        assert_eq!(feed.entries[1].link.as_deref(), Some("https://example.com/2"));
+        assert_eq!(feed.entries[1].summary.as_deref(), Some("Short summary"));
     }
 
     #[test]
