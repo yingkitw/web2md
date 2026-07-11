@@ -73,7 +73,7 @@
 - [x] Dublin Core metadata fallbacks: `DC.title` / `dcterms.title`, `DC.creator` / `dcterms.creator`, `DC.date` / `dcterms.date`, `DC.description` / `dcterms.description`
 - [x] JSON Feed parsing: `parse_feed` accepts JSON Feed 1/1.1; `feed` subcommand and `sitemap --feeds` discover `application/feed+json` links
 - [x] Extraction quality score (0.0–1.0) and page-type classification (`article` / `forum` / `product` / `page`) in MCP, `--format json`, and YAML frontmatter
-- [x] Language detection fallback: `whatlang` ISO 639-3 when HTML/JSON-LD language metadata is absent
+- [x] Dependency trim: remove `whatlang` (stopword heuristic instead); slim `reqwest` to `native-tls`/`http2`/`charset` only
 - [x] CSV export (`--format csv`): Trafilatura-style header + row (url, title, author, date, language, page_type, quality, text)
 - [x] Page-type extraction profiles: article/product prefer main-content; product keeps images and appends JSON-LD details; forum keeps full thread + comments
 - [x] XML-TEI export (`--format tei`): Trafilatura-style `TEI` document with `teiHeader` metadata and `div type="entry"` body paragraphs

@@ -378,17 +378,97 @@ impl PageMetadata {
 }
 
 /// Detect language from extracted text when HTML metadata has no language.
-/// Returns an ISO 639-3 code when detection is reliable.
+/// Returns an ISO 639-3 code using a lightweight stopword heuristic (no extra crate).
 pub fn detect_content_language(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.chars().count() < 40 {
         return None;
     }
-    let info = whatlang::detect(trimmed)?;
-    if !info.is_reliable() {
+    let words: Vec<String> = trimmed
+        .split_whitespace()
+        .map(|w| {
+            w.chars()
+                .filter(|c| c.is_alphabetic())
+                .flat_map(|c| c.to_lowercase())
+                .collect::<String>()
+        })
+        .filter(|w| w.chars().count() > 1)
+        .collect();
+    if words.len() < 20 {
         return None;
     }
-    Some(info.lang().code().to_string())
+
+    let profiles: &[(&str, &[&str])] = &[
+        (
+            "eng",
+            &[
+                "the", "and", "of", "to", "a", "in", "is", "that", "for", "it", "as", "with",
+                "was", "on", "be", "at", "by", "this", "from", "or",
+            ],
+        ),
+        (
+            "deu",
+            &[
+                "der", "die", "und", "das", "ist", "nicht", "ein", "eine", "zu", "den", "mit",
+                "von", "auf", "sich", "des", "auch", "als", "an", "es", "im",
+            ],
+        ),
+        (
+            "fra",
+            &[
+                "de", "la", "le", "et", "les", "des", "en", "un", "une", "du", "est", "que",
+                "dans", "qui", "pour", "pas", "sur", "par", "plus", "avec",
+            ],
+        ),
+        (
+            "spa",
+            &[
+                "de", "la", "que", "el", "en", "y", "a", "los", "del", "se", "las", "por",
+                "un", "para", "con", "una", "es", "al", "lo", "como",
+            ],
+        ),
+        (
+            "ita",
+            &[
+                "di", "e", "il", "la", "che", "per", "un", "una", "in", "del", "è", "con",
+                "dei", "della", "non", "da", "si", "le", "sono", "come",
+            ],
+        ),
+        (
+            "por",
+            &[
+                "de", "a", "o", "e", "que", "do", "da", "em", "um", "para", "é", "com", "não",
+                "uma", "os", "no", "se", "na", "por", "mais",
+            ],
+        ),
+        (
+            "nld",
+            &[
+                "de", "het", "een", "van", "en", "in", "is", "op", "te", "dat", "die", "voor",
+                "met", "zijn", "niet", "aan", "er", "als", "om", "ook",
+            ],
+        ),
+    ];
+
+    let total = words.len() as f64;
+    let mut best: Option<(String, f64)> = None;
+    for (code, stops) in profiles {
+        let hits = words.iter().filter(|w| stops.contains(&w.as_str())).count() as f64;
+        let score = hits / total;
+        if score < 0.08 {
+            continue;
+        }
+        match &best {
+            Some((_, best_score)) if score <= *best_score => {}
+            _ => best = Some(((*code).to_string(), score)),
+        }
+    }
+    let (code, score) = best?;
+    // Require a clear winner over the runner-up margin implicitly via threshold.
+    if score < 0.12 {
+        return None;
+    }
+    Some(code)
 }
 
 /// 64-bit simhash fingerprint of normalized text (hex). Stable for near-duplicate detection.
@@ -426,15 +506,7 @@ pub fn language_matches(actual: Option<&str>, target: &str) -> bool {
     let Some(actual) = actual else {
         return false;
     };
-    let a = normalize_lang_code(actual);
-    let b = normalize_lang_code(target);
-    if a == b {
-        return true;
-    }
-    match (whatlang::Lang::from_code(&a), whatlang::Lang::from_code(&b)) {
-        (Some(la), Some(lb)) => la == lb,
-        _ => false,
-    }
+    normalize_lang_code(actual) == normalize_lang_code(target)
 }
 
 fn normalize_lang_code(code: &str) -> String {

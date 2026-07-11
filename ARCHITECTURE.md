@@ -33,7 +33,7 @@ lib.rs
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
   ├── markdown.rs  : PageToMarkdown — `ConvertOptions` (precision/recall/comments); page-type profiles; `extraction_quality()` / `detect_page_type()`; main-content heuristics; forum comments; product JSON-LD details; dedup; link absolutization
-  └── mcp.rs       : JSON-RPC server; `PageMetadata` (serde flatten); `extract_metadata` / `extract_page_metadata` (quality, page_type, language fallback, simhash fingerprint); `to_csv` / `to_tei` / `to_xml`; `language_matches`; `truncate_with_marker`
+  └── mcp.rs       : JSON-RPC server; `PageMetadata`; content signals (quality, page_type, stopword language fallback, fingerprint, word/char counts); `to_csv` / `to_tei` / `to_xml`; `language_matches`
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)
@@ -116,7 +116,7 @@ URL ──► Browser.fetch() ──► raw HTML
 | `pulldown-cmark` | Markdown → ANSI terminal rendering |
 | `clap` | CLI argument parsing |
 | `serde` / `serde_json` | JSON serialization (MCP, `--format json`) |
-| `whatlang` | Language detection fallback (ISO 639-3) when HTML metadata lacks language |
+| `scraper` | HTML parsing (html5ever) for Markdown conversion |
 | `url` | URL parsing, resolution, absolutization |
 | `anyhow` | Error handling |
 | `mockito` | HTTP mocking in tests (dev) |
