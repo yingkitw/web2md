@@ -29,6 +29,22 @@ fn markdown_link_text_chars(md: &str) -> usize {
     total
 }
 
+/// Parse `[text](url)` starting at `start` (index of `[`). Returns (text, end_index_after_close).
+fn parse_md_link_at(md: &str, start: usize) -> Option<(String, usize)> {
+    if start >= md.len() || md.as_bytes()[start] != b'[' {
+        return None;
+    }
+    let close = md[start + 1..].find(']')?;
+    let text = md[start + 1..start + 1 + close].to_string();
+    let after_idx = start + 1 + close;
+    let after = &md[after_idx..];
+    if !after.starts_with("](") {
+        return None;
+    }
+    let end = after[2..].find(')')?;
+    Some((text, after_idx + 2 + end + 1))
+}
+
 /// True when any JSON-LD `@type` equals `type_name` (case-insensitive).
 fn json_ld_value_is_type(json: &serde_json::Value, type_name: &str) -> bool {
     match json.get("@type") {
@@ -176,6 +192,10 @@ pub struct ConvertOptions {
     pub favor_recall: bool,
     /// Append forum/thread comments when detected (default: true).
     pub include_comments: bool,
+    /// Keep HTML tables in Markdown output (default: true).
+    pub include_tables: bool,
+    /// Keep Markdown links as `[text](url)` (default: true); when false, emit link text only.
+    pub include_links: bool,
 }
 
 impl Default for ConvertOptions {
@@ -187,6 +207,8 @@ impl Default for ConvertOptions {
             favor_precision: false,
             favor_recall: false,
             include_comments: true,
+            include_tables: true,
+            include_links: true,
         }
     }
 }
@@ -244,6 +266,11 @@ impl PageToMarkdown {
         let html = Self::strip_noise_tags(&html, opts.keep_header);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
+        let html = if opts.include_tables {
+            html
+        } else {
+            Self::strip_table_tags(&html)
+        };
         let languages = Self::extract_code_languages(&html);
         let html = if use_images {
             html
@@ -255,9 +282,19 @@ impl PageToMarkdown {
         let md = Self::deduplicate_blocks(&md);
         let md = Self::clean(&md);
         let md = Self::append_page_profile_extras(&original_html, md);
+        let md = if opts.include_links {
+            md
+        } else {
+            Self::strip_markdown_links(&md)
+        };
 
         if opts.include_comments {
             if let Some(comments) = Self::extract_comments(&original_html) {
+                let comments = if opts.include_links {
+                    comments
+                } else {
+                    Self::strip_markdown_links(&comments)
+                };
                 return Ok(format!("{}\n\n{}", md, comments));
             }
         }
@@ -393,6 +430,11 @@ impl PageToMarkdown {
         let html = Self::strip_noise_tags(&html, opts.keep_header);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
+        let html = if opts.include_tables {
+            html
+        } else {
+            Self::strip_table_tags(&html)
+        };
         let languages = Self::extract_code_languages(&html);
         let html = if use_images {
             html
@@ -405,6 +447,11 @@ impl PageToMarkdown {
         crate::html_to_md::parse_html_progressive(&html, |block| {
             let block = Self::inject_code_languages_from(&block, &languages, &mut lang_idx);
             let block = Self::clean(&block);
+            let block = if opts.include_links {
+                block
+            } else {
+                Self::strip_markdown_links(&block)
+            };
             if block.is_empty() {
                 return;
             }
@@ -420,6 +467,11 @@ impl PageToMarkdown {
         }
         if opts.include_comments {
             if let Some(comments) = Self::extract_comments(&original_html) {
+                let comments = if opts.include_links {
+                    comments
+                } else {
+                    Self::strip_markdown_links(&comments)
+                };
                 on_block(comments);
             }
         }
@@ -631,6 +683,38 @@ impl PageToMarkdown {
             break;
         }
         out
+    }
+
+    /// Remove `<table>...</table>` blocks (case-insensitive).
+    fn strip_table_tags(html: &str) -> String {
+        Self::strip_tag_pair(html, "table", "</table>")
+    }
+
+    /// Replace `[text](url)` and `![alt](url)` with visible text/alt only.
+    fn strip_markdown_links(md: &str) -> String {
+        let mut result = String::with_capacity(md.len());
+        let mut i = 0;
+        while i < md.len() {
+            let rest = &md[i..];
+            if rest.starts_with("![") {
+                if let Some((alt, end)) = parse_md_link_at(md, i + 1) {
+                    result.push_str(&alt);
+                    i = end;
+                    continue;
+                }
+            }
+            if rest.starts_with('[') {
+                if let Some((text, end)) = parse_md_link_at(md, i) {
+                    result.push_str(&text);
+                    i = end;
+                    continue;
+                }
+            }
+            let ch = rest.chars().next().unwrap();
+            result.push(ch);
+            i += ch.len_utf8();
+        }
+        result
     }
 
     /// Remove `<script>` and `<style>` blocks (case-insensitive, non-greedy)

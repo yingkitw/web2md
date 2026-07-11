@@ -27,6 +27,12 @@ pub struct McpRequest {
     /// Include forum comments when detected (default true).
     #[serde(default = "default_true")]
     pub include_comments: bool,
+    /// Keep HTML tables (default true).
+    #[serde(default = "default_true")]
+    pub include_tables: bool,
+    /// Keep Markdown links as `[text](url)` (default true).
+    #[serde(default = "default_true")]
+    pub include_links: bool,
     #[serde(default)]
     pub only_with_metadata: bool,
 }
@@ -46,6 +52,8 @@ impl Default for McpRequest {
             favor_precision: false,
             favor_recall: false,
             include_comments: true,
+            include_tables: true,
+            include_links: true,
             only_with_metadata: false,
         }
     }
@@ -97,6 +105,12 @@ pub struct PageMetadata {
     /// 64-bit simhash fingerprint of extracted text (hex), for near-duplicate detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// Word count of extracted plain text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub word_count: Option<usize>,
+    /// Character count of extracted plain text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub char_count: Option<usize>,
 }
 
 impl PageMetadata {
@@ -156,6 +170,12 @@ impl PageMetadata {
         if let Some(ref fingerprint) = self.fingerprint {
             lines.push(format!("fingerprint: \"{}\"", escape_yaml_string(fingerprint)));
         }
+        if let Some(wc) = self.word_count {
+            lines.push(format!("word_count: {}", wc));
+        }
+        if let Some(cc) = self.char_count {
+            lines.push(format!("char_count: {}", cc));
+        }
 
         if lines.is_empty() {
             None
@@ -164,15 +184,17 @@ impl PageMetadata {
         }
     }
 
-    /// Attach extraction quality, page type, language fallback, and content fingerprint.
+    /// Attach extraction quality, page type, language fallback, fingerprint, and counts.
     pub fn with_content_signals(mut self, html: &str, markdown: &str) -> Self {
         self.extraction_quality = Some(PageToMarkdown::extraction_quality(html, markdown));
-        self.page_type = Some(PageToMarkdown::detect_page_type(html).to_string());
+        self.page_type.replace(PageToMarkdown::detect_page_type(html).to_string());
         if self.language.is_none() {
             self.language = detect_content_language(markdown);
         }
         let plain = PageToMarkdown::to_plain_text(markdown);
         self.fingerprint = Some(content_fingerprint(&plain));
+        self.word_count = Some(plain.split_whitespace().count());
+        self.char_count = Some(plain.chars().count());
         self
     }
 
@@ -563,6 +585,8 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         extraction_quality: None,
         page_type: None,
         fingerprint: None,
+        word_count: None,
+        char_count: None,
     }
 }
 
@@ -589,6 +613,8 @@ impl McpServer {
             favor_precision: req.favor_precision,
             favor_recall: req.favor_recall,
             include_comments: req.include_comments,
+            include_tables: req.include_tables,
+            include_links: req.include_links,
         };
         let mut markdown = PageToMarkdown::convert_with(&html, &opts, &[])?;
         markdown = PageToMarkdown::absolutize_links(&markdown, &req.url);

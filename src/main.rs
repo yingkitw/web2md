@@ -88,6 +88,12 @@ enum Commands {
         /// Skip forum/thread comment extraction
         #[arg(long)]
         no_comments: bool,
+        /// Strip HTML tables from output
+        #[arg(long)]
+        no_tables: bool,
+        /// Emit link text only (strip Markdown `[text](url)` hrefs)
+        #[arg(long)]
+        no_links: bool,
         /// Only output when title and published_date metadata are present
         #[arg(long)]
         only_with_metadata: bool,
@@ -352,6 +358,8 @@ async fn main() -> Result<()> {
             precision,
             recall,
             no_comments,
+            no_tables,
+            no_links,
             only_with_metadata,
             delay,
             keep_header,
@@ -425,6 +433,8 @@ async fn main() -> Result<()> {
                             favor_precision: precision,
                             favor_recall: recall,
                             include_comments: !no_comments,
+                            include_tables: !no_tables,
+                            include_links: !no_links,
                         };
                         let md = PageToMarkdown::convert_with(
                             &html,
