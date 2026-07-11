@@ -164,6 +164,92 @@ impl PageMetadata {
         out.push('\n');
         out
     }
+
+    /// Emit a Trafilatura-style TEI XML document for corpus pipelines.
+    pub fn to_tei(&self, url: &str, text: &str) -> String {
+        let mut out = String::from(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <TEI xmlns=\"http://www.tei-c.org/ns/1.0\">\n\
+               <teiHeader>\n\
+                 <fileDesc>\n\
+                   <titleStmt>\n",
+        );
+        out.push_str("                     <title>");
+        out.push_str(&xml_escape(self.title.as_deref().unwrap_or("")));
+        out.push_str("</title>\n");
+        if let Some(author) = &self.author {
+            out.push_str("                     <author>");
+            out.push_str(&xml_escape(author));
+            out.push_str("</author>\n");
+        }
+        out.push_str(
+            "                   </titleStmt>\n\
+                   <publicationStmt>\n",
+        );
+        if let Some(site) = &self.site_name {
+            out.push_str("                     <publisher>");
+            out.push_str(&xml_escape(site));
+            out.push_str("</publisher>\n");
+        }
+        if let Some(date) = &self.published_date {
+            out.push_str("                     <date when=\"");
+            out.push_str(&xml_escape(date));
+            out.push_str("\">");
+            out.push_str(&xml_escape(date));
+            out.push_str("</date>\n");
+        }
+        out.push_str("                     <idno type=\"URL\">");
+        out.push_str(&xml_escape(url));
+        out.push_str("</idno>\n");
+        if let Some(q) = self.extraction_quality {
+            out.push_str("                     <idno type=\"extraction-quality\">");
+            out.push_str(&format!("{:.2}", q));
+            out.push_str("</idno>\n");
+        }
+        if let Some(pt) = &self.page_type {
+            out.push_str("                     <idno type=\"page-type\">");
+            out.push_str(&xml_escape(pt));
+            out.push_str("</idno>\n");
+        }
+        out.push_str(
+            "                   </publicationStmt>\n\
+                   <sourceDesc>\n\
+                     <p>Converted from web page by web2md</p>\n\
+                   </sourceDesc>\n\
+                 </fileDesc>\n",
+        );
+        if let Some(lang) = &self.language {
+            out.push_str(
+                "                 <profileDesc>\n\
+                   <langUsage>\n\
+                     <language ident=\"",
+            );
+            out.push_str(&xml_escape(lang));
+            out.push_str(
+                "\"/>\n\
+                   </langUsage>\n\
+                 </profileDesc>\n",
+            );
+        }
+        out.push_str(
+            "               </teiHeader>\n\
+               <text>\n\
+                 <body>\n\
+                   <div type=\"entry\">\n",
+        );
+        for para in tei_paragraphs(text) {
+            out.push_str("                     <p>");
+            out.push_str(&xml_escape(&para));
+            out.push_str("</p>\n");
+        }
+        out.push_str(
+            "                   </div>\n\
+                 </body>\n\
+               </text>\n\
+             </TEI>\n",
+        );
+        out
+    }
 }
 
 /// Detect language from extracted text when HTML metadata has no language.
@@ -188,6 +274,39 @@ fn csv_escape(s: &str) -> String {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         s.to_string()
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Split plain text into TEI `<p>` chunks (blank-line separated; fallback to whole text).
+fn tei_paragraphs(text: &str) -> Vec<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let paras: Vec<String> = trimmed
+        .split("\n\n")
+        .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|p| !p.is_empty())
+        .collect();
+    if paras.is_empty() {
+        vec![trimmed.to_string()]
+    } else {
+        paras
     }
 }
 
@@ -1039,6 +1158,37 @@ mod tests {
         assert!(csv.contains("Ada"));
         assert!(csv.contains("0.90"));
         assert!(csv.contains("\"Line one\nLine two\""));
+    }
+
+    #[test]
+    fn to_tei_emits_header_and_escaped_paragraphs() {
+        let meta = PageMetadata {
+            title: Some("Hello <World>".to_string()),
+            author: Some("Ada & Bob".to_string()),
+            site_name: Some("Example Site".to_string()),
+            published_date: Some("2026-01-15".to_string()),
+            language: Some("en".to_string()),
+            page_type: Some("article".to_string()),
+            extraction_quality: Some(0.85),
+            ..Default::default()
+        };
+        let tei = meta.to_tei(
+            "https://example.com/a?q=1&x=2",
+            "First paragraph.\n\nSecond <para> with & ampersand.",
+        );
+        assert!(tei.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+        assert!(tei.contains("<TEI xmlns=\"http://www.tei-c.org/ns/1.0\">"));
+        assert!(tei.contains("<title>Hello &lt;World&gt;</title>"));
+        assert!(tei.contains("<author>Ada &amp; Bob</author>"));
+        assert!(tei.contains("<publisher>Example Site</publisher>"));
+        assert!(tei.contains("when=\"2026-01-15\""));
+        assert!(tei.contains("<idno type=\"URL\">https://example.com/a?q=1&amp;x=2</idno>"));
+        assert!(tei.contains("<idno type=\"extraction-quality\">0.85</idno>"));
+        assert!(tei.contains("<idno type=\"page-type\">article</idno>"));
+        assert!(tei.contains("<language ident=\"en\"/>"));
+        assert!(tei.contains("<div type=\"entry\">"));
+        assert!(tei.contains("<p>First paragraph.</p>"));
+        assert!(tei.contains("<p>Second &lt;para&gt; with &amp; ampersand.</p>"));
     }
 
     #[test]

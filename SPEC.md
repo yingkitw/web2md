@@ -83,6 +83,7 @@ web2md fetch <URL> [FLAGS]
   --format json        Output structured JSON (markdown + metadata)
   --format text        Output plain text (Markdown syntax stripped)
   --format csv         Output Trafilatura-style CSV (header + one data row)
+  --format tei         Output XML-TEI document (teiHeader + body paragraphs)
   --render             ANSI colors: bold headings, underlined links, colored code
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
@@ -210,6 +211,46 @@ https://example.com/article,Article Title,Jane Doe,2025-01-15T08:30:00Z,en,artic
 ```
 
 Fields containing commas, quotes, or newlines are RFC 4180–escaped. The `text` column is plain text (Markdown stripped).
+
+### CLI `--format tei` Output
+
+Trafilatura-style TEI XML with metadata in `teiHeader` and plain-text paragraphs in `div type="entry"`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt>
+        <title>Article Title</title>
+        <author>Jane Doe</author>
+      </titleStmt>
+      <publicationStmt>
+        <publisher>Tech Blog</publisher>
+        <date when="2025-01-15T08:30:00Z">2025-01-15T08:30:00Z</date>
+        <idno type="URL">https://example.com/article</idno>
+      </publicationStmt>
+      <sourceDesc>
+        <p>Converted from web page by web2md</p>
+      </sourceDesc>
+    </fileDesc>
+    <profileDesc>
+      <langUsage>
+        <language ident="en"/>
+      </langUsage>
+    </profileDesc>
+  </teiHeader>
+  <text>
+    <body>
+      <div type="entry">
+        <p>Plain text body...</p>
+      </div>
+    </body>
+  </text>
+</TEI>
+```
+
+Special characters in text and attribute values are XML-escaped. Language, page type, and extraction quality are included when available.
 
 ## HTML Processing Pipeline
 

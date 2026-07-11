@@ -76,6 +76,7 @@
 - [x] Language detection fallback: `whatlang` ISO 639-3 when HTML/JSON-LD language metadata is absent
 - [x] CSV export (`--format csv`): Trafilatura-style header + row (url, title, author, date, language, page_type, quality, text)
 - [x] Page-type extraction profiles: article/product prefer main-content; product keeps images and appends JSON-LD details; forum keeps full thread + comments
+- [x] XML-TEI export (`--format tei`): Trafilatura-style `TEI` document with `teiHeader` metadata and `div type="entry"` body paragraphs
 
 ## In Progress
 
@@ -90,4 +91,6 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
-- XML-TEI export format for corpus pipelines (CSV done via `--format csv`)
+- Content fingerprint / simhash for near-duplicate detection across crawls (Trafilatura `fingerprint`)
+- Target-language filter: discard pages whose detected language ≠ requested ISO code
+- Plain Trafilatura-style XML (non-TEI) output alongside `--format tei`

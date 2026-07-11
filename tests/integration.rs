@@ -358,6 +358,41 @@ async fn csv_output_format_emits_header_and_row() {
 }
 
 #[tokio::test]
+async fn tei_output_format_emits_tei_document() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/tei")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"<html lang="en"><head><title>TEI Page</title><meta name="author" content="TEI Author">
+            <meta property="og:site_name" content="TEI Site">
+            </head><body><article><h1>TEI Page</h1>
+            <p>This English paragraph is long enough for TEI export of the extracted plain text content for corpus pipelines.</p>
+            </article></body></html>"#,
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/tei", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, true, &[]).unwrap();
+    let text = PageToMarkdown::to_plain_text(&md);
+    let meta = extract_page_metadata(&html, &md);
+    let tei = meta.to_tei(&url, &text);
+
+    assert!(tei.contains("<TEI xmlns=\"http://www.tei-c.org/ns/1.0\">"));
+    assert!(tei.contains("<title>TEI Page</title>"));
+    assert!(tei.contains("<author>TEI Author</author>"));
+    assert!(tei.contains("<publisher>TEI Site</publisher>"));
+    assert!(tei.contains("<language ident=\"en\"/>"));
+    assert!(tei.contains("<div type=\"entry\">"));
+    assert!(tei.contains("corpus pipelines"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn sitemap_discovery_fetches_and_parses() {
     let mut server = mockito::Server::new_async().await;
     let mock = server

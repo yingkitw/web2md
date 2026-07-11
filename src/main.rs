@@ -24,6 +24,8 @@ enum OutputFormat {
     Text,
     /// Emit CSV (url + metadata + plain text) for corpus pipelines
     Csv,
+    /// Emit XML-TEI document (teiHeader + body) for corpus pipelines
+    Tei,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -66,7 +68,7 @@ enum Commands {
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
-        /// Output format: markdown, html, json, text, or csv
+        /// Output format: markdown, html, json, text, csv, or tei
         #[arg(short, long, value_enum, default_value = "markdown")]
         format: OutputFormat,
         /// Render Markdown with ANSI colors and formatting in the terminal
@@ -413,6 +415,13 @@ async fn main() -> Result<()> {
                         let text = PageToMarkdown::to_plain_text(&md);
                         let meta = extract_page_metadata(&html, &md);
                         meta.to_csv(&url, &text)
+                    }
+                    OutputFormat::Tei => {
+                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
+                        let md = PageToMarkdown::absolutize_links(&md, &url);
+                        let text = PageToMarkdown::to_plain_text(&md);
+                        let meta = extract_page_metadata(&html, &md);
+                        meta.to_tei(&url, &text)
                     }
                 };
 
