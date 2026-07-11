@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use url::Url;
 use web2md::{
     extract_feed_links, extract_metadata, feed_to_markdown, normalize_crawl_url, parse_feed,
-    parse_sitemap_urls, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+    parse_sitemap_urls, truncate_with_marker, Browser, BrowserOptions, McpRequest, McpServer,
+    PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -27,30 +28,8 @@ enum OutputFormat {
 #[derive(Debug, Serialize)]
 struct CliJsonOutput {
     markdown: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    author: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    published_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    image: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    headline: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    site_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    keywords: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    categories: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    excerpt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    canonical_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    language: Option<String>,
+    #[serde(flatten)]
+    meta: PageMetadata,
 }
 
 #[derive(Parser)]
@@ -291,6 +270,41 @@ fn apply_blacklist_options(
     options.extra_blacklist_files = blacklist_file;
 }
 
+/// Build [`BrowserOptions`] from common CLI flags shared by fetch/browse/batch.
+fn build_browser_options(
+    timeout: Option<u64>,
+    delay: Option<u64>,
+    wait: Option<u64>,
+    cache_ttl: Option<u64>,
+    cookies: Vec<String>,
+    headers: Vec<String>,
+    javascript: bool,
+    no_blacklist: bool,
+    no_user_blacklist: bool,
+    blacklist_file: Vec<String>,
+    ignore_robots: bool,
+) -> BrowserOptions {
+    let mut options = BrowserOptions::default();
+    if let Some(secs) = timeout {
+        options.timeout = Duration::from_secs(secs);
+    }
+    if let Some(ms) = delay {
+        options.request_delay = Duration::from_millis(ms);
+    }
+    if let Some(ms) = wait {
+        options.post_load_wait = Duration::from_millis(ms);
+    }
+    if let Some(secs) = cache_ttl {
+        options.cache_ttl = Duration::from_secs(secs);
+    }
+    options.cookies = cookies;
+    options.headers = headers;
+    options.enable_javascript = javascript;
+    apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
+    options.respect_robots_txt = !ignore_robots;
+    options
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -328,24 +342,19 @@ async fn main() -> Result<()> {
             blacklist_file,
             no_user_blacklist,
         }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            if let Some(ms) = delay {
-                options.request_delay = Duration::from_millis(ms);
-            }
-            if let Some(ms) = wait {
-                options.post_load_wait = Duration::from_millis(ms);
-            }
-            if let Some(secs) = cache_ttl {
-                options.cache_ttl = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
-            options.enable_javascript = javascript;
-            apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
-            options.respect_robots_txt = !ignore_robots;
+            let options = build_browser_options(
+                timeout,
+                delay,
+                wait,
+                cache_ttl,
+                cookie,
+                header,
+                javascript,
+                no_blacklist,
+                no_user_blacklist,
+                blacklist_file,
+                ignore_robots,
+            );
             let browser = Browser::new(options)?;
 
             if depth > 0 {
@@ -387,18 +396,7 @@ async fn main() -> Result<()> {
                         let meta = extract_metadata(&html);
                         let output = CliJsonOutput {
                             markdown: md,
-                            title: meta.title,
-                            description: meta.description,
-                            author: meta.author,
-                            published_date: meta.published_date,
-                            image: meta.image,
-                            headline: meta.headline,
-                            site_name: meta.site_name,
-                            keywords: meta.keywords,
-                            categories: meta.categories,
-                            excerpt: meta.excerpt,
-                            canonical_url: meta.canonical_url,
-                            language: meta.language,
+                            meta,
                         };
                         serde_json::to_string_pretty(&output)?
                     }
@@ -417,9 +415,7 @@ async fn main() -> Result<()> {
                 }
 
                 if let Some(max) = max_length {
-                    if result.len() > max {
-                        result = format!("{}\n\n[truncated]", &result[..max]);
-                    }
+                    result = truncate_with_marker(&result, max);
                 }
 
                 if let Some(path) = output_file {
@@ -447,24 +443,19 @@ async fn main() -> Result<()> {
             blacklist_file,
             no_user_blacklist,
         }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            if let Some(ms) = delay {
-                options.request_delay = Duration::from_millis(ms);
-            }
-            if let Some(ms) = wait {
-                options.post_load_wait = Duration::from_millis(ms);
-            }
-            if let Some(secs) = cache_ttl {
-                options.cache_ttl = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
-            options.enable_javascript = javascript;
-            apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
-            options.respect_robots_txt = !ignore_robots;
+            let options = build_browser_options(
+                timeout,
+                delay,
+                wait,
+                cache_ttl,
+                cookie,
+                header,
+                javascript,
+                no_blacklist,
+                no_user_blacklist,
+                blacklist_file,
+                ignore_robots,
+            );
             browse_loop(url, options, include_images, keep_header, main_content).await?;
         }
         Some(Commands::Mcp) => {
@@ -637,24 +628,19 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            if let Some(ms) = delay {
-                options.request_delay = Duration::from_millis(ms);
-            }
-            if let Some(ms) = wait {
-                options.post_load_wait = Duration::from_millis(ms);
-            }
-            if let Some(secs) = cache_ttl {
-                options.cache_ttl = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
-            options.enable_javascript = javascript;
-            apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
-            options.respect_robots_txt = !ignore_robots;
+            let options = build_browser_options(
+                timeout,
+                delay,
+                wait,
+                cache_ttl,
+                cookie,
+                header,
+                javascript,
+                no_blacklist,
+                no_user_blacklist,
+                blacklist_file,
+                ignore_robots,
+            );
             let browser = Browser::new(options)?;
 
             // Create output directory if specified
@@ -812,9 +798,7 @@ async fn crawl_fetch(
                             }
                         }
                         if let Some(max) = max_length {
-                            if md.len() > max {
-                                md = format!("{}\n\n[truncated]", &md[..max]);
-                            }
+                            md = truncate_with_marker(&md, max);
                         }
                         if render {
                             md = render_markdown_ansi(&md, false).0;

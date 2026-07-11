@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::collections::HashSet;
 use url::Url;
 
-use crate::html_util::find_ci;
+use crate::html_util::{find_ci, strip_html_tags};
 
 /// Normalize a Markdown block for deduplication comparison.
 /// Collapses whitespace and trims, so blocks differing only in spacing are treated as duplicates.
@@ -1043,7 +1043,7 @@ impl PageToMarkdown {
                             let close = format!("</{}", &tag[1..]);
                             if let Some(end) = find_ci(&html[content_start..], &close) {
                                 let author_html = &html[content_start..content_start + end];
-                                let author = Self::strip_tags(author_html);
+                                let author = strip_html_tags(author_html);
                                 let author = author.trim().to_string();
                                 if !author.is_empty() {
                                     return Some(author);
@@ -1064,7 +1064,7 @@ impl PageToMarkdown {
                     let content_start = pos + gt + 1;
                     let close = format!("</{}", &tag[1..]);
                     if let Some(end) = find_ci(&html[content_start..], &close) {
-                        let author = Self::strip_tags(&html[content_start..content_start + end]);
+                        let author = strip_html_tags(&html[content_start..content_start + end]);
                         let author = author.trim().to_string();
                         if !author.is_empty() {
                             return Some(author);
@@ -1165,22 +1165,6 @@ impl PageToMarkdown {
         let val_start = i + 1;
         let val_end = s[val_start..].find(quote)? + val_start;
         Some(s[val_start..val_end].to_string())
-    }
-
-    /// Strip all HTML tags from a string, leaving only text.
-    fn strip_tags(html: &str) -> String {
-        let mut out = String::with_capacity(html.len());
-        let mut in_tag = false;
-        for c in html.chars() {
-            if c == '<' {
-                in_tag = true;
-            } else if c == '>' {
-                in_tag = false;
-            } else if !in_tag {
-                out.push(c);
-            }
-        }
-        out
     }
 }
 

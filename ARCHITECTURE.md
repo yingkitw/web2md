@@ -26,11 +26,11 @@ lib.rs
   │     ├── parser.rs  : Recursive-descent parser → Vec<Stmt>
   │     ├── eval.rs    : Tree-walking evaluator with lexical scopes, closures, control flow, and builtins (document.write, strings, arrays, Math, JSON, console, global constructors)
   │     └── mod.rs     : run_inline_scripts(html, wait_ms) — extracts inline <script> blocks, runs them, flushes timer callbacks, returns document.write output; inject_before_body_close()
-  ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding)
-  ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing
+  ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding, `strip_html_tags`)
+  ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
   ├── markdown.rs  : PageToMarkdown — HTML→Markdown pipeline (main-content heuristics, JSON-LD/OG structured fallback, forum comments, dedup, link absolutization, --exclude-selector)
-  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords, categories, excerpt, canonical_url, language), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
+  └── mcp.rs       : JSON-RPC server wrapper; `PageMetadata` (shared via serde flatten with MCP/CLI JSON); `truncate_with_marker`; extract_metadata() public function
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)

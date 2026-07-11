@@ -100,7 +100,7 @@ async fn mcp_server_end_to_end() {
         .await
         .unwrap();
 
-    assert_eq!(resp.title, Some("Integration Test".to_string()));
+    assert_eq!(resp.meta.title, Some("Integration Test".to_string()));
     assert!(resp.markdown.contains("Title"));
     assert!(resp.markdown.contains("Body text."));
     mock.assert_async().await;

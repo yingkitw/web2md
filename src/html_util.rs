@@ -21,6 +21,22 @@ pub(crate) fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
     None
 }
 
+/// Strip HTML tags, leaving only text content.
+pub(crate) fn strip_html_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Decode common HTML character entities in text nodes.
 pub(crate) fn decode_html_entities(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -90,5 +106,10 @@ mod tests {
     #[test]
     fn leaves_unknown_entities_unchanged() {
         assert_eq!(decode_html_entities("&unknown;"), "&unknown;");
+    }
+
+    #[test]
+    fn strip_html_tags_removes_markup() {
+        assert_eq!(strip_html_tags("<p>Hello <b>world</b></p>"), "Hello world");
     }
 }

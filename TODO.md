@@ -69,6 +69,7 @@
 - [x] Extended metadata: excerpt (first substantive paragraph), canonical URL (`og:url` / `<link rel="canonical">`), and language (`html lang`, `og:locale`, JSON-LD `inLanguage`)
 - [x] Article categories/sections: `article:section` meta tags and JSON-LD `articleSection` (string or array) in MCP response, `--format json`, and YAML frontmatter
 - [x] RSS/Atom feed parsing: `feed` subcommand fetches RSS 2.0 or Atom feeds and converts entries to Markdown (or `--json`); supports `--max-entries` and `--output`
+- [x] Codebase audit: unified `PageMetadata` via serde flatten (MCP + CLI JSON), shared meta-property collector / tag stripper / truncate helper, shared `build_browser_options` CLI wiring, removed dead `follow_redirects`
 
 ## In Progress
 

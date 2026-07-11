@@ -1,7 +1,7 @@
 //! RSS 2.0 and Atom feed parsing and Markdown conversion.
 
 use crate::html_meta::extract_attr;
-use crate::html_util::{decode_html_entities, find_ci};
+use crate::html_util::{decode_html_entities, find_ci, strip_html_tags};
 
 /// A single entry/item from an RSS or Atom feed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -268,17 +268,7 @@ fn unwrap_cdata(s: &str) -> Option<&str> {
 
 /// Strip common HTML tags from feed summaries for plain Markdown body text.
 fn strip_simple_html(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut in_tag = false;
-    for ch in html.chars() {
-        match ch {
-            '<' => in_tag = true,
-            '>' => in_tag = false,
-            _ if !in_tag => out.push(ch),
-            _ => {}
-        }
-    }
-    decode_html_entities(out.trim())
+    decode_html_entities(strip_html_tags(html).trim())
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")

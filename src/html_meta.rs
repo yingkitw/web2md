@@ -35,20 +35,75 @@ pub(crate) fn extract_json_ld_field(html: &str, field: &str) -> Option<String> {
 
 /// Extract `content` from a `<meta>` tag matching the given attribute key/value pair.
 pub(crate) fn extract_meta_content(html: &str, attr_key: &str, attr_val: &str) -> Option<String> {
+    collect_meta_attr_values(html, attr_key, attr_val).into_iter().next()
+}
+
+/// Collect all `content` values from `<meta>` tags matching `attr_key`/`attr_val`.
+pub(crate) fn collect_meta_attr_values(html: &str, attr_key: &str, attr_val: &str) -> Vec<String> {
+    let mut values = Vec::new();
     let mut i = 0;
     while i < html.len() {
-        if let Some(pos) = find_ci(&html[i..], "<meta") {
-            let pos = i + pos;
-            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
-            let tag = &html[pos..=tag_end];
-            if find_ci(tag, &format!("{}=\"{}\"", attr_key, attr_val)).is_some()
-                || find_ci(tag, &format!("{}='{}'", attr_key, attr_val)).is_some()
-            {
-                return extract_attr(tag, "content");
-            }
-            i = tag_end + 1;
-        } else {
+        let Some(pos) = find_ci(&html[i..], "<meta") else {
             break;
+        };
+        let pos = i + pos;
+        let Some(rel_end) = html[pos..].find('>') else {
+            break;
+        };
+        let tag_end = pos + rel_end;
+        let tag = &html[pos..=tag_end];
+        if find_ci(tag, &format!("{}=\"{}\"", attr_key, attr_val)).is_some()
+            || find_ci(tag, &format!("{}='{}'", attr_key, attr_val)).is_some()
+        {
+            if let Some(val) = extract_attr(tag, "content") {
+                if !val.is_empty() {
+                    values.push(val);
+                }
+            }
+        }
+        i = tag_end + 1;
+    }
+    values
+}
+
+/// Collect all `content` values from `<meta property="...">` tags.
+pub(crate) fn collect_meta_property_values(html: &str, property: &str) -> Vec<String> {
+    collect_meta_attr_values(html, "property", property)
+}
+
+/// Extract a JSON-LD field as a list of strings (array of strings, or a single string).
+/// When `split_commas` is true, a string value is split on commas.
+pub(crate) fn extract_json_ld_string_list(
+    html: &str,
+    field: &str,
+    split_commas: bool,
+) -> Option<Vec<String>> {
+    for json in iter_json_ld_blocks(html) {
+        if let Some(val) = json.get(field) {
+            if let Some(arr) = val.as_array() {
+                let items: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !items.is_empty() {
+                    return Some(items);
+                }
+            }
+            if let Some(s) = val.as_str() {
+                if split_commas {
+                    let items: Vec<String> = s
+                        .split(',')
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty())
+                        .collect();
+                    if !items.is_empty() {
+                        return Some(items);
+                    }
+                } else if !s.is_empty() {
+                    return Some(vec![s.to_string()]);
+                }
+            }
         }
     }
     None
@@ -140,5 +195,17 @@ mod tests {
     fn extract_html_lang_reads_lang_attribute() {
         let html = r#"<html lang="en-US"><head></head><body></body></html>"#;
         assert_eq!(extract_html_lang(html), Some("en-US".into()));
+    }
+
+    #[test]
+    fn collect_meta_property_values_gathers_all() {
+        let html = r#"<head>
+            <meta property="article:tag" content="Rust">
+            <meta property="article:tag" content="Markdown">
+        </head>"#;
+        assert_eq!(
+            collect_meta_property_values(html, "article:tag"),
+            vec!["Rust".to_string(), "Markdown".to_string()]
+        );
     }
 }

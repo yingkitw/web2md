@@ -70,8 +70,6 @@ pub struct BrowserOptions {
     pub timeout: Duration,
     /// User-Agent string
     pub user_agent: String,
-    /// Follow redirects
-    pub follow_redirects: bool,
     /// Execute inline `<script>` blocks via the built-in JS interpreter,
     /// capturing `document.write` output into the page.
     pub enable_javascript: bool,
@@ -100,7 +98,6 @@ impl Default for BrowserOptions {
         Self {
             timeout: DEFAULT_TIMEOUT,
             user_agent: DEFAULT_USER_AGENT.to_string(),
-            follow_redirects: true,
             enable_javascript: false,
             cookies: Vec::new(),
             headers: Vec::new(),

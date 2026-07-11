@@ -2,10 +2,10 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::html_meta::{
-    extract_attr, extract_html_lang, extract_json_ld_field, extract_link_rel, extract_meta_content,
-    iter_json_ld_blocks,
+    collect_meta_property_values, extract_attr, extract_html_lang, extract_json_ld_field,
+    extract_json_ld_string_list, extract_link_rel, extract_meta_content, iter_json_ld_blocks,
 };
-use crate::html_util::find_ci;
+use crate::html_util::{find_ci, strip_html_tags};
 use crate::{Browser, BrowserOptions, PageToMarkdown};
 
 /// MCP tool request schema
@@ -27,34 +27,13 @@ pub struct McpRequest {
 pub struct McpResponse {
     pub url: String,
     pub markdown: String,
-    pub title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub published_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub headline: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub site_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub keywords: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub categories: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub excerpt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub canonical_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub language: Option<String>,
+    #[serde(flatten)]
+    pub meta: PageMetadata,
 }
 
 /// Metadata extracted from an HTML page.
 /// Used by both the MCP server and the CLI `--format json` output.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize, Clone)]
 pub struct PageMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -139,6 +118,15 @@ impl PageMetadata {
     }
 }
 
+/// Truncate `text` to `max` bytes and append a `[truncated]` marker.
+pub fn truncate_with_marker(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        text.to_string()
+    } else {
+        format!("{}\n\n[truncated]", &text[..max])
+    }
+}
+
 /// Escape double quotes and backslashes in a YAML string value.
 fn escape_yaml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -198,9 +186,7 @@ impl McpServer {
         markdown = PageToMarkdown::absolutize_links(&markdown, &req.url);
 
         if let Some(max) = req.max_length {
-            if markdown.len() > max {
-                markdown = format!("{}\n\n[truncated]", &markdown[..max]);
-            }
+            markdown = truncate_with_marker(&markdown, max);
         }
 
         let meta = extract_metadata(&html);
@@ -208,18 +194,7 @@ impl McpServer {
         Ok(McpResponse {
             url: req.url,
             markdown,
-            title: meta.title,
-            description: meta.description,
-            author: meta.author,
-            published_date: meta.published_date,
-            image: meta.image,
-            headline: meta.headline,
-            site_name: meta.site_name,
-            keywords: meta.keywords,
-            categories: meta.categories,
-            excerpt: meta.excerpt,
-            canonical_url: meta.canonical_url,
-            language: meta.language,
+            meta,
         })
     }
 }
@@ -288,118 +263,34 @@ fn extract_json_ld_image(html: &str) -> Option<String> {
 /// Checks in order: multiple `<meta property="article:tag">` tags, `<meta name="keywords">`,
 /// and JSON-LD `keywords` (string, array, or comma-separated).
 fn extract_keywords(html: &str) -> Option<Vec<String>> {
-    let mut keywords = Vec::new();
-
-    // Collect all <meta property="article:tag"> values
-    let mut i = 0;
-    while i < html.len() {
-        if let Some(pos) = find_ci(&html[i..], "<meta") {
-            let pos = i + pos;
-            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
-            let tag = &html[pos..=tag_end];
-            if find_ci(tag, "property=\"article:tag\"").is_some()
-                || find_ci(tag, "property='article:tag'").is_some()
-            {
-                if let Some(val) = extract_attr(tag, "content") {
-                    if !val.is_empty() {
-                        keywords.push(val);
-                    }
-                }
-            }
-            i = tag_end + 1;
-        } else {
-            break;
-        }
-    }
-
+    let keywords = collect_meta_property_values(html, "article:tag");
     if !keywords.is_empty() {
         return Some(keywords);
     }
 
-    // Fallback: <meta name="keywords"> (comma-separated)
     if let Some(kw_str) = extract_meta_content(html, "name", "keywords") {
-        let tags: Vec<String> = kw_str.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let tags: Vec<String> = kw_str
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         if !tags.is_empty() {
             return Some(tags);
         }
     }
 
-    // Fallback: JSON-LD keywords (string, array)
-    for json in iter_json_ld_blocks(html) {
-        if let Some(kw) = json.get("keywords") {
-            if let Some(arr) = kw.as_array() {
-                let tags: Vec<String> = arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                if !tags.is_empty() {
-                    return Some(tags);
-                }
-            }
-            if let Some(s) = kw.as_str() {
-                let tags: Vec<String> = s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
-                if !tags.is_empty() {
-                    return Some(tags);
-                }
-            }
-        }
-    }
-
-    None
+    extract_json_ld_string_list(html, "keywords", true)
 }
 
 /// Extract article categories/sections from HTML.
 /// Checks in order: multiple `<meta property="article:section">` tags,
 /// then JSON-LD `articleSection` (string or array).
 fn extract_categories(html: &str) -> Option<Vec<String>> {
-    let mut categories = Vec::new();
-
-    let mut i = 0;
-    while i < html.len() {
-        if let Some(pos) = find_ci(&html[i..], "<meta") {
-            let pos = i + pos;
-            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
-            let tag = &html[pos..=tag_end];
-            if find_ci(tag, "property=\"article:section\"").is_some()
-                || find_ci(tag, "property='article:section'").is_some()
-            {
-                if let Some(val) = extract_attr(tag, "content") {
-                    if !val.is_empty() {
-                        categories.push(val);
-                    }
-                }
-            }
-            i = tag_end + 1;
-        } else {
-            break;
-        }
-    }
-
+    let categories = collect_meta_property_values(html, "article:section");
     if !categories.is_empty() {
         return Some(categories);
     }
-
-    for json in iter_json_ld_blocks(html) {
-        if let Some(section) = json.get("articleSection") {
-            if let Some(arr) = section.as_array() {
-                let cats: Vec<String> = arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                if !cats.is_empty() {
-                    return Some(cats);
-                }
-            }
-            if let Some(s) = section.as_str() {
-                if !s.is_empty() {
-                    return Some(vec![s.to_string()]);
-                }
-            }
-        }
-    }
-
-    None
+    extract_json_ld_string_list(html, "articleSection", false)
 }
 
 /// Extract `<title>` text from HTML.
@@ -461,21 +352,6 @@ fn truncate_excerpt(text: &str) -> String {
     format!("{}…", trimmed[..end].trim_end())
 }
 
-fn strip_html_tags(html: &str) -> String {
-    let mut out = String::with_capacity(html.len());
-    let mut in_tag = false;
-    for c in html.chars() {
-        if c == '<' {
-            in_tag = true;
-        } else if c == '>' {
-            in_tag = false;
-        } else if !in_tag {
-            out.push(c);
-        }
-    }
-    out
-}
-
 fn extract_language(html: &str) -> Option<String> {
     extract_html_lang(html)
         .or_else(|| extract_meta_content(html, "property", "og:locale"))
@@ -528,10 +404,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.title, Some("Test Page".to_string()));
+        assert_eq!(resp.meta.title, Some("Test Page".to_string()));
         assert!(resp.markdown.contains("Hello"));
         assert!(resp.markdown.contains("World"));
-        assert_eq!(resp.published_date, None);
+        assert_eq!(resp.meta.published_date, None);
         mock.assert_async().await;
     }
 
@@ -564,10 +440,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.title, Some("Article Title".to_string()));
-        assert_eq!(resp.description, Some("A test article about Rust".to_string()));
-        assert_eq!(resp.author, Some("Jane Doe".to_string()));
-        assert_eq!(resp.published_date, Some("2025-01-15T08:30:00Z".to_string()));
+        assert_eq!(resp.meta.title, Some("Article Title".to_string()));
+        assert_eq!(resp.meta.description, Some("A test article about Rust".to_string()));
+        assert_eq!(resp.meta.author, Some("Jane Doe".to_string()));
+        assert_eq!(resp.meta.published_date, Some("2025-01-15T08:30:00Z".to_string()));
         mock.assert_async().await;
     }
 
@@ -597,9 +473,9 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.description, Some("OG only description".to_string()));
-        assert_eq!(resp.author, None);
-        assert_eq!(resp.published_date, None);
+        assert_eq!(resp.meta.description, Some("OG only description".to_string()));
+        assert_eq!(resp.meta.author, None);
+        assert_eq!(resp.meta.published_date, None);
         mock.assert_async().await;
     }
 
@@ -626,10 +502,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.title, None);
-        assert_eq!(resp.description, None);
-        assert_eq!(resp.author, None);
-        assert_eq!(resp.published_date, None);
+        assert_eq!(resp.meta.title, None);
+        assert_eq!(resp.meta.description, None);
+        assert_eq!(resp.meta.author, None);
+        assert_eq!(resp.meta.published_date, None);
         mock.assert_async().await;
     }
 
@@ -656,7 +532,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.published_date, Some("2024-06-01".to_string()));
+        assert_eq!(resp.meta.published_date, Some("2024-06-01".to_string()));
         mock.assert_async().await;
     }
 
@@ -683,7 +559,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.published_date, Some("2023-12-25T10:00:00+00:00".to_string()));
+        assert_eq!(resp.meta.published_date, Some("2023-12-25T10:00:00+00:00".to_string()));
         mock.assert_async().await;
     }
 
@@ -710,7 +586,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.published_date, Some("2025-03-20T12:00:00Z".to_string()));
+        assert_eq!(resp.meta.published_date, Some("2025-03-20T12:00:00Z".to_string()));
         mock.assert_async().await;
     }
 
@@ -1033,17 +909,7 @@ mod tests {
     fn frontmatter_without_url() {
         let meta = PageMetadata {
             title: Some("Title Only".to_string()),
-            description: None,
-            author: None,
-            published_date: None,
-            image: None,
-            headline: None,
-            site_name: None,
-            keywords: None,
-            categories: None,
-            excerpt: None,
-            canonical_url: None,
-            language: None,
+            ..Default::default()
         };
         let fm = meta.to_frontmatter(None).unwrap();
         assert!(fm.contains("title: \"Title Only\""));
@@ -1052,20 +918,7 @@ mod tests {
 
     #[test]
     fn frontmatter_empty_metadata_returns_none() {
-        let meta = PageMetadata {
-            title: None,
-            description: None,
-            author: None,
-            published_date: None,
-            image: None,
-            headline: None,
-            site_name: None,
-            keywords: None,
-            categories: None,
-            excerpt: None,
-            canonical_url: None,
-            language: None,
-        };
+        let meta = PageMetadata::default();
         assert!(meta.to_frontmatter(None).is_none());
     }
 
@@ -1073,17 +926,7 @@ mod tests {
     fn frontmatter_escapes_quotes() {
         let meta = PageMetadata {
             title: Some("Title with \"quotes\"".to_string()),
-            description: None,
-            author: None,
-            published_date: None,
-            image: None,
-            headline: None,
-            site_name: None,
-            keywords: None,
-            categories: None,
-            excerpt: None,
-            canonical_url: None,
-            language: None,
+            ..Default::default()
         };
         let fm = meta.to_frontmatter(None).unwrap();
         assert!(fm.contains("title: \"Title with \\\"quotes\\\"\""));
@@ -1093,17 +936,7 @@ mod tests {
     fn frontmatter_escapes_backslashes() {
         let meta = PageMetadata {
             title: Some("Path\\with\\backslashes".to_string()),
-            description: None,
-            author: None,
-            published_date: None,
-            image: None,
-            headline: None,
-            site_name: None,
-            keywords: None,
-            categories: None,
-            excerpt: None,
-            canonical_url: None,
-            language: None,
+            ..Default::default()
         };
         let fm = meta.to_frontmatter(None).unwrap();
         assert!(fm.contains("title: \"Path\\\\with\\\\backslashes\""));
