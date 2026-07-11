@@ -1,8 +1,9 @@
 use std::time::Duration;
 use url::Url;
 use web2md::{
-    extract_feed_links, extract_metadata, normalize_crawl_url, parse_sitemap_urls,
-    same_origin_links, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+    extract_feed_links, extract_metadata, feed_to_markdown, normalize_crawl_url, parse_feed,
+    parse_sitemap_urls, same_origin_links, Browser, BrowserOptions, McpRequest, McpServer,
+    PageToMarkdown,
 };
 
 #[tokio::test]
@@ -286,6 +287,7 @@ async fn json_output_format_emits_structured_json() {
             <meta name="author" content="Test Author">
             <meta property="article:published_time" content="2025-07-04T12:00:00Z">
             <meta property="og:url" content="https://example.com/json-canonical">
+            <meta property="article:section" content="Testing">
             <link rel="canonical" href="https://example.com/json">
         </head><body><h1>Heading</h1><p>Body content for JSON with enough words to populate the excerpt metadata field.</p></body></html>"#)
         .create_async()
@@ -302,6 +304,7 @@ async fn json_output_format_emits_structured_json() {
         "description": meta.description,
         "author": meta.author,
         "published_date": meta.published_date,
+        "categories": meta.categories,
         "excerpt": meta.excerpt,
         "canonical_url": meta.canonical_url,
         "language": meta.language,
@@ -314,6 +317,7 @@ async fn json_output_format_emits_structured_json() {
     assert!(json_str.contains("2025-07-04T12:00:00Z"));
     assert!(json_str.contains("json-canonical"));
     assert!(json_str.contains("\"language\":\"en\""));
+    assert!(json_str.contains("Testing"));
     assert!(json_str.contains("Body content for JSON"));
     mock.assert_async().await;
 }
@@ -365,6 +369,75 @@ async fn feed_discovery_from_html_page() {
     assert_eq!(feeds.len(), 2);
     assert!(feeds.contains(&"/blog/rss.xml".to_string()));
     assert!(feeds.contains(&"/blog/atom.xml".to_string()));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn feed_command_parses_rss_to_markdown() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/rss.xml")
+        .with_status(200)
+        .with_header("content-type", "application/rss+xml")
+        .with_body(r#"<?xml version="1.0"?>
+<rss version="2.0"><channel>
+  <title>Test Feed</title>
+  <link>https://example.com</link>
+  <item>
+    <title>Hello RSS</title>
+    <link>https://example.com/hello</link>
+    <pubDate>Sat, 11 Jul 2026 12:00:00 GMT</pubDate>
+    <description>A short summary</description>
+  </item>
+</channel></rss>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let xml = browser.fetch(&format!("{}/rss.xml", server.url())).await.unwrap();
+    let feed = parse_feed(&xml).expect("should parse RSS");
+    let md = feed_to_markdown(&feed);
+
+    assert_eq!(feed.title.as_deref(), Some("Test Feed"));
+    assert_eq!(feed.entries.len(), 1);
+    assert!(md.contains("# Test Feed"));
+    assert!(md.contains("## [Hello RSS](https://example.com/hello)"));
+    assert!(md.contains("A short summary"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn feed_command_parses_atom() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/atom.xml")
+        .with_status(200)
+        .with_header("content-type", "application/atom+xml")
+        .with_body(r#"<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Atom Test</title>
+  <link href="https://example.com/" rel="alternate"/>
+  <entry>
+    <title>Atom Entry</title>
+    <link href="https://example.com/atom-entry"/>
+    <updated>2026-07-11T10:00:00Z</updated>
+    <summary>Atom summary text</summary>
+  </entry>
+</feed>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let xml = browser.fetch(&format!("{}/atom.xml", server.url())).await.unwrap();
+    let feed = parse_feed(&xml).expect("should parse Atom");
+
+    assert_eq!(feed.title.as_deref(), Some("Atom Test"));
+    assert_eq!(feed.link.as_deref(), Some("https://example.com/"));
+    assert_eq!(feed.entries[0].title.as_deref(), Some("Atom Entry"));
+    assert_eq!(
+        feed.entries[0].link.as_deref(),
+        Some("https://example.com/atom-entry")
+    );
     mock.assert_async().await;
 }
 

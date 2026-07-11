@@ -43,6 +43,8 @@ pub struct McpResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keywords: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_url: Option<String>,
@@ -70,6 +72,8 @@ pub struct PageMetadata {
     pub site_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub categories: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,6 +117,10 @@ impl PageMetadata {
             let items: Vec<String> = kw.iter().map(|k| format!("  - \"{}\"", escape_yaml_string(k))).collect();
             lines.push(format!("keywords:\n{}", items.join("\n")));
         }
+        if let Some(ref cats) = self.categories {
+            let items: Vec<String> = cats.iter().map(|c| format!("  - \"{}\"", escape_yaml_string(c))).collect();
+            lines.push(format!("categories:\n{}", items.join("\n")));
+        }
         if let Some(ref excerpt) = self.excerpt {
             lines.push(format!("excerpt: \"{}\"", escape_yaml_string(excerpt)));
         }
@@ -136,7 +144,7 @@ fn escape_yaml_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Extract metadata (title, description, author, publication date, image, headline, site name, keywords, excerpt, canonical URL, language) from HTML.
+/// Extract metadata (title, description, author, publication date, image, headline, site name, keywords, categories, excerpt, canonical URL, language) from HTML.
 pub fn extract_metadata(html: &str) -> PageMetadata {
     let title = extract_title(html);
     let description = extract_meta_content(html, "name", "description")
@@ -149,6 +157,7 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
     let headline = extract_json_ld_field(html, "headline");
     let site_name = extract_meta_content(html, "property", "og:site_name");
     let keywords = extract_keywords(html);
+    let categories = extract_categories(html);
     let excerpt = extract_excerpt(html);
     let canonical_url = extract_meta_content(html, "property", "og:url")
         .or_else(|| extract_link_rel(html, "canonical"));
@@ -162,6 +171,7 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         headline,
         site_name,
         keywords,
+        categories,
         excerpt,
         canonical_url,
         language,
@@ -206,6 +216,7 @@ impl McpServer {
             headline: meta.headline,
             site_name: meta.site_name,
             keywords: meta.keywords,
+            categories: meta.categories,
             excerpt: meta.excerpt,
             canonical_url: meta.canonical_url,
             language: meta.language,
@@ -329,6 +340,60 @@ fn extract_keywords(html: &str) -> Option<Vec<String>> {
                 let tags: Vec<String> = s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
                 if !tags.is_empty() {
                     return Some(tags);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract article categories/sections from HTML.
+/// Checks in order: multiple `<meta property="article:section">` tags,
+/// then JSON-LD `articleSection` (string or array).
+fn extract_categories(html: &str) -> Option<Vec<String>> {
+    let mut categories = Vec::new();
+
+    let mut i = 0;
+    while i < html.len() {
+        if let Some(pos) = find_ci(&html[i..], "<meta") {
+            let pos = i + pos;
+            let tag_end = html[pos..].find('>').map(|e| pos + e)?;
+            let tag = &html[pos..=tag_end];
+            if find_ci(tag, "property=\"article:section\"").is_some()
+                || find_ci(tag, "property='article:section'").is_some()
+            {
+                if let Some(val) = extract_attr(tag, "content") {
+                    if !val.is_empty() {
+                        categories.push(val);
+                    }
+                }
+            }
+            i = tag_end + 1;
+        } else {
+            break;
+        }
+    }
+
+    if !categories.is_empty() {
+        return Some(categories);
+    }
+
+    for json in iter_json_ld_blocks(html) {
+        if let Some(section) = json.get("articleSection") {
+            if let Some(arr) = section.as_array() {
+                let cats: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !cats.is_empty() {
+                    return Some(cats);
+                }
+            }
+            if let Some(s) = section.as_str() {
+                if !s.is_empty() {
+                    return Some(vec![s.to_string()]);
                 }
             }
         }
@@ -840,6 +905,53 @@ mod tests {
     }
 
     #[test]
+    fn extract_metadata_article_section() {
+        let html = r#"<html><head>
+            <meta property="article:section" content="Technology">
+            <meta property="article:section" content="Open Source">
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(
+            meta.categories,
+            Some(vec!["Technology".to_string(), "Open Source".to_string()])
+        );
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_article_section_string() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"Article","articleSection":"Science"}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.categories, Some(vec!["Science".to_string()]));
+    }
+
+    #[test]
+    fn extract_metadata_json_ld_article_section_array() {
+        let html = r#"<html><head><script type="application/ld+json">{"@type":"NewsArticle","articleSection":["Politics","World"]}</script></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(
+            meta.categories,
+            Some(vec!["Politics".to_string(), "World".to_string()])
+        );
+    }
+
+    #[test]
+    fn extract_metadata_article_section_takes_priority_over_json_ld() {
+        let html = r#"<html><head>
+            <meta property="article:section" content="From Meta">
+            <script type="application/ld+json">{"articleSection":"From JSON-LD"}</script>
+        </head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        assert_eq!(meta.categories, Some(vec!["From Meta".to_string()]));
+    }
+
+    #[test]
+    fn extract_metadata_no_categories_returns_none() {
+        let html = "<html><body><p>No metadata</p></body></html>";
+        let meta = extract_metadata(html);
+        assert_eq!(meta.categories, None);
+    }
+
+    #[test]
     fn extract_metadata_excerpt_from_first_paragraph() {
         let html = r#"<html><body><p>This is the opening paragraph with enough words to qualify as a page excerpt for agents and citations.</p><p>Second paragraph.</p></body></html>"#;
         let meta = extract_metadata(html);
@@ -894,6 +1006,7 @@ mod tests {
             headline: Some("Breaking News".to_string()),
             site_name: Some("Tech Blog".to_string()),
             keywords: Some(vec!["Rust".to_string(), "Markdown".to_string()]),
+            categories: Some(vec!["Technology".to_string(), "Rust".to_string()]),
             excerpt: Some("Short summary".to_string()),
             canonical_url: Some("https://example.com/page".to_string()),
             language: Some("en".to_string()),
@@ -909,6 +1022,7 @@ mod tests {
         assert!(fm.contains("headline: \"Breaking News\""));
         assert!(fm.contains("site_name: \"Tech Blog\""));
         assert!(fm.contains("keywords:\n  - \"Rust\"\n  - \"Markdown\""));
+        assert!(fm.contains("categories:\n  - \"Technology\"\n  - \"Rust\""));
         assert!(fm.contains("excerpt: \"Short summary\""));
         assert!(fm.contains("canonical_url: \"https://example.com/page\""));
         assert!(fm.contains("language: \"en\""));
@@ -926,6 +1040,7 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            categories: None,
             excerpt: None,
             canonical_url: None,
             language: None,
@@ -946,6 +1061,7 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            categories: None,
             excerpt: None,
             canonical_url: None,
             language: None,
@@ -964,6 +1080,7 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            categories: None,
             excerpt: None,
             canonical_url: None,
             language: None,
@@ -983,6 +1100,7 @@ mod tests {
             headline: None,
             site_name: None,
             keywords: None,
+            categories: None,
             excerpt: None,
             canonical_url: None,
             language: None,

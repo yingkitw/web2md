@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use url::Url;
 use web2md::{
-    extract_feed_links, extract_metadata, normalize_crawl_url, parse_sitemap_urls, Browser,
-    BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+    extract_feed_links, extract_metadata, feed_to_markdown, normalize_crawl_url, parse_feed,
+    parse_sitemap_urls, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -43,6 +43,8 @@ struct CliJsonOutput {
     site_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     keywords: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    categories: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     excerpt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,6 +198,29 @@ enum Commands {
         /// Also check the HTML page for RSS/Atom feed links
         #[arg(long)]
         feeds: bool,
+    },
+    /// Fetch an RSS or Atom feed and convert entries to Markdown
+    Feed {
+        /// Feed URL (RSS 2.0 or Atom)
+        url: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Maximum number of entries to include (default: all)
+        #[arg(long)]
+        max_entries: Option<usize>,
+        /// Emit structured JSON instead of Markdown
+        #[arg(long)]
+        json: bool,
+        /// Output file path (default: stdout)
+        #[arg(short, long)]
+        output: Option<String>,
     },
     /// Batch convert multiple URLs to Markdown from a file
     Batch {
@@ -370,6 +395,7 @@ async fn main() -> Result<()> {
                             headline: meta.headline,
                             site_name: meta.site_name,
                             keywords: meta.keywords,
+                            categories: meta.categories,
                             excerpt: meta.excerpt,
                             canonical_url: meta.canonical_url,
                             language: meta.language,
@@ -506,6 +532,75 @@ async fn main() -> Result<()> {
 
             if found_urls.is_empty() {
                 eprintln!("No sitemap or feed URLs found.");
+            }
+        }
+        Some(Commands::Feed {
+            url,
+            timeout,
+            cookie,
+            header,
+            max_entries,
+            json,
+            output: output_file,
+        }) => {
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            let browser = Browser::new(options)?;
+
+            let xml = browser.fetch(&url).await.context("Failed to fetch feed")?;
+            let mut feed = parse_feed(&xml).context("URL did not contain a valid RSS or Atom feed")?;
+            if let Some(max) = max_entries {
+                feed.entries.truncate(max);
+            }
+
+            let result = if json {
+                #[derive(Serialize)]
+                struct FeedJsonEntry {
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    title: Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    link: Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    published: Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    summary: Option<String>,
+                }
+                #[derive(Serialize)]
+                struct FeedJson {
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    title: Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    link: Option<String>,
+                    entries: Vec<FeedJsonEntry>,
+                }
+                let output = FeedJson {
+                    title: feed.title,
+                    link: feed.link,
+                    entries: feed
+                        .entries
+                        .into_iter()
+                        .map(|e| FeedJsonEntry {
+                            title: e.title,
+                            link: e.link,
+                            published: e.published,
+                            summary: e.summary,
+                        })
+                        .collect(),
+                };
+                serde_json::to_string_pretty(&output)?
+            } else {
+                feed_to_markdown(&feed)
+            };
+
+            if let Some(path) = output_file {
+                std::fs::write(&path, &result)
+                    .with_context(|| format!("Failed to write output to {}", path))?;
+            } else {
+                println!("{}", result);
             }
         }
         Some(Commands::Batch {

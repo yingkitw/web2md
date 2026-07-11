@@ -10,11 +10,13 @@ main.rs
   │                     ├── --depth N → BFS crawl via crawl.rs (same-origin links) → multiple Markdown outputs
   │                     └── --format json → extract_metadata → structured JSON output
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
+  ├── feed command    → Browser → parse_feed → feed_to_markdown (or JSON) → stdout / file
   ├── batch command   → Browser → run_inline_scripts → PageToMarkdown → stdout or output directory
   └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
 
 lib.rs
   ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction, run_inline_scripts() (gated by enable_javascript), URL blacklist filtering on secondary fetches
+  ├── feed.rs      : RSS 2.0 / Atom feed parser (`parse_feed`) and Markdown converter (`feed_to_markdown`)
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
   ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser
@@ -28,7 +30,7 @@ lib.rs
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
   ├── markdown.rs  : PageToMarkdown — HTML→Markdown pipeline (main-content heuristics, JSON-LD/OG structured fallback, forum comments, dedup, link absolutization, --exclude-selector)
-  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
+  └── mcp.rs       : JSON-RPC server wrapper, metadata extraction (title, description, author, published_date, image, headline, site_name, keywords, categories, excerpt, canonical_url, language), PageMetadata struct with to_frontmatter() for YAML output, extract_metadata() public function
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)

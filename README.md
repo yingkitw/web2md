@@ -29,7 +29,7 @@ HTML is built for browsers, not for reasoning. A typical article page carries fa
 Agents consume the web through tools. Every page fetch costs context window, latency, and money. Web2MD is built around that constraint:
 
 - **Token efficiency** — `--main-content` extraction, noise stripping, and deduplication shrink pages before they hit the model. An agent can read several articles in the space one raw HTML dump would occupy.
-- **MCP-native** — Run `web2md mcp` as a stdio JSON-RPC server. Agents call a single `fetch` tool and receive Markdown plus structured metadata (title, author, date, description, excerpt, canonical URL, language, keywords) in one response.
+- **MCP-native** — Run `web2md mcp` as a stdio JSON-RPC server. Agents call a single `fetch` tool and receive Markdown plus structured metadata (title, author, date, description, excerpt, canonical URL, language, keywords, categories) in one response.
 - **Actionable links** — Relative URLs are absolutized so an agent can follow numbered links in terminal browse mode or chain fetches across a site without guessing base paths.
 - **Structured output** — `--format json` and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
 - **Polite crawling** — `--delay`, caching (`--cache-ttl`), `robots.txt` respect, and batch mode let research agents process URL lists without hammering servers or re-fetching the same page.
@@ -67,6 +67,9 @@ cargo run -- fetch https://example.com --javascript --wait 2000
 
 # Crawl same-origin links up to 2 hops and write Markdown files
 cargo run -- fetch https://example.com --depth 2 --output ./pages
+
+# Fetch an RSS/Atom feed and convert entries to Markdown
+cargo run -- feed https://example.com/rss.xml
 
 # Interactive terminal browser (explicit)
 cargo run -- browse https://example.com
@@ -116,22 +119,24 @@ Example Cursor MCP config:
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
-- **Metadata extraction**: Title, description, author (meta tag or JSON-LD), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), and language (html lang, og:locale, JSON-LD inLanguage) in MCP response and `--format json` output
+- **Metadata extraction**: Title, description, author (meta tag or JSON-LD), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), and language (html lang, og:locale, JSON-LD inLanguage) in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
 - **Plain-text output** (`--format text`): Strip Markdown syntax for archival pipelines and NLP ingestion
 - **Comments extraction**: Detects forum/thread pages (Reddit, WordPress, vBulletin) and extracts comments with author attribution, nesting depth, and blockquote formatting
 - **Link URL absolutization**: Converts relative URLs in Markdown links to absolute URLs using the page URL as base, so links are usable in LLM contexts
 - **Sitemap/feed discovery** (`sitemap` subcommand): Fetches `sitemap.xml` from a website and lists all discovered URLs; optionally discovers RSS/Atom feed links from the HTML page (`--feeds` flag)
+- **Feed parsing** (`feed` subcommand): Fetches an RSS 2.0 or Atom feed and converts entries to Markdown (or `--json`); supports `--max-entries` and `--output`
 - **Batch processing** (`batch` subcommand): Reads URLs from a file (one per line, `#` comments supported) and converts each to Markdown; use `--output <dir>` to write files to a directory
 - **Output to file** (`--output` flag): Write `fetch` output to a file instead of stdout
-- **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords, excerpt, canonical URL, language) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
+- **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords, categories, excerpt, canonical URL, language) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
 - **CSS selector targeting** (`--exclude-selector` flag): Strip HTML elements matching `.class` or `#id` selectors before conversion — remove ads, sidebars, and other noise elements
 - **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, and `requestAnimationFrame` when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
 - **Post-load wait** (`--wait` MS): Pause after fetch before processing; caps which timer callbacks run (Firecrawl/Jina pattern for JS-heavy pages)
 
 ## Architecture
 
-- **Browser** (`browser.rs`): HTTP client with iframe inlining, caching, sitemap/feed parsing, robots.txt checks, and URL blacklist filtering.
+- **Browser** (`browser.rs`): HTTP client with iframe inlining, caching, sitemap/feed link discovery, robots.txt checks, and URL blacklist filtering.
+- **Feed** (`feed.rs`): RSS 2.0 / Atom parser and Markdown converter for the `feed` subcommand.
 - **Crawl** (`crawl.rs`): Same-origin link extraction and URL normalization for `--depth N` recursive crawl.
 - **Robots** (`robots.rs`): `robots.txt` parser (Disallow, Crawl-delay) with per-origin cache.
 - **URL blacklist** (`url_blacklist.rs`): Built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` pattern matching.
@@ -140,7 +145,7 @@ Example Cursor MCP config:
 - **HTML-to-Markdown** (`html_to_md.rs`): In-house converter via `scraper`/html5ever DOM walk (headings, links, images, lists, tables, code blocks, inline formatting).
 - **PageToMarkdown** (`markdown.rs`): Pre/post-processing pipeline — Trafilatura-style main-content fallback chain, noise stripping, code language injection, dedup, forum comments, link absolutization, CSS selector exclusion.
 - **McpServer** (`mcp.rs`): JSON-RPC server wrapper exposing a `fetch` tool with metadata extraction.
-- **CLI** (`main.rs`): `fetch` (one-shot), `browse` (interactive), `sitemap` (URL discovery), `batch` (bulk convert), `mcp` (server). Default mode is `browse`.
+- **CLI** (`main.rs`): `fetch` (one-shot), `browse` (interactive), `sitemap` (URL discovery), `feed` (RSS/Atom → Markdown), `batch` (bulk convert), `mcp` (server). Default mode is `browse`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 

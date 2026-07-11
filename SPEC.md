@@ -104,6 +104,15 @@ web2md sitemap <URL> [FLAGS]
   --header "Name: Val" Send custom header (repeatable)
   --feeds              Also check HTML page for RSS/Atom feed links
 
+# Fetch RSS/Atom feed and convert entries to Markdown
+web2md feed <URL> [FLAGS]
+  --timeout SECONDS    Request timeout (default: 30)
+  --cookie NAME=VAL    Send cookie (repeatable)
+  --header "Name: Val" Send custom header (repeatable)
+  --max-entries N      Limit number of entries included
+  --json               Emit structured JSON instead of Markdown
+  -o, --output FILE    Write output to file instead of stdout
+
 # Batch convert multiple URLs
 web2md batch <FILE> [FLAGS]
   --timeout SECONDS    Request timeout (default: 30)
@@ -154,13 +163,14 @@ web2md mcp
   "headline": "Breaking News Story",
   "site_name": "Tech Blog",
   "keywords": ["Rust", "Web Scraping", "Markdown"],
+  "categories": ["Technology", "Open Source"],
   "excerpt": "Opening paragraph text truncated to ~160 characters…",
   "canonical_url": "https://example.com/article",
   "language": "en"
 }
 ```
 
-`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `excerpt`, `canonical_url`, and `language` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order). `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`.
+`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `categories`, `excerpt`, `canonical_url`, and `language` are optional — omitted when the page has no corresponding meta tags or structured data. `author` is extracted from `<meta name="author">` or JSON-LD `author` (string or `{"name":"..."}` object). `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, or JSON-LD `datePublished` (in priority order). `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `categories` is extracted from multiple `<meta property="article:section">` tags or JSON-LD `articleSection` (string or array). `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`.
 
 ### CLI `--format json` Output
 
@@ -175,6 +185,7 @@ web2md mcp
   "headline": "Breaking News Story",
   "site_name": "Tech Blog",
   "keywords": ["Rust", "Web Scraping", "Markdown"],
+  "categories": ["Technology", "Open Source"],
   "excerpt": "Opening paragraph text truncated to ~160 characters…",
   "canonical_url": "https://example.com/article",
   "language": "en"

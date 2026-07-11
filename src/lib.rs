@@ -2,6 +2,7 @@ use std::time::Duration;
 
 mod browser;
 mod crawl;
+mod feed;
 mod html_meta;
 mod html_to_md;
 mod html_util;
@@ -13,6 +14,7 @@ mod url_blacklist;
 
 pub use browser::{extract_feed_links, parse_sitemap_urls, Browser, BrowserOptions};
 pub use crawl::{normalize_crawl_url, same_origin_links};
+pub use feed::{feed_to_markdown, parse_feed, Feed, FeedEntry};
 pub use markdown::PageToMarkdown;
 pub use mcp::{extract_metadata, McpRequest, McpServer};
 

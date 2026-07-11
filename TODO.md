@@ -67,6 +67,8 @@
 - [x] Structured content fallback: JSON-LD `articleBody` / `description`, `og:description`, and meta description when main-content heuristics fail
 - [x] Shared `html_meta` module: deduplicated JSON-LD and `<meta>` parsing used by `mcp.rs` and structured content fallback in `markdown.rs`
 - [x] Extended metadata: excerpt (first substantive paragraph), canonical URL (`og:url` / `<link rel="canonical">`), and language (`html lang`, `og:locale`, JSON-LD `inLanguage`)
+- [x] Article categories/sections: `article:section` meta tags and JSON-LD `articleSection` (string or array) in MCP response, `--format json`, and YAML frontmatter
+- [x] RSS/Atom feed parsing: `feed` subcommand fetches RSS 2.0 or Atom feeds and converts entries to Markdown (or `--json`); supports `--max-entries` and `--output`
 
 ## In Progress
 
@@ -76,12 +78,14 @@ _None — all planned features are implemented. See Brainstorming for future ide
 
 ## Brainstorming
 
-_Competitive gaps vs Trafilatura, Firecrawl, and Readability.js:_
+_Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:_
 
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
-- RSS/Atom feed parsing and conversion (discover feed links today; fetch and extract feed entries)
-- Article categories/sections (`article:section`, JSON-LD `articleSection`)
 - Language detection on extracted text content (Trafilatura optional add-on)
 - CSV/XML-TEI export formats for corpus pipelines
+- Extraction quality / confidence score (0.0–1.0) so agents can flag weak extractions for LLM fallback (rs-trafilatura / Firecrawl html-extractor pattern)
+- Page-type classification (article, forum, product, documentation, listing) with type-specific extraction profiles
+- Dublin Core metadata (`DC.title`, `DC.creator`, `DC.date`) as additional fallback for author/title/date
+- JSON Feed (`application/feed+json`) parsing alongside RSS/Atom
