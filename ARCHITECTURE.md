@@ -10,7 +10,8 @@ main.rs
   │                     ├── --depth N → BFS crawl via crawl.rs (same-origin links) → multiple Markdown outputs
   │                     ├── --format json → extract_page_metadata → structured JSON output
   │                     ├── --format csv → extract_page_metadata → Trafilatura-style CSV row
-  │                     └── --format tei → extract_page_metadata → TEI XML document
+  │                     ├── --format tei → extract_page_metadata → TEI XML document
+  │                     └── --format xml → extract_page_metadata → plain `<doc>` XML
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
   ├── feed command    → Browser → parse_feed → feed_to_markdown (or JSON) → stdout / file
   ├── batch command   → Browser → run_inline_scripts → PageToMarkdown → stdout or output directory
@@ -32,7 +33,7 @@ lib.rs
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
   ├── markdown.rs  : PageToMarkdown — HTML→Markdown pipeline; page-type profiles; `extraction_quality()` / `detect_page_type()`; main-content heuristics; forum comments; product JSON-LD details; dedup; link absolutization
-  └── mcp.rs       : JSON-RPC server; `PageMetadata` (serde flatten); `extract_metadata` / `extract_page_metadata` (adds extraction_quality, page_type, whatlang language fallback); `to_csv` / `to_tei`; `truncate_with_marker`
+  └── mcp.rs       : JSON-RPC server; `PageMetadata` (serde flatten); `extract_metadata` / `extract_page_metadata` (quality, page_type, language fallback, simhash fingerprint); `to_csv` / `to_tei` / `to_xml`; `language_matches`; `truncate_with_marker`
 
 main.rs (helpers)
   ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)

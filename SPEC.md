@@ -84,6 +84,8 @@ web2md fetch <URL> [FLAGS]
   --format text        Output plain text (Markdown syntax stripped)
   --format csv         Output Trafilatura-style CSV (header + one data row)
   --format tei         Output XML-TEI document (teiHeader + body paragraphs)
+  --format xml         Output plain Trafilatura-style XML (<doc> + <main>)
+  --lang CODE          Require page language to match ISO 639-1 or 639-3 (e.g. en, eng)
   --render             ANSI colors: bold headings, underlined links, colored code
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
@@ -171,11 +173,12 @@ web2md mcp
   "canonical_url": "https://example.com/article",
   "language": "en",
   "extraction_quality": 0.86,
-  "page_type": "article"
+  "page_type": "article",
+  "fingerprint": "a1b2c3d4e5f60718"
 }
 ```
 
-`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `categories`, `excerpt`, `canonical_url`, `language`, `extraction_quality`, and `page_type` are optional — omitted when the page has no corresponding meta tags or structured data. Title falls back to Dublin Core `DC.title` / `dcterms.title` when `<title>` is absent. `author` is extracted from `<meta name="author">`, JSON-LD `author` (string or `{"name":"..."}` object), or Dublin Core `DC.creator` / `dcterms.creator`. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, JSON-LD `datePublished`, or Dublin Core `DC.date` / `dcterms.date` (in priority order). `description` also falls back to `DC.description` / `dcterms.description`. `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `categories` is extracted from multiple `<meta property="article:section">` tags or JSON-LD `articleSection` (string or array). `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`; when those are absent, `whatlang` detects an ISO 639-3 code from extracted text (minimum length and reliability gates). `extraction_quality` is a 0.0–1.0 confidence score from Markdown length, structure, semantic HTML, metadata, and link density. `page_type` is one of `article`, `forum`, `product`, or `page`.
+`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `categories`, `excerpt`, `canonical_url`, `language`, `extraction_quality`, `page_type`, and `fingerprint` are optional — omitted when the page has no corresponding meta tags or structured data. Title falls back to Dublin Core `DC.title` / `dcterms.title` when `<title>` is absent. `author` is extracted from `<meta name="author">`, JSON-LD `author` (string or `{"name":"..."}` object), or Dublin Core `DC.creator` / `dcterms.creator`. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, JSON-LD `datePublished`, or Dublin Core `DC.date` / `dcterms.date` (in priority order). `description` also falls back to `DC.description` / `dcterms.description`. `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `categories` is extracted from multiple `<meta property="article:section">` tags or JSON-LD `articleSection` (string or array). `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`; when those are absent, `whatlang` detects an ISO 639-3 code from extracted text (minimum length and reliability gates). `extraction_quality` is a 0.0–1.0 confidence score from Markdown length, structure, semantic HTML, metadata, and link density. `page_type` is one of `article`, `forum`, `product`, or `page`. `fingerprint` is a 64-bit simhash of extracted plain text (16 hex chars) for near-duplicate detection. CLI `--lang CODE` rejects pages whose language does not match the requested ISO 639-1 or 639-3 code.
 
 ### CLI `--format json` Output
 
@@ -195,7 +198,8 @@ web2md mcp
   "canonical_url": "https://example.com/article",
   "language": "en",
   "extraction_quality": 0.86,
-  "page_type": "article"
+  "page_type": "article",
+  "fingerprint": "a1b2c3d4e5f60718"
 }
 ```
 
@@ -206,8 +210,8 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
 Trafilatura-style CSV with a header row and one data row:
 
 ```
-url,title,author,published_date,language,page_type,extraction_quality,text
-https://example.com/article,Article Title,Jane Doe,2025-01-15T08:30:00Z,en,article,0.86,"Plain text body..."
+url,title,author,published_date,language,page_type,extraction_quality,fingerprint,text
+https://example.com/article,Article Title,Jane Doe,2025-01-15T08:30:00Z,en,article,0.86,a1b2c3d4e5f60718,"Plain text body..."
 ```
 
 Fields containing commas, quotes, or newlines are RFC 4180–escaped. The `text` column is plain text (Markdown stripped).
@@ -250,7 +254,26 @@ Trafilatura-style TEI XML with metadata in `teiHeader` and plain-text paragraphs
 </TEI>
 ```
 
-Special characters in text and attribute values are XML-escaped. Language, page type, and extraction quality are included when available.
+Special characters in text and attribute values are XML-escaped. Language, page type, extraction quality, and fingerprint are included when available.
+
+### CLI `--format xml` Output
+
+Trafilatura-style plain XML:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<doc>
+  <url>https://example.com/article</url>
+  <title>Article Title</title>
+  <author>Jane Doe</author>
+  <date>2025-01-15T08:30:00Z</date>
+  <language>en</language>
+  <fingerprint>a1b2c3d4e5f60718</fingerprint>
+  <main>
+    <p>Plain text body...</p>
+  </main>
+</doc>
+```
 
 ## HTML Processing Pipeline
 

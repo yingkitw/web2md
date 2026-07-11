@@ -31,7 +31,7 @@ Agents consume the web through tools. Every page fetch costs context window, lat
 - **Token efficiency** — `--main-content` extraction, noise stripping, and deduplication shrink pages before they hit the model. An agent can read several articles in the space one raw HTML dump would occupy.
 - **MCP-native** — Run `web2md mcp` as a stdio JSON-RPC server. Agents call a single `fetch` tool and receive Markdown plus structured metadata (title, author, date, description, excerpt, canonical URL, language, keywords, categories) in one response.
 - **Actionable links** — Relative URLs are absolutized so an agent can follow numbered links in terminal browse mode or chain fetches across a site without guessing base paths.
-- **Structured output** — `--format json`, `--format csv`, `--format tei`, and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
+- **Structured output** — `--format json`, `--format csv`, `--format tei`, `--format xml`, and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
 - **Polite crawling** — `--delay`, caching (`--cache-ttl`), `robots.txt` respect, and batch mode let research agents process URL lists without hammering servers or re-fetching the same page.
 - **Auth for gated content** — Cookies and custom headers (`--cookie`, `--header`) let agents reach documentation, dashboards, or member-only pages when credentials are provided.
 
@@ -64,6 +64,12 @@ cargo run -- fetch https://example.com --format csv
 
 # XML-TEI for corpus pipelines
 cargo run -- fetch https://example.com --format tei
+
+# Plain XML for corpus pipelines
+cargo run -- fetch https://example.com --format xml
+
+# Require English pages only
+cargo run -- fetch https://example.com --lang en
 
 # Add a polite delay between requests (milliseconds)
 cargo run -- fetch https://example.com --delay 500
@@ -126,18 +132,21 @@ Example Cursor MCP config:
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
-- **Metadata extraction**: Title, description, author (meta tag, JSON-LD, or Dublin Core), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), language (html lang, og:locale, JSON-LD inLanguage, or `whatlang` ISO 639-3 fallback on extracted text), extraction quality (0.0–1.0 confidence), and page type (`article` / `forum` / `product` / `page`) in MCP response and `--format json` output
+- **Metadata extraction**: Title, description, author (meta tag, JSON-LD, or Dublin Core), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), language (html lang, og:locale, JSON-LD inLanguage, or `whatlang` ISO 639-3 fallback on extracted text), extraction quality (0.0–1.0 confidence), page type (`article` / `forum` / `product` / `page`), and content fingerprint (64-bit simhash) in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
 - **Plain-text output** (`--format text`): Strip Markdown syntax for archival pipelines and NLP ingestion
 - **CSV output** (`--format csv`): Trafilatura-style single-row CSV (url, title, author, date, language, page_type, quality, text) for corpus pipelines
 - **XML-TEI output** (`--format tei`): Trafilatura-style TEI document with `teiHeader` metadata and paragraph body for corpus pipelines
+- **Plain XML output** (`--format xml`): Trafilatura-style `<doc>` with metadata fields and `<main>` paragraphs
+- **Content fingerprint**: 64-bit simhash of extracted text for near-duplicate detection (JSON, CSV, TEI, XML, frontmatter)
+- **Language filter** (`--lang`): Reject pages whose language (meta or detected) does not match an ISO 639-1/639-3 code
 - **Comments extraction**: Detects forum/thread pages (Reddit, WordPress, vBulletin) and extracts comments with author attribution, nesting depth, and blockquote formatting
 - **Link URL absolutization**: Converts relative URLs in Markdown links to absolute URLs using the page URL as base, so links are usable in LLM contexts
 - **Sitemap/feed discovery** (`sitemap` subcommand): Fetches `sitemap.xml` from a website and lists all discovered URLs; optionally discovers RSS/Atom/JSON Feed links from the HTML page (`--feeds` flag)
 - **Feed parsing** (`feed` subcommand): Fetches an RSS 2.0, Atom, or JSON Feed and converts entries to Markdown (or `--json`); supports `--max-entries` and `--output`
 - **Batch processing** (`batch` subcommand): Reads URLs from a file (one per line, `#` comments supported) and converts each to Markdown; use `--output <dir>` to write files to a directory
 - **Output to file** (`--output` flag): Write `fetch` output to a file instead of stdout
-- **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords, categories, excerpt, canonical URL, language, extraction quality, page type) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
+- **YAML frontmatter** (`--frontmatter` flag): Prepend metadata (title, description, author, date, image, site name, keywords, categories, excerpt, canonical URL, language, extraction quality, page type, fingerprint) as a YAML block at the top of Markdown output — useful for static site generators and LLM context
 - **CSS selector targeting** (`--exclude-selector` flag): Strip HTML elements matching `.class` or `#id` selectors before conversion — remove ads, sidebars, and other noise elements
 - **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, and `requestAnimationFrame` when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
 - **Post-load wait** (`--wait` MS): Pause after fetch before processing; caps which timer callbacks run (Firecrawl/Jina pattern for JS-heavy pages)

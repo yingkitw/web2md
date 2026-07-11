@@ -77,6 +77,9 @@
 - [x] CSV export (`--format csv`): Trafilatura-style header + row (url, title, author, date, language, page_type, quality, text)
 - [x] Page-type extraction profiles: article/product prefer main-content; product keeps images and appends JSON-LD details; forum keeps full thread + comments
 - [x] XML-TEI export (`--format tei`): Trafilatura-style `TEI` document with `teiHeader` metadata and `div type="entry"` body paragraphs
+- [x] Content fingerprint: 64-bit simhash of extracted text in MCP / JSON / CSV / TEI / XML / frontmatter
+- [x] Target-language filter: `--lang` ISO 639-1/639-3 rejects pages whose language does not match
+- [x] Plain XML export (`--format xml`): Trafilatura-style `<doc>` with metadata and `<main>` paragraphs
 
 ## In Progress
 
@@ -91,6 +94,3 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
-- Content fingerprint / simhash for near-duplicate detection across crawls (Trafilatura `fingerprint`)
-- Target-language filter: discard pages whose detected language ≠ requested ISO code
-- Plain Trafilatura-style XML (non-TEI) output alongside `--format tei`

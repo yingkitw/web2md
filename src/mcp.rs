@@ -65,6 +65,9 @@ pub struct PageMetadata {
     /// Coarse page type: `article`, `forum`, `product`, or `page`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page_type: Option<String>,
+    /// 64-bit simhash fingerprint of extracted text (hex), for near-duplicate detection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 impl PageMetadata {
@@ -121,6 +124,9 @@ impl PageMetadata {
         if let Some(ref page_type) = self.page_type {
             lines.push(format!("page_type: \"{}\"", escape_yaml_string(page_type)));
         }
+        if let Some(ref fingerprint) = self.fingerprint {
+            lines.push(format!("fingerprint: \"{}\"", escape_yaml_string(fingerprint)));
+        }
 
         if lines.is_empty() {
             None
@@ -129,20 +135,22 @@ impl PageMetadata {
         }
     }
 
-    /// Attach extraction quality and page type derived from HTML + Markdown.
+    /// Attach extraction quality, page type, language fallback, and content fingerprint.
     pub fn with_content_signals(mut self, html: &str, markdown: &str) -> Self {
         self.extraction_quality = Some(PageToMarkdown::extraction_quality(html, markdown));
         self.page_type = Some(PageToMarkdown::detect_page_type(html).to_string());
         if self.language.is_none() {
             self.language = detect_content_language(markdown);
         }
+        let plain = PageToMarkdown::to_plain_text(markdown);
+        self.fingerprint = Some(content_fingerprint(&plain));
         self
     }
 
     /// Emit a Trafilatura-style CSV document (header + one data row).
     pub fn to_csv(&self, url: &str, text: &str) -> String {
         let mut out = String::from(
-            "url,title,author,published_date,language,page_type,extraction_quality,text\n",
+            "url,title,author,published_date,language,page_type,extraction_quality,fingerprint,text\n",
         );
         out.push_str(&csv_escape(url));
         out.push(',');
@@ -159,6 +167,8 @@ impl PageMetadata {
         if let Some(q) = self.extraction_quality {
             out.push_str(&format!("{:.2}", q));
         }
+        out.push(',');
+        out.push_str(&csv_escape(self.fingerprint.as_deref().unwrap_or("")));
         out.push(',');
         out.push_str(&csv_escape(text));
         out.push('\n');
@@ -211,6 +221,11 @@ impl PageMetadata {
             out.push_str(&xml_escape(pt));
             out.push_str("</idno>\n");
         }
+        if let Some(fp) = &self.fingerprint {
+            out.push_str("                     <idno type=\"fingerprint\">");
+            out.push_str(&xml_escape(fp));
+            out.push_str("</idno>\n");
+        }
         out.push_str(
             "                   </publicationStmt>\n\
                    <sourceDesc>\n\
@@ -250,6 +265,65 @@ impl PageMetadata {
         );
         out
     }
+
+    /// Emit a Trafilatura-style plain XML document (`<doc>` with metadata + `<main>`).
+    pub fn to_xml(&self, url: &str, text: &str) -> String {
+        let mut out = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<doc>\n");
+        out.push_str("  <url>");
+        out.push_str(&xml_escape(url));
+        out.push_str("</url>\n");
+        if let Some(title) = &self.title {
+            out.push_str("  <title>");
+            out.push_str(&xml_escape(title));
+            out.push_str("</title>\n");
+        }
+        if let Some(author) = &self.author {
+            out.push_str("  <author>");
+            out.push_str(&xml_escape(author));
+            out.push_str("</author>\n");
+        }
+        if let Some(date) = &self.published_date {
+            out.push_str("  <date>");
+            out.push_str(&xml_escape(date));
+            out.push_str("</date>\n");
+        }
+        if let Some(site) = &self.site_name {
+            out.push_str("  <sitename>");
+            out.push_str(&xml_escape(site));
+            out.push_str("</sitename>\n");
+        }
+        if let Some(desc) = &self.description {
+            out.push_str("  <description>");
+            out.push_str(&xml_escape(desc));
+            out.push_str("</description>\n");
+        }
+        if let Some(lang) = &self.language {
+            out.push_str("  <language>");
+            out.push_str(&xml_escape(lang));
+            out.push_str("</language>\n");
+        }
+        if let Some(pt) = &self.page_type {
+            out.push_str("  <page_type>");
+            out.push_str(&xml_escape(pt));
+            out.push_str("</page_type>\n");
+        }
+        if let Some(q) = self.extraction_quality {
+            out.push_str(&format!("  <extraction_quality>{:.2}</extraction_quality>\n", q));
+        }
+        if let Some(fp) = &self.fingerprint {
+            out.push_str("  <fingerprint>");
+            out.push_str(&xml_escape(fp));
+            out.push_str("</fingerprint>\n");
+        }
+        out.push_str("  <main>\n");
+        for para in tei_paragraphs(text) {
+            out.push_str("    <p>");
+            out.push_str(&xml_escape(&para));
+            out.push_str("</p>\n");
+        }
+        out.push_str("  </main>\n</doc>\n");
+        out
+    }
 }
 
 /// Detect language from extracted text when HTML metadata has no language.
@@ -264,6 +338,101 @@ pub fn detect_content_language(text: &str) -> Option<String> {
         return None;
     }
     Some(info.lang().code().to_string())
+}
+
+/// 64-bit simhash fingerprint of normalized text (hex). Stable for near-duplicate detection.
+pub fn content_fingerprint(text: &str) -> String {
+    let tokens: Vec<String> = text
+        .split_whitespace()
+        .filter(|t| t.chars().count() > 2)
+        .map(|t| t.to_lowercase())
+        .collect();
+    if tokens.is_empty() {
+        return "0000000000000000".to_string();
+    }
+    let mut weights = [0i32; 64];
+    for token in &tokens {
+        let h = fnv1a64(token.as_bytes());
+        for i in 0..64 {
+            if (h >> i) & 1 == 1 {
+                weights[i] += 1;
+            } else {
+                weights[i] -= 1;
+            }
+        }
+    }
+    let mut fingerprint = 0u64;
+    for (i, w) in weights.iter().enumerate() {
+        if *w > 0 {
+            fingerprint |= 1u64 << i;
+        }
+    }
+    format!("{:016x}", fingerprint)
+}
+
+/// True when `actual` language matches `target` (ISO 639-1 or 639-3, with region tags).
+pub fn language_matches(actual: Option<&str>, target: &str) -> bool {
+    let Some(actual) = actual else {
+        return false;
+    };
+    let a = normalize_lang_code(actual);
+    let b = normalize_lang_code(target);
+    if a == b {
+        return true;
+    }
+    match (whatlang::Lang::from_code(&a), whatlang::Lang::from_code(&b)) {
+        (Some(la), Some(lb)) => la == lb,
+        _ => false,
+    }
+}
+
+fn normalize_lang_code(code: &str) -> String {
+    let primary = code
+        .trim()
+        .split(['-', '_'])
+        .next()
+        .unwrap_or(code)
+        .to_lowercase();
+    match primary.as_str() {
+        "en" => "eng".into(),
+        "de" => "deu".into(),
+        "fr" => "fra".into(),
+        "es" => "spa".into(),
+        "it" => "ita".into(),
+        "pt" => "por".into(),
+        "nl" => "nld".into(),
+        "ru" => "rus".into(),
+        "zh" => "zho".into(),
+        "ja" => "jpn".into(),
+        "ko" => "kor".into(),
+        "ar" => "ara".into(),
+        "pl" => "pol".into(),
+        "tr" => "tur".into(),
+        "vi" => "vie".into(),
+        "sv" => "swe".into(),
+        "da" => "dan".into(),
+        "fi" => "fin".into(),
+        "no" | "nb" | "nn" => "nor".into(),
+        "cs" => "ces".into(),
+        "uk" => "ukr".into(),
+        "el" => "ell".into(),
+        "he" => "heb".into(),
+        "hi" => "hin".into(),
+        "id" => "ind".into(),
+        "th" => "tha".into(),
+        "ro" => "ron".into(),
+        "hu" => "hun".into(),
+        other => other.to_string(),
+    }
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in bytes {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 fn csv_escape(s: &str) -> String {
@@ -364,6 +533,7 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         language,
         extraction_quality: None,
         page_type: None,
+        fingerprint: None,
     }
 }
 
@@ -1125,6 +1295,8 @@ mod tests {
         let quality = meta.extraction_quality.unwrap();
         assert!(quality >= 0.5, "expected meaningful quality, got {quality}");
         assert!(quality <= 1.0);
+        let fp = meta.fingerprint.expect("fingerprint");
+        assert_eq!(fp.len(), 16);
     }
 
     #[test]
@@ -1152,12 +1324,57 @@ mod tests {
         };
         let csv = meta.to_csv("https://example.com/a", "Line one\nLine two");
         assert!(csv.starts_with(
-            "url,title,author,published_date,language,page_type,extraction_quality,text\n"
+            "url,title,author,published_date,language,page_type,extraction_quality,fingerprint,text\n"
         ));
         assert!(csv.contains("\"Hello, \"\"World\"\"\""));
         assert!(csv.contains("Ada"));
         assert!(csv.contains("0.90"));
         assert!(csv.contains("\"Line one\nLine two\""));
+    }
+
+    #[test]
+    fn content_fingerprint_stable_and_differs() {
+        let a = content_fingerprint(
+            "The quick brown fox jumps over the lazy dog near the river bank today.",
+        );
+        let b = content_fingerprint(
+            "The quick brown fox jumps over the lazy dog near the river bank today.",
+        );
+        let c = content_fingerprint(
+            "Completely different prose about quantum computing and satellite networks worldwide.",
+        );
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 16);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn language_matches_iso6391_and_6393() {
+        assert!(language_matches(Some("en"), "eng"));
+        assert!(language_matches(Some("eng"), "en"));
+        assert!(language_matches(Some("en-US"), "en"));
+        assert!(!language_matches(Some("fra"), "eng"));
+        assert!(!language_matches(None, "eng"));
+    }
+
+    #[test]
+    fn to_xml_emits_doc_with_main() {
+        let meta = PageMetadata {
+            title: Some("Hello <World>".to_string()),
+            author: Some("Ada".to_string()),
+            language: Some("en".to_string()),
+            fingerprint: Some("abcd1234abcd1234".to_string()),
+            ..Default::default()
+        };
+        let xml = meta.to_xml("https://example.com/a", "First paragraph.\n\nSecond paragraph.");
+        assert!(xml.contains("<doc>"));
+        assert!(xml.contains("<title>Hello &lt;World&gt;</title>"));
+        assert!(xml.contains("<author>Ada</author>"));
+        assert!(xml.contains("<language>en</language>"));
+        assert!(xml.contains("<fingerprint>abcd1234abcd1234</fingerprint>"));
+        assert!(xml.contains("<main>"));
+        assert!(xml.contains("<p>First paragraph.</p>"));
+        assert!(xml.contains("<p>Second paragraph.</p>"));
     }
 
     #[test]
@@ -1208,6 +1425,7 @@ mod tests {
             language: Some("en".to_string()),
             extraction_quality: Some(0.85),
             page_type: Some("article".to_string()),
+            fingerprint: Some("deadbeefcafebabe".to_string()),
         };
         let fm = meta.to_frontmatter(Some("https://example.com/page")).unwrap();
         assert!(fm.starts_with("---\n"));
@@ -1226,6 +1444,7 @@ mod tests {
         assert!(fm.contains("language: \"en\""));
         assert!(fm.contains("extraction_quality: 0.85"));
         assert!(fm.contains("page_type: \"article\""));
+        assert!(fm.contains("fingerprint: \"deadbeefcafebabe\""));
         assert!(fm.ends_with("---\n\n"));
     }
 

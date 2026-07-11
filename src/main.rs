@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use url::Url;
 use web2md::{
-    extract_feed_links, extract_page_metadata, feed_to_markdown, normalize_crawl_url, parse_feed,
-    parse_sitemap_urls, truncate_with_marker, Browser, BrowserOptions, McpRequest, McpServer,
-    PageMetadata, PageToMarkdown,
+    extract_feed_links, extract_page_metadata, feed_to_markdown, language_matches,
+    normalize_crawl_url, parse_feed, parse_sitemap_urls, truncate_with_marker, Browser,
+    BrowserOptions, McpRequest, McpServer, PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -26,6 +26,8 @@ enum OutputFormat {
     Csv,
     /// Emit XML-TEI document (teiHeader + body) for corpus pipelines
     Tei,
+    /// Emit plain Trafilatura-style XML (`<doc>` + `<main>`) for corpus pipelines
+    Xml,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -68,12 +70,15 @@ enum Commands {
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
-        /// Output format: markdown, html, json, text, csv, or tei
+        /// Output format: markdown, html, json, text, csv, tei, or xml
         #[arg(short, long, value_enum, default_value = "markdown")]
         format: OutputFormat,
         /// Render Markdown with ANSI colors and formatting in the terminal
         #[arg(short, long)]
         render: bool,
+        /// Require page language to match this ISO 639-1 or 639-3 code (e.g. en, eng)
+        #[arg(long)]
+        lang: Option<String>,
         /// Polite delay between consecutive requests in milliseconds
         #[arg(long)]
         delay: Option<u64>,
@@ -331,6 +336,7 @@ async fn main() -> Result<()> {
             header,
             format,
             render,
+            lang,
             delay,
             keep_header,
             cache_ttl,
@@ -383,52 +389,73 @@ async fn main() -> Result<()> {
                 let html = browser.fetch(&url).await?;
                 let html = browser.prepare_html(&html, &url).await?;
 
-                let mut result = match format {
-                    OutputFormat::Markdown => {
-                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
-                        let md = PageToMarkdown::absolutize_links(&md, &url);
-                        if render {
-                            render_markdown_ansi(&md, false).0
-                        } else {
-                            md
+                let (mut result, frontmatter_meta) = match format {
+                    OutputFormat::Html => {
+                        if lang.is_some() {
+                            anyhow::bail!("--lang requires a converted output format (not html)");
                         }
+                        (html.clone(), None)
                     }
-                    OutputFormat::Html => html.clone(),
-                    OutputFormat::Json => {
-                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
+                    format => {
+                        let md = PageToMarkdown::convert(
+                            &html,
+                            include_images,
+                            keep_header,
+                            main_content,
+                            &exclude_selector,
+                        )?;
                         let md = PageToMarkdown::absolutize_links(&md, &url);
                         let meta = extract_page_metadata(&html, &md);
-                        let output = CliJsonOutput {
-                            markdown: md,
-                            meta,
+                        if let Some(ref target) = lang {
+                            if !language_matches(meta.language.as_deref(), target) {
+                                anyhow::bail!(
+                                    "page language {:?} does not match --lang {}",
+                                    meta.language.as_deref().unwrap_or("(unknown)"),
+                                    target
+                                );
+                            }
+                        }
+                        let fm_meta = matches!(format, OutputFormat::Markdown | OutputFormat::Text)
+                            .then(|| meta.clone());
+                        let out = match format {
+                            OutputFormat::Markdown => {
+                                if render {
+                                    render_markdown_ansi(&md, false).0
+                                } else {
+                                    md
+                                }
+                            }
+                            OutputFormat::Json => {
+                                let output = CliJsonOutput {
+                                    markdown: md,
+                                    meta,
+                                };
+                                serde_json::to_string_pretty(&output)?
+                            }
+                            OutputFormat::Text => PageToMarkdown::to_plain_text(&md),
+                            OutputFormat::Csv => {
+                                let text = PageToMarkdown::to_plain_text(&md);
+                                meta.to_csv(&url, &text)
+                            }
+                            OutputFormat::Tei => {
+                                let text = PageToMarkdown::to_plain_text(&md);
+                                meta.to_tei(&url, &text)
+                            }
+                            OutputFormat::Xml => {
+                                let text = PageToMarkdown::to_plain_text(&md);
+                                meta.to_xml(&url, &text)
+                            }
+                            OutputFormat::Html => unreachable!(),
                         };
-                        serde_json::to_string_pretty(&output)?
-                    }
-                    OutputFormat::Text => {
-                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
-                        let md = PageToMarkdown::absolutize_links(&md, &url);
-                        PageToMarkdown::to_plain_text(&md)
-                    }
-                    OutputFormat::Csv => {
-                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
-                        let md = PageToMarkdown::absolutize_links(&md, &url);
-                        let text = PageToMarkdown::to_plain_text(&md);
-                        let meta = extract_page_metadata(&html, &md);
-                        meta.to_csv(&url, &text)
-                    }
-                    OutputFormat::Tei => {
-                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
-                        let md = PageToMarkdown::absolutize_links(&md, &url);
-                        let text = PageToMarkdown::to_plain_text(&md);
-                        let meta = extract_page_metadata(&html, &md);
-                        meta.to_tei(&url, &text)
+                        (out, fm_meta)
                     }
                 };
 
-                if frontmatter && matches!(format, OutputFormat::Markdown | OutputFormat::Text) {
-                    let meta = extract_page_metadata(&html, &result);
-                    if let Some(fm) = meta.to_frontmatter(Some(&url)) {
-                        result = format!("{}{}", fm, result);
+                if frontmatter {
+                    if let Some(meta) = frontmatter_meta {
+                        if let Some(fm) = meta.to_frontmatter(Some(&url)) {
+                            result = format!("{}{}", fm, result);
+                        }
                     }
                 }
 

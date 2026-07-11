@@ -347,13 +347,14 @@ async fn csv_output_format_emits_header_and_row() {
     let csv = meta.to_csv(&url, &text);
 
     assert!(csv.starts_with(
-        "url,title,author,published_date,language,page_type,extraction_quality,text\n"
+        "url,title,author,published_date,language,page_type,extraction_quality,fingerprint,text\n"
     ));
     assert!(csv.contains("CSV Page"));
     assert!(csv.contains("CSV Author"));
     assert!(csv.contains("article"));
     assert!(csv.contains("corpus pipelines"));
     assert_eq!(meta.language.as_deref(), Some("eng"));
+    assert!(meta.fingerprint.as_ref().map(|f| f.len() == 16).unwrap_or(false));
     mock.assert_async().await;
 }
 
@@ -389,6 +390,39 @@ async fn tei_output_format_emits_tei_document() {
     assert!(tei.contains("<language ident=\"en\"/>"));
     assert!(tei.contains("<div type=\"entry\">"));
     assert!(tei.contains("corpus pipelines"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn xml_output_format_emits_doc() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/xml")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"<html lang="en"><head><title>XML Page</title><meta name="author" content="XML Author">
+            </head><body><article><h1>XML Page</h1>
+            <p>This English paragraph is long enough for plain XML export of the extracted plain text content for corpus pipelines.</p>
+            </article></body></html>"#,
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/xml", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, true, &[]).unwrap();
+    let text = PageToMarkdown::to_plain_text(&md);
+    let meta = extract_page_metadata(&html, &md);
+    let xml = meta.to_xml(&url, &text);
+
+    assert!(xml.contains("<doc>"));
+    assert!(xml.contains("<title>XML Page</title>"));
+    assert!(xml.contains("<author>XML Author</author>"));
+    assert!(xml.contains("<main>"));
+    assert!(xml.contains("corpus pipelines"));
+    assert!(meta.fingerprint.as_ref().map(|f| f.len() == 16).unwrap_or(false));
     mock.assert_async().await;
 }
 
