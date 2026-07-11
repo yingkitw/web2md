@@ -1503,6 +1503,8 @@ mod tests {
             extraction_quality: Some(0.85),
             page_type: Some("article".to_string()),
             fingerprint: Some("deadbeefcafebabe".to_string()),
+            word_count: Some(42),
+            char_count: Some(200),
         };
         let fm = meta.to_frontmatter(Some("https://example.com/page")).unwrap();
         assert!(fm.starts_with("---\n"));
@@ -1522,6 +1524,8 @@ mod tests {
         assert!(fm.contains("extraction_quality: 0.85"));
         assert!(fm.contains("page_type: \"article\""));
         assert!(fm.contains("fingerprint: \"deadbeefcafebabe\""));
+        assert!(fm.contains("word_count: 42"));
+        assert!(fm.contains("char_count: 200"));
         assert!(fm.ends_with("---\n\n"));
     }
 
