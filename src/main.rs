@@ -3,7 +3,7 @@ use url::Url;
 use web2md::{
     extract_feed_links, extract_page_metadata, feed_to_markdown, language_matches,
     normalize_crawl_url, parse_feed, parse_sitemap_urls, truncate_with_marker, Browser,
-    BrowserOptions, McpRequest, McpServer, PageMetadata, PageToMarkdown,
+    BrowserOptions, ConvertOptions, McpRequest, McpServer, PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -79,6 +79,18 @@ enum Commands {
         /// Require page language to match this ISO 639-1 or 639-3 code (e.g. en, eng)
         #[arg(long)]
         lang: Option<String>,
+        /// Favor precision: less noise, stricter main-content selection
+        #[arg(long, conflicts_with = "recall")]
+        precision: bool,
+        /// Favor recall: more text, looser main-content selection
+        #[arg(long, conflicts_with = "precision")]
+        recall: bool,
+        /// Skip forum/thread comment extraction
+        #[arg(long)]
+        no_comments: bool,
+        /// Only output when title and published_date metadata are present
+        #[arg(long)]
+        only_with_metadata: bool,
         /// Polite delay between consecutive requests in milliseconds
         #[arg(long)]
         delay: Option<u64>,
@@ -337,6 +349,10 @@ async fn main() -> Result<()> {
             format,
             render,
             lang,
+            precision,
+            recall,
+            no_comments,
+            only_with_metadata,
             delay,
             keep_header,
             cache_ttl,
@@ -394,14 +410,25 @@ async fn main() -> Result<()> {
                         if lang.is_some() {
                             anyhow::bail!("--lang requires a converted output format (not html)");
                         }
+                        if only_with_metadata {
+                            anyhow::bail!(
+                                "--only-with-metadata requires a converted output format (not html)"
+                            );
+                        }
                         (html.clone(), None)
                     }
                     format => {
-                        let md = PageToMarkdown::convert(
-                            &html,
+                        let convert_opts = ConvertOptions {
                             include_images,
                             keep_header,
                             main_content,
+                            favor_precision: precision,
+                            favor_recall: recall,
+                            include_comments: !no_comments,
+                        };
+                        let md = PageToMarkdown::convert_with(
+                            &html,
+                            &convert_opts,
                             &exclude_selector,
                         )?;
                         let md = PageToMarkdown::absolutize_links(&md, &url);
@@ -414,6 +441,15 @@ async fn main() -> Result<()> {
                                     target
                                 );
                             }
+                        }
+                        if only_with_metadata
+                            && (meta.title.is_none() || meta.published_date.is_none())
+                        {
+                            anyhow::bail!(
+                                "--only-with-metadata requires title and published_date; found title={:?} published_date={:?}",
+                                meta.title.as_deref().unwrap_or("(missing)"),
+                                meta.published_date.as_deref().unwrap_or("(missing)")
+                            );
                         }
                         let fm_meta = matches!(format, OutputFormat::Markdown | OutputFormat::Text)
                             .then(|| meta.clone());

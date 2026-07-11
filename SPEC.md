@@ -86,6 +86,10 @@ web2md fetch <URL> [FLAGS]
   --format tei         Output XML-TEI document (teiHeader + body paragraphs)
   --format xml         Output plain Trafilatura-style XML (<doc> + <main>)
   --lang CODE          Require page language to match ISO 639-1 or 639-3 (e.g. en, eng)
+  --precision           Favor extraction precision (less noise, stricter main-content)
+  --recall              Favor extraction recall (more text, looser main-content)
+  --no-comments         Skip forum/thread comment extraction
+  --only-with-metadata  Require title and published_date or fail
   --render             ANSI colors: bold headings, underlined links, colored code
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
@@ -282,6 +286,7 @@ Trafilatura-style plain XML:
 3. **Browser.post_load_wait()** → sleep `--wait` milliseconds after fetch (optional)
 4. **Browser.run_inline_scripts()** → evaluate inline `<script>` blocks when `--javascript` / `enable_javascript` (optional); flush `setTimeout`, `setInterval`, and `requestAnimationFrame` callbacks up to `--wait`
 5. **PageToMarkdown.convert()** → Markdown
+   - Apply `ConvertOptions`: `--precision` / `--recall` adjust main-content score thresholds and boilerplate stripping; `--no-comments` skips forum comment append
    - Detect page type (`article` / `forum` / `product` / `page`) and apply extraction profile: article/product prefer main-content; product prefers keeping images
    - Extract main content if `main_content` is true or the profile prefers it (Trafilatura-style fallback: score semantic tags with bonus, top-level blocks, paragraph clusters; pick best candidate; strip boilerplate; fall back to JSON-LD `articleBody` / `description` or Open Graph description when heuristics score ≤ 100)
    - Strip `<script>`, `<style>`, `<iframe>`

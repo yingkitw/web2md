@@ -32,7 +32,7 @@ lib.rs
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding, `strip_html_tags`)
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
-  ├── markdown.rs  : PageToMarkdown — HTML→Markdown pipeline; page-type profiles; `extraction_quality()` / `detect_page_type()`; main-content heuristics; forum comments; product JSON-LD details; dedup; link absolutization
+  ├── markdown.rs  : PageToMarkdown — `ConvertOptions` (precision/recall/comments); page-type profiles; `extraction_quality()` / `detect_page_type()`; main-content heuristics; forum comments; product JSON-LD details; dedup; link absolutization
   └── mcp.rs       : JSON-RPC server; `PageMetadata` (serde flatten); `extract_metadata` / `extract_page_metadata` (quality, page_type, language fallback, simhash fingerprint); `to_csv` / `to_tei` / `to_xml`; `language_matches`; `truncate_with_marker`
 
 main.rs (helpers)

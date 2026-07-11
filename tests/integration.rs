@@ -96,6 +96,7 @@ async fn mcp_server_end_to_end() {
             keep_header: false,
             main_content: false,
             max_length: None,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -128,6 +129,7 @@ async fn mcp_server_max_length_truncation() {
             keep_header: false,
             main_content: false,
             max_length: Some(100),
+            ..Default::default()
         })
         .await
         .unwrap();

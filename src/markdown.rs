@@ -164,6 +164,33 @@ impl ExtractionProfile {
     }
 }
 
+/// Options for HTML → Markdown conversion.
+#[derive(Clone, Debug)]
+pub struct ConvertOptions {
+    pub include_images: bool,
+    pub keep_header: bool,
+    pub main_content: bool,
+    /// Prefer less noise (stricter main-content threshold, more boilerplate stripping).
+    pub favor_precision: bool,
+    /// Prefer more text (looser threshold, skip boilerplate stripping).
+    pub favor_recall: bool,
+    /// Append forum/thread comments when detected (default: true).
+    pub include_comments: bool,
+}
+
+impl Default for ConvertOptions {
+    fn default() -> Self {
+        Self {
+            include_images: false,
+            keep_header: false,
+            main_content: false,
+            favor_precision: false,
+            favor_recall: false,
+            include_comments: true,
+        }
+    }
+}
+
 /// Convert raw HTML to clean Markdown.
 /// Strips scripts, styles, and non-essential markup to minimize token output.
 pub struct PageToMarkdown;
@@ -174,35 +201,67 @@ impl PageToMarkdown {
     /// When `main_content` is true, extracts only the content of `<article>`, `<main>`, or `[role="main"]` elements.
     /// When `exclude_selectors` is non-empty, removes HTML elements matching the given CSS-like selectors (`.class` or `#id`) before conversion.
     /// Page-type profiles may also enable main-content extraction (article/product) or keep images (product).
-    pub fn convert(html: &str, include_images: bool, keep_header: bool, main_content: bool, exclude_selectors: &[String]) -> Result<String> {
+    pub fn convert(
+        html: &str,
+        include_images: bool,
+        keep_header: bool,
+        main_content: bool,
+        exclude_selectors: &[String],
+    ) -> Result<String> {
+        Self::convert_with(
+            html,
+            &ConvertOptions {
+                include_images,
+                keep_header,
+                main_content,
+                ..Default::default()
+            },
+            exclude_selectors,
+        )
+    }
+
+    /// Convert with full Trafilatura-style options (precision/recall/comments).
+    pub fn convert_with(
+        html: &str,
+        opts: &ConvertOptions,
+        exclude_selectors: &[String],
+    ) -> Result<String> {
         let original_html = html.to_string();
         let profile = ExtractionProfile::for_page_type(Self::detect_page_type(&original_html));
-        let use_main = main_content || profile.prefer_main_content;
-        let use_images = include_images || profile.prefer_images;
+        let use_main = if opts.favor_recall {
+            opts.main_content
+        } else {
+            opts.main_content || profile.prefer_main_content || opts.favor_precision
+        };
+        let use_images = opts.include_images || profile.prefer_images;
         let html = if use_main {
-            Self::extract_main_content(&original_html)
+            Self::extract_main_content(&original_html, opts.favor_precision, opts.favor_recall)
         } else {
             original_html.clone()
         };
         let html = Self::strip_scripts_and_styles(&html);
         let html = Self::strip_iframe_tags(&html);
-        let html = Self::strip_noise_tags(&html, keep_header);
+        let html = Self::strip_noise_tags(&html, opts.keep_header);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
         let languages = Self::extract_code_languages(&html);
-        let html = if use_images { html } else { Self::strip_img_tags(&html) };
+        let html = if use_images {
+            html
+        } else {
+            Self::strip_img_tags(&html)
+        };
         let md = crate::html_to_md::parse_html(&html);
         let md = Self::inject_code_languages(&md, &languages);
         let md = Self::deduplicate_blocks(&md);
         let md = Self::clean(&md);
         let md = Self::append_page_profile_extras(&original_html, md);
 
-        // Append extracted comments for forum/thread pages
-        if let Some(comments) = Self::extract_comments(&original_html) {
-            Ok(format!("{}\n\n{}", md, comments))
-        } else {
-            Ok(md)
+        if opts.include_comments {
+            if let Some(comments) = Self::extract_comments(&original_html) {
+                return Ok(format!("{}\n\n{}", md, comments));
+            }
         }
+        Ok(md)
     }
 
     /// Estimate extraction confidence in `0.0..=1.0` from source HTML and resulting Markdown.
@@ -294,24 +353,52 @@ impl PageToMarkdown {
         keep_header: bool,
         main_content: bool,
         exclude_selectors: &[String],
+        on_block: impl FnMut(String),
+    ) -> Result<()> {
+        Self::convert_progressive_with(
+            html,
+            &ConvertOptions {
+                include_images,
+                keep_header,
+                main_content,
+                ..Default::default()
+            },
+            exclude_selectors,
+            on_block,
+        )
+    }
+
+    /// Progressive conversion with full Trafilatura-style options.
+    pub fn convert_progressive_with(
+        html: &str,
+        opts: &ConvertOptions,
+        exclude_selectors: &[String],
         mut on_block: impl FnMut(String),
     ) -> Result<()> {
         let original_html = html.to_string();
         let profile = ExtractionProfile::for_page_type(Self::detect_page_type(&original_html));
-        let use_main = main_content || profile.prefer_main_content;
-        let use_images = include_images || profile.prefer_images;
+        let use_main = if opts.favor_recall {
+            opts.main_content
+        } else {
+            opts.main_content || profile.prefer_main_content || opts.favor_precision
+        };
+        let use_images = opts.include_images || profile.prefer_images;
         let html = if use_main {
-            Self::extract_main_content(&original_html)
+            Self::extract_main_content(&original_html, opts.favor_precision, opts.favor_recall)
         } else {
             original_html.clone()
         };
         let html = Self::strip_scripts_and_styles(&html);
         let html = Self::strip_iframe_tags(&html);
-        let html = Self::strip_noise_tags(&html, keep_header);
+        let html = Self::strip_noise_tags(&html, opts.keep_header);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
         let languages = Self::extract_code_languages(&html);
-        let html = if use_images { html } else { Self::strip_img_tags(&html) };
+        let html = if use_images {
+            html
+        } else {
+            Self::strip_img_tags(&html)
+        };
 
         let mut lang_idx = 0usize;
         let mut seen = HashSet::new();
@@ -331,8 +418,10 @@ impl PageToMarkdown {
         if let Some(details) = Self::extract_product_details(&original_html) {
             on_block(details);
         }
-        if let Some(comments) = Self::extract_comments(&original_html) {
-            on_block(comments);
+        if opts.include_comments {
+            if let Some(comments) = Self::extract_comments(&original_html) {
+                on_block(comments);
+            }
         }
         Ok(())
     }
@@ -817,7 +906,14 @@ impl PageToMarkdown {
     /// Trafilatura-style fallback chain: collect candidates from semantic tags, block
     /// readability, and paragraph clustering; pick the highest-scoring result, then
     /// strip link-heavy boilerplate paragraphs (jusText-style).
-    fn extract_main_content(html: &str) -> String {
+    fn extract_main_content(html: &str, favor_precision: bool, favor_recall: bool) -> String {
+        let threshold: i64 = if favor_precision {
+            200
+        } else if favor_recall {
+            40
+        } else {
+            100
+        };
         let mut candidates: Vec<(String, i64)> = Vec::new();
         candidates.extend(Self::semantic_content_candidates(html));
 
@@ -832,8 +928,12 @@ impl PageToMarkdown {
 
         let best = candidates.into_iter().max_by_key(|(_, score)| *score);
         if let Some((content, score)) = best {
-            if score > 100 {
-                return Self::strip_boilerplate_paragraphs(&content);
+            if score > threshold {
+                if favor_recall {
+                    return content;
+                }
+                let min_para = if favor_precision { 50 } else { 30 };
+                return Self::strip_boilerplate_paragraphs(&content, min_para);
             }
         }
 
@@ -931,7 +1031,7 @@ impl PageToMarkdown {
     }
 
     /// Remove short or link-heavy `<p>` blocks (jusText-style boilerplate filter).
-    fn strip_boilerplate_paragraphs(html: &str) -> String {
+    fn strip_boilerplate_paragraphs(html: &str, min_text_len: i64) -> String {
         let paragraphs = Self::find_paragraph_blocks(html);
         if paragraphs.is_empty() {
             return html.to_string();
@@ -941,7 +1041,7 @@ impl PageToMarkdown {
         for (i, (inner, _, _)) in paragraphs.iter().enumerate() {
             let text_len = Self::count_text_chars(inner) as i64;
             let link_len = Self::count_link_text_chars(inner) as i64;
-            if text_len < 30 || (text_len > 0 && link_len * 2 >= text_len) {
+            if text_len < min_text_len || (text_len > 0 && link_len * 2 >= text_len) {
                 remove[i] = true;
             }
         }
@@ -1952,6 +2052,50 @@ mod tests {
         let md = "# Title\n\nLong enough prose for a confident extraction quality score with headings and metadata present on the page.";
         let q = PageToMarkdown::extraction_quality(html, md);
         assert!(q >= 0.6, "got {q}");
+    }
+
+    #[test]
+    fn no_comments_option_skips_forum_comments() {
+        let html = r#"<html><body>
+            <h1>Discussion Topic</h1>
+            <p>Original post content here with enough text for the body.</p>
+            <div class="comment" id="comment-1">
+                <span class="author">Alice</span>
+                <div class="comment-body"><p>First comment with some text.</p></div>
+            </div>
+            <div class="comment" id="comment-2">
+                <span class="author">Bob</span>
+                <div class="comment-body"><p>Second comment agreeing with Alice.</p></div>
+            </div>
+            <div class="comment" id="comment-3">
+                <span class="author">Charlie</span>
+                <div class="comment-body"><p>Third comment with a different perspective on the topic.</p></div>
+            </div>
+        </body></html>"#;
+        let with_comments = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
+        assert!(with_comments.contains("## Comments"));
+        let opts = ConvertOptions {
+            include_comments: false,
+            ..Default::default()
+        };
+        let without = PageToMarkdown::convert_with(html, &opts, &[]).unwrap();
+        assert!(!without.contains("## Comments"));
+        assert!(without.contains("Original post"));
+    }
+
+    #[test]
+    fn favor_precision_drops_sidebar_noise() {
+        let html = r#"<div class="sidebar"><p>Short promo.</p><p>Buy now!</p></div>
+            <article><p>This is the real article body with enough substantive prose that precision mode should keep it while discarding short sidebar blurbs around the page chrome.</p>
+            <p>A second paragraph reinforces the main content density so the article candidate wins under a stricter score threshold.</p></article>"#;
+        let opts = ConvertOptions {
+            favor_precision: true,
+            ..Default::default()
+        };
+        let md = PageToMarkdown::convert_with(html, &opts, &[]).unwrap();
+        assert!(md.contains("real article body"));
+        assert!(!md.contains("Short promo"));
+        assert!(!md.contains("Buy now"));
     }
 
     #[test]

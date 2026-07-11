@@ -15,7 +15,7 @@ mod url_blacklist;
 pub use browser::{extract_feed_links, parse_sitemap_urls, Browser, BrowserOptions};
 pub use crawl::{normalize_crawl_url, same_origin_links};
 pub use feed::{feed_to_markdown, parse_feed, Feed};
-pub use markdown::PageToMarkdown;
+pub use markdown::{ConvertOptions, PageToMarkdown};
 pub use mcp::{
     content_fingerprint, detect_content_language, extract_metadata, extract_page_metadata,
     language_matches, truncate_with_marker, McpRequest, McpServer, PageMetadata,

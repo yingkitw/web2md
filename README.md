@@ -140,6 +140,7 @@ Example Cursor MCP config:
 - **Plain XML output** (`--format xml`): Trafilatura-style `<doc>` with metadata fields and `<main>` paragraphs
 - **Content fingerprint**: 64-bit simhash of extracted text for near-duplicate detection (JSON, CSV, TEI, XML, frontmatter)
 - **Language filter** (`--lang`): Reject pages whose language (meta or detected) does not match an ISO 639-1/639-3 code
+- **Extraction presets**: `--precision` (less noise), `--recall` (more text), `--no-comments`, `--only-with-metadata` (require title + date)
 - **Comments extraction**: Detects forum/thread pages (Reddit, WordPress, vBulletin) and extracts comments with author attribution, nesting depth, and blockquote formatting
 - **Link URL absolutization**: Converts relative URLs in Markdown links to absolute URLs using the page URL as base, so links are usable in LLM contexts
 - **Sitemap/feed discovery** (`sitemap` subcommand): Fetches `sitemap.xml` from a website and lists all discovered URLs; optionally discovers RSS/Atom/JSON Feed links from the HTML page (`--feeds` flag)

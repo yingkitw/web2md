@@ -6,7 +6,7 @@ use crate::html_meta::{
     extract_json_ld_string_list, extract_link_rel, extract_meta_content, iter_json_ld_blocks,
 };
 use crate::html_util::{find_ci, strip_html_tags};
-use crate::{Browser, BrowserOptions, PageToMarkdown};
+use crate::{Browser, BrowserOptions, ConvertOptions, PageToMarkdown};
 
 /// MCP tool request schema
 #[derive(Debug, Deserialize)]
@@ -20,6 +20,35 @@ pub struct McpRequest {
     pub main_content: bool,
     #[serde(default)]
     pub max_length: Option<usize>,
+    #[serde(default)]
+    pub favor_precision: bool,
+    #[serde(default)]
+    pub favor_recall: bool,
+    /// Include forum comments when detected (default true).
+    #[serde(default = "default_true")]
+    pub include_comments: bool,
+    #[serde(default)]
+    pub only_with_metadata: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for McpRequest {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            include_images: false,
+            keep_header: false,
+            main_content: false,
+            max_length: None,
+            favor_precision: false,
+            favor_recall: false,
+            include_comments: true,
+            only_with_metadata: false,
+        }
+    }
 }
 
 /// MCP tool response schema
@@ -553,7 +582,15 @@ impl McpServer {
     pub async fn handle(&self, req: McpRequest) -> Result<McpResponse> {
         let html = self.browser.fetch(&req.url).await?;
         let html = self.browser.prepare_html(&html, &req.url).await?;
-        let mut markdown = PageToMarkdown::convert(&html, req.include_images, req.keep_header, req.main_content, &[])?;
+        let opts = ConvertOptions {
+            include_images: req.include_images,
+            keep_header: req.keep_header,
+            main_content: req.main_content,
+            favor_precision: req.favor_precision,
+            favor_recall: req.favor_recall,
+            include_comments: req.include_comments,
+        };
+        let mut markdown = PageToMarkdown::convert_with(&html, &opts, &[])?;
         markdown = PageToMarkdown::absolutize_links(&markdown, &req.url);
 
         if let Some(max) = req.max_length {
@@ -561,6 +598,13 @@ impl McpServer {
         }
 
         let meta = extract_page_metadata(&html, &markdown);
+        if req.only_with_metadata && (meta.title.is_none() || meta.published_date.is_none()) {
+            anyhow::bail!(
+                "only_with_metadata requires title and published_date; found title={:?} published_date={:?}",
+                meta.title.as_deref().unwrap_or("(missing)"),
+                meta.published_date.as_deref().unwrap_or("(missing)")
+            );
+        }
 
         Ok(McpResponse {
             url: req.url,
@@ -778,6 +822,7 @@ mod tests {
                 keep_header: false,
                 main_content: false,
                 max_length: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -814,6 +859,7 @@ mod tests {
                 keep_header: false,
                 main_content: false,
                 max_length: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -847,6 +893,7 @@ mod tests {
                 keep_header: false,
                 main_content: false,
                 max_length: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -876,6 +923,7 @@ mod tests {
                 keep_header: false,
                 main_content: false,
                 max_length: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -906,6 +954,7 @@ mod tests {
                 keep_header: false,
                 main_content: false,
                 max_length: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -933,6 +982,7 @@ mod tests {
                 keep_header: false,
                 main_content: false,
                 max_length: None,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -960,6 +1010,7 @@ mod tests {
                 keep_header: false,
                 main_content: false,
                 max_length: None,
+                ..Default::default()
             })
             .await
             .unwrap();
