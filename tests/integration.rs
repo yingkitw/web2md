@@ -1,9 +1,9 @@
 use std::time::Duration;
 use url::Url;
 use web2md::{
-    extract_feed_links, extract_metadata, feed_to_markdown, normalize_crawl_url, parse_feed,
-    parse_sitemap_urls, same_origin_links, Browser, BrowserOptions, McpRequest, McpServer,
-    PageToMarkdown,
+    extract_feed_links, extract_metadata, extract_page_metadata, feed_to_markdown,
+    normalize_crawl_url, parse_feed, parse_sitemap_urls, same_origin_links, Browser,
+    BrowserOptions, McpRequest, McpServer, PageToMarkdown,
 };
 
 #[tokio::test]
@@ -319,6 +319,41 @@ async fn json_output_format_emits_structured_json() {
     assert!(json_str.contains("\"language\":\"en\""));
     assert!(json_str.contains("Testing"));
     assert!(json_str.contains("Body content for JSON"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn csv_output_format_emits_header_and_row() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/csv")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"<html><head><title>CSV Page</title><meta name="author" content="CSV Author">
+            </head><body><article><h1>CSV Page</h1>
+            <p>This English paragraph is long enough for language detection and CSV export of the extracted plain text content for corpus pipelines.</p>
+            </article></body></html>"#,
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/csv", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let md = PageToMarkdown::convert(&html, false, false, true, &[]).unwrap();
+    let text = PageToMarkdown::to_plain_text(&md);
+    let meta = extract_page_metadata(&html, &md);
+    let csv = meta.to_csv(&url, &text);
+
+    assert!(csv.starts_with(
+        "url,title,author,published_date,language,page_type,extraction_quality,text\n"
+    ));
+    assert!(csv.contains("CSV Page"));
+    assert!(csv.contains("CSV Author"));
+    assert!(csv.contains("article"));
+    assert!(csv.contains("corpus pipelines"));
+    assert_eq!(meta.language.as_deref(), Some("eng"));
     mock.assert_async().await;
 }
 

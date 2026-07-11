@@ -73,6 +73,9 @@
 - [x] Dublin Core metadata fallbacks: `DC.title` / `dcterms.title`, `DC.creator` / `dcterms.creator`, `DC.date` / `dcterms.date`, `DC.description` / `dcterms.description`
 - [x] JSON Feed parsing: `parse_feed` accepts JSON Feed 1/1.1; `feed` subcommand and `sitemap --feeds` discover `application/feed+json` links
 - [x] Extraction quality score (0.0–1.0) and page-type classification (`article` / `forum` / `product` / `page`) in MCP, `--format json`, and YAML frontmatter
+- [x] Language detection fallback: `whatlang` ISO 639-3 when HTML/JSON-LD language metadata is absent
+- [x] CSV export (`--format csv`): Trafilatura-style header + row (url, title, author, date, language, page_type, quality, text)
+- [x] Page-type extraction profiles: article/product prefer main-content; product keeps images and appends JSON-LD details; forum keeps full thread + comments
 
 ## In Progress
 
@@ -87,6 +90,4 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
-- Language detection on extracted text content (Trafilatura optional add-on)
-- CSV/XML-TEI export formats for corpus pipelines
-- Page-type-specific extraction profiles (specialize convert path per `page_type`)
+- XML-TEI export format for corpus pipelines (CSV done via `--format csv`)

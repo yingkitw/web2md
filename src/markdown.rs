@@ -30,26 +30,38 @@ fn markdown_link_text_chars(md: &str) -> usize {
 }
 
 /// True when any JSON-LD `@type` equals `type_name` (case-insensitive).
-fn json_ld_type_contains(html: &str, type_name: &str) -> bool {
-    for json in crate::html_meta::iter_json_ld_blocks(html) {
-        if let Some(t) = json.get("@type") {
+fn json_ld_value_is_type(json: &serde_json::Value, type_name: &str) -> bool {
+    match json.get("@type") {
+        Some(t) => {
             if let Some(s) = t.as_str() {
-                if s.eq_ignore_ascii_case(type_name) {
-                    return true;
-                }
+                return s.eq_ignore_ascii_case(type_name);
             }
             if let Some(arr) = t.as_array() {
-                if arr.iter().any(|v| {
+                return arr.iter().any(|v| {
                     v.as_str()
                         .map(|s| s.eq_ignore_ascii_case(type_name))
                         .unwrap_or(false)
-                }) {
-                    return true;
-                }
+                });
             }
+            false
         }
+        None => false,
     }
-    false
+}
+
+fn json_ld_type_contains(html: &str, type_name: &str) -> bool {
+    crate::html_meta::iter_json_ld_blocks(html).any(|json| json_ld_value_is_type(&json, type_name))
+}
+
+fn json_ld_brand_name(product: &serde_json::Value) -> Option<String> {
+    let brand = product.get("brand")?;
+    if let Some(s) = brand.as_str() {
+        return Some(s.to_string());
+    }
+    brand
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
 }
 
 /// Normalize a Markdown block for deduplication comparison.
@@ -120,6 +132,38 @@ fn clean_plain_text(text: &str) -> String {
     out.trim().to_string()
 }
 
+/// Page-type-specific conversion tweaks (article / forum / product / page).
+struct ExtractionProfile {
+    /// Prefer Trafilatura-style main-content extraction.
+    prefer_main_content: bool,
+    /// Keep images even when the caller asked to strip them (product pages).
+    prefer_images: bool,
+}
+
+impl ExtractionProfile {
+    fn for_page_type(page_type: &str) -> Self {
+        match page_type {
+            "article" => Self {
+                prefer_main_content: true,
+                prefer_images: false,
+            },
+            "product" => Self {
+                prefer_main_content: true,
+                prefer_images: true,
+            },
+            // Keep full thread chrome; comments are appended separately.
+            "forum" => Self {
+                prefer_main_content: false,
+                prefer_images: false,
+            },
+            _ => Self {
+                prefer_main_content: false,
+                prefer_images: false,
+            },
+        }
+    }
+}
+
 /// Convert raw HTML to clean Markdown.
 /// Strips scripts, styles, and non-essential markup to minimize token output.
 pub struct PageToMarkdown;
@@ -129,9 +173,13 @@ impl PageToMarkdown {
     /// When `include_images` is false, strips `<img>` tags to reduce token output.
     /// When `main_content` is true, extracts only the content of `<article>`, `<main>`, or `[role="main"]` elements.
     /// When `exclude_selectors` is non-empty, removes HTML elements matching the given CSS-like selectors (`.class` or `#id`) before conversion.
+    /// Page-type profiles may also enable main-content extraction (article/product) or keep images (product).
     pub fn convert(html: &str, include_images: bool, keep_header: bool, main_content: bool, exclude_selectors: &[String]) -> Result<String> {
         let original_html = html.to_string();
-        let html = if main_content {
+        let profile = ExtractionProfile::for_page_type(Self::detect_page_type(&original_html));
+        let use_main = main_content || profile.prefer_main_content;
+        let use_images = include_images || profile.prefer_images;
+        let html = if use_main {
             Self::extract_main_content(&original_html)
         } else {
             original_html.clone()
@@ -142,11 +190,12 @@ impl PageToMarkdown {
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
         let languages = Self::extract_code_languages(&html);
-        let html = if include_images { html } else { Self::strip_img_tags(&html) };
+        let html = if use_images { html } else { Self::strip_img_tags(&html) };
         let md = crate::html_to_md::parse_html(&html);
         let md = Self::inject_code_languages(&md, &languages);
         let md = Self::deduplicate_blocks(&md);
         let md = Self::clean(&md);
+        let md = Self::append_page_profile_extras(&original_html, md);
 
         // Append extracted comments for forum/thread pages
         if let Some(comments) = Self::extract_comments(&original_html) {
@@ -248,7 +297,10 @@ impl PageToMarkdown {
         mut on_block: impl FnMut(String),
     ) -> Result<()> {
         let original_html = html.to_string();
-        let html = if main_content {
+        let profile = ExtractionProfile::for_page_type(Self::detect_page_type(&original_html));
+        let use_main = main_content || profile.prefer_main_content;
+        let use_images = include_images || profile.prefer_images;
+        let html = if use_main {
             Self::extract_main_content(&original_html)
         } else {
             original_html.clone()
@@ -259,7 +311,7 @@ impl PageToMarkdown {
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
         let languages = Self::extract_code_languages(&html);
-        let html = if include_images { html } else { Self::strip_img_tags(&html) };
+        let html = if use_images { html } else { Self::strip_img_tags(&html) };
 
         let mut lang_idx = 0usize;
         let mut seen = HashSet::new();
@@ -276,10 +328,99 @@ impl PageToMarkdown {
             on_block(block);
         });
 
+        if let Some(details) = Self::extract_product_details(&original_html) {
+            on_block(details);
+        }
         if let Some(comments) = Self::extract_comments(&original_html) {
             on_block(comments);
         }
         Ok(())
+    }
+
+    /// Append product JSON-LD details when the page is a product listing.
+    fn append_page_profile_extras(html: &str, md: String) -> String {
+        if let Some(details) = Self::extract_product_details(html) {
+            if md.is_empty() {
+                details
+            } else {
+                format!("{}\n\n{}", md, details)
+            }
+        } else {
+            md
+        }
+    }
+
+    /// Build a short Markdown summary from JSON-LD `Product` fields when present.
+    fn extract_product_details(html: &str) -> Option<String> {
+        if Self::detect_page_type(html) != "product" {
+            return None;
+        }
+        let mut name = None;
+        let mut brand = None;
+        let mut sku = None;
+        let mut price = None;
+        let mut currency = None;
+
+        for json in crate::html_meta::iter_json_ld_blocks(html) {
+            if !json_ld_value_is_type(&json, "Product") {
+                continue;
+            }
+            if name.is_none() {
+                name = json.get("name").and_then(|v| v.as_str()).map(str::to_string);
+            }
+            if brand.is_none() {
+                brand = json_ld_brand_name(&json);
+            }
+            if sku.is_none() {
+                sku = json
+                    .get("sku")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+            }
+            if let Some(offers) = json.get("offers") {
+                let offer = if let Some(arr) = offers.as_array() {
+                    arr.first()
+                } else {
+                    Some(offers)
+                };
+                if let Some(o) = offer {
+                    if price.is_none() {
+                        price = o.get("price").and_then(|v| {
+                            v.as_str()
+                                .map(str::to_string)
+                                .or_else(|| v.as_f64().map(|n| n.to_string()))
+                                .or_else(|| v.as_i64().map(|n| n.to_string()))
+                        });
+                    }
+                    if currency.is_none() {
+                        currency = o
+                            .get("priceCurrency")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string);
+                    }
+                }
+            }
+        }
+
+        let mut lines = Vec::new();
+        if let Some(n) = name {
+            lines.push(format!("- **Name**: {}", n));
+        }
+        if let Some(b) = brand {
+            lines.push(format!("- **Brand**: {}", b));
+        }
+        if let Some(s) = sku {
+            lines.push(format!("- **SKU**: {}", s));
+        }
+        match (price, currency) {
+            (Some(p), Some(c)) => lines.push(format!("- **Price**: {} {}", p, c)),
+            (Some(p), None) => lines.push(format!("- **Price**: {}", p)),
+            _ => {}
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        Some(format!("## Product details\n\n{}", lines.join("\n")))
     }
 
     /// Convert relative URLs in Markdown links to absolute URLs using the given base URL.
@@ -1648,10 +1789,14 @@ mod tests {
     }
 
     #[test]
-    fn main_content_disabled_by_default() {
-        let html = r#"<nav>Navigation</nav><article><p>Article content here.</p></article><footer>Footer</footer>"#;
+    fn generic_page_skips_main_content_without_flag() {
+        // Non-article pages should keep surrounding content when --main-content is off.
+        let html = r#"<div class="wrap"><p>Intro blurb outside any semantic main region that should remain for generic pages.</p>
+            <div><p>More body text on a generic page that is not classified as article or product.</p></div></div>"#;
         let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
-        assert!(md.contains("Article content"));
+        assert!(md.contains("Intro blurb"));
+        assert!(md.contains("More body text"));
+        assert_eq!(PageToMarkdown::detect_page_type(html), "page");
     }
 
     #[test]
@@ -1831,6 +1976,33 @@ mod tests {
             PageToMarkdown::detect_page_type("<html><body><p>Hello</p></body></html>"),
             "page"
         );
+    }
+
+    #[test]
+    fn article_profile_prefers_main_content_without_flag() {
+        let html = r#"<div class="sidebar"><p>Sidebar promo that should be dropped by the article profile.</p></div>
+            <article><p>This is the real article body that the page-type profile should keep via main-content extraction.</p></article>"#;
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
+        assert!(md.contains("real article body"));
+        assert!(!md.contains("Sidebar promo"));
+    }
+
+    #[test]
+    fn product_profile_appends_json_ld_details() {
+        let html = r#"<html><head>
+            <script type="application/ld+json">
+            {"@type":"Product","name":"Acme Widget","brand":{"@type":"Brand","name":"Acme"},
+             "sku":"W-100","offers":{"@type":"Offer","price":"19.99","priceCurrency":"USD"}}
+            </script>
+            </head><body><main><p>Buy the Acme Widget today with free shipping on orders over fifty dollars.</p>
+            <img src="/widget.png" alt="Widget"></main></body></html>"#;
+        let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
+        assert!(md.contains("## Product details"));
+        assert!(md.contains("Acme Widget"));
+        assert!(md.contains("Acme"));
+        assert!(md.contains("W-100"));
+        assert!(md.contains("19.99 USD"));
+        assert!(md.contains("![Widget](/widget.png)") || md.contains("/widget.png"));
     }
 
     #[test]

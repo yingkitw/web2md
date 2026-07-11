@@ -31,7 +31,7 @@ Agents consume the web through tools. Every page fetch costs context window, lat
 - **Token efficiency** — `--main-content` extraction, noise stripping, and deduplication shrink pages before they hit the model. An agent can read several articles in the space one raw HTML dump would occupy.
 - **MCP-native** — Run `web2md mcp` as a stdio JSON-RPC server. Agents call a single `fetch` tool and receive Markdown plus structured metadata (title, author, date, description, excerpt, canonical URL, language, keywords, categories) in one response.
 - **Actionable links** — Relative URLs are absolutized so an agent can follow numbered links in terminal browse mode or chain fetches across a site without guessing base paths.
-- **Structured output** — `--format json` and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
+- **Structured output** — `--format json`, `--format csv`, and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
 - **Polite crawling** — `--delay`, caching (`--cache-ttl`), `robots.txt` respect, and batch mode let research agents process URL lists without hammering servers or re-fetching the same page.
 - **Auth for gated content** — Cookies and custom headers (`--cookie`, `--header`) let agents reach documentation, dashboards, or member-only pages when credentials are provided.
 
@@ -58,6 +58,9 @@ cargo run -- fetch https://example.com --format json
 
 # Plain text output (Markdown syntax stripped) for archival / NLP
 cargo run -- fetch https://example.com --format text
+
+# CSV row for corpus pipelines
+cargo run -- fetch https://example.com --format csv
 
 # Add a polite delay between requests (milliseconds)
 cargo run -- fetch https://example.com --delay 500
@@ -113,15 +116,17 @@ Example Cursor MCP config:
 - **Recursive crawl** (`--depth N`): BFS crawl of same-origin links from a start URL; writes one Markdown file per page to `--output` directory or prints separated sections to stdout
 - **robots.txt**: Honors Disallow rules and Crawl-delay from `/robots.txt` before fetching (use `--ignore-robots` to disable)
 - **Content deduplication**: Removes duplicate paragraph-level blocks to further reduce token output
-- **Main content extraction** (`--main-content`): Trafilatura-style fallback chain — scores semantic tags (`<article>`, `<main>`, `[role="main"]`), top-level `<div>`/`<section>` blocks (text vs link density), and paragraph clusters; picks the best candidate, strips link-heavy boilerplate paragraphs; falls back to JSON-LD / Open Graph structured content when heuristics score poorly
+- **Main content extraction** (`--main-content`): Trafilatura-style fallback chain — scores semantic tags (`<article>`, `<main>`, `[role="main"]`), top-level `<div>`/`<section>` blocks (text vs link density), and paragraph clusters; picks the best candidate, strips link-heavy boilerplate paragraphs; falls back to JSON-LD / Open Graph structured content when heuristics score poorly. Article and product pages also prefer main-content extraction automatically via page-type profiles
+- **Page-type profiles**: `article` / `product` prefer main content; `product` keeps images and appends a JSON-LD Product details section (name, brand, SKU, price); `forum` keeps the full thread and appends structured comments
 - **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)
 - **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
-- **Metadata extraction**: Title, description, author (meta tag, JSON-LD, or Dublin Core), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), language (html lang, og:locale, JSON-LD inLanguage), extraction quality (0.0–1.0 confidence), and page type (`article` / `forum` / `product` / `page`) in MCP response and `--format json` output
+- **Metadata extraction**: Title, description, author (meta tag, JSON-LD, or Dublin Core), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), language (html lang, og:locale, JSON-LD inLanguage, or `whatlang` ISO 639-3 fallback on extracted text), extraction quality (0.0–1.0 confidence), and page type (`article` / `forum` / `product` / `page`) in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
 - **Plain-text output** (`--format text`): Strip Markdown syntax for archival pipelines and NLP ingestion
+- **CSV output** (`--format csv`): Trafilatura-style single-row CSV (url, title, author, date, language, page_type, quality, text) for corpus pipelines
 - **Comments extraction**: Detects forum/thread pages (Reddit, WordPress, vBulletin) and extracts comments with author attribution, nesting depth, and blockquote formatting
 - **Link URL absolutization**: Converts relative URLs in Markdown links to absolute URLs using the page URL as base, so links are usable in LLM contexts
 - **Sitemap/feed discovery** (`sitemap` subcommand): Fetches `sitemap.xml` from a website and lists all discovered URLs; optionally discovers RSS/Atom/JSON Feed links from the HTML page (`--feeds` flag)

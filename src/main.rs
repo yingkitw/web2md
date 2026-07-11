@@ -22,6 +22,8 @@ enum OutputFormat {
     Json,
     /// Emit plain text with Markdown syntax stripped (archival / NLP pipelines)
     Text,
+    /// Emit CSV (url + metadata + plain text) for corpus pipelines
+    Csv,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -64,7 +66,7 @@ enum Commands {
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
-        /// Output format: markdown, html, json, or text
+        /// Output format: markdown, html, json, text, or csv
         #[arg(short, long, value_enum, default_value = "markdown")]
         format: OutputFormat,
         /// Render Markdown with ANSI colors and formatting in the terminal
@@ -404,6 +406,13 @@ async fn main() -> Result<()> {
                         let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
                         let md = PageToMarkdown::absolutize_links(&md, &url);
                         PageToMarkdown::to_plain_text(&md)
+                    }
+                    OutputFormat::Csv => {
+                        let md = PageToMarkdown::convert(&html, include_images, keep_header, main_content, &exclude_selector)?;
+                        let md = PageToMarkdown::absolutize_links(&md, &url);
+                        let text = PageToMarkdown::to_plain_text(&md);
+                        let meta = extract_page_metadata(&html, &md);
+                        meta.to_csv(&url, &text)
                     }
                 };
 

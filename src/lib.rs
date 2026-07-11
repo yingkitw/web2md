@@ -17,8 +17,8 @@ pub use crawl::{normalize_crawl_url, same_origin_links};
 pub use feed::{feed_to_markdown, parse_feed, Feed};
 pub use markdown::PageToMarkdown;
 pub use mcp::{
-    extract_metadata, extract_page_metadata, truncate_with_marker, McpRequest, McpServer,
-    PageMetadata,
+    detect_content_language, extract_metadata, extract_page_metadata, truncate_with_marker,
+    McpRequest, McpServer, PageMetadata,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);

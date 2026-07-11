@@ -133,7 +133,61 @@ impl PageMetadata {
     pub fn with_content_signals(mut self, html: &str, markdown: &str) -> Self {
         self.extraction_quality = Some(PageToMarkdown::extraction_quality(html, markdown));
         self.page_type = Some(PageToMarkdown::detect_page_type(html).to_string());
+        if self.language.is_none() {
+            self.language = detect_content_language(markdown);
+        }
         self
+    }
+
+    /// Emit a Trafilatura-style CSV document (header + one data row).
+    pub fn to_csv(&self, url: &str, text: &str) -> String {
+        let mut out = String::from(
+            "url,title,author,published_date,language,page_type,extraction_quality,text\n",
+        );
+        out.push_str(&csv_escape(url));
+        out.push(',');
+        out.push_str(&csv_escape(self.title.as_deref().unwrap_or("")));
+        out.push(',');
+        out.push_str(&csv_escape(self.author.as_deref().unwrap_or("")));
+        out.push(',');
+        out.push_str(&csv_escape(self.published_date.as_deref().unwrap_or("")));
+        out.push(',');
+        out.push_str(&csv_escape(self.language.as_deref().unwrap_or("")));
+        out.push(',');
+        out.push_str(&csv_escape(self.page_type.as_deref().unwrap_or("")));
+        out.push(',');
+        if let Some(q) = self.extraction_quality {
+            out.push_str(&format!("{:.2}", q));
+        }
+        out.push(',');
+        out.push_str(&csv_escape(text));
+        out.push('\n');
+        out
+    }
+}
+
+/// Detect language from extracted text when HTML metadata has no language.
+/// Returns an ISO 639-3 code when detection is reliable.
+pub fn detect_content_language(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.chars().count() < 40 {
+        return None;
+    }
+    let info = whatlang::detect(trimmed)?;
+    if !info.is_reliable() {
+        return None;
+    }
+    Some(info.lang().code().to_string())
+}
+
+fn csv_escape(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
     }
 }
 
@@ -952,6 +1006,39 @@ mod tests {
         let quality = meta.extraction_quality.unwrap();
         assert!(quality >= 0.5, "expected meaningful quality, got {quality}");
         assert!(quality <= 1.0);
+    }
+
+    #[test]
+    fn detect_content_language_english() {
+        let text = "This is a longer English paragraph used to verify that language detection \
+            can identify the language of extracted article text when HTML metadata is missing.";
+        let lang = detect_content_language(text).expect("should detect English");
+        assert_eq!(lang, "eng");
+    }
+
+    #[test]
+    fn detect_content_language_skips_short_text() {
+        assert_eq!(detect_content_language("Hi"), None);
+    }
+
+    #[test]
+    fn to_csv_emits_header_and_escaped_row() {
+        let meta = PageMetadata {
+            title: Some("Hello, \"World\"".to_string()),
+            author: Some("Ada".to_string()),
+            language: Some("eng".to_string()),
+            page_type: Some("article".to_string()),
+            extraction_quality: Some(0.9),
+            ..Default::default()
+        };
+        let csv = meta.to_csv("https://example.com/a", "Line one\nLine two");
+        assert!(csv.starts_with(
+            "url,title,author,published_date,language,page_type,extraction_quality,text\n"
+        ));
+        assert!(csv.contains("\"Hello, \"\"World\"\"\""));
+        assert!(csv.contains("Ada"));
+        assert!(csv.contains("0.90"));
+        assert!(csv.contains("\"Line one\nLine two\""));
     }
 
     #[test]

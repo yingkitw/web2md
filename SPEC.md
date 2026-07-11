@@ -18,6 +18,7 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 | HTTP client | `reqwest` + `tokio` |
 | HTML parsing | `scraper` 0.23 (html5ever) in `html_to_md.rs` |
 | Markdown rendering | `pulldown-cmark` (ANSI terminal via `render_markdown_ansi`) |
+| Language detection | `whatlang` (ISO 639-3 fallback when HTML metadata lacks language) |
 | HTML utilities | `html_util.rs` — case-insensitive search, entity decoding |
 | Conversion pipeline | `markdown.rs` (`PageToMarkdown`) wraps `html_to_md::parse_html` |
 | CLI | `clap` 4.x |
@@ -81,6 +82,7 @@ web2md fetch <URL> [FLAGS]
   --format html        Output raw HTML
   --format json        Output structured JSON (markdown + metadata)
   --format text        Output plain text (Markdown syntax stripped)
+  --format csv         Output Trafilatura-style CSV (header + one data row)
   --render             ANSI colors: bold headings, underlined links, colored code
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
@@ -172,7 +174,7 @@ web2md mcp
 }
 ```
 
-`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `categories`, `excerpt`, `canonical_url`, `language`, `extraction_quality`, and `page_type` are optional — omitted when the page has no corresponding meta tags or structured data. Title falls back to Dublin Core `DC.title` / `dcterms.title` when `<title>` is absent. `author` is extracted from `<meta name="author">`, JSON-LD `author` (string or `{"name":"..."}` object), or Dublin Core `DC.creator` / `dcterms.creator`. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, JSON-LD `datePublished`, or Dublin Core `DC.date` / `dcterms.date` (in priority order). `description` also falls back to `DC.description` / `dcterms.description`. `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `categories` is extracted from multiple `<meta property="article:section">` tags or JSON-LD `articleSection` (string or array). `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`. `extraction_quality` is a 0.0–1.0 confidence score from Markdown length, structure, semantic HTML, metadata, and link density. `page_type` is one of `article`, `forum`, `product`, or `page`.
+`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `categories`, `excerpt`, `canonical_url`, `language`, `extraction_quality`, and `page_type` are optional — omitted when the page has no corresponding meta tags or structured data. Title falls back to Dublin Core `DC.title` / `dcterms.title` when `<title>` is absent. `author` is extracted from `<meta name="author">`, JSON-LD `author` (string or `{"name":"..."}` object), or Dublin Core `DC.creator` / `dcterms.creator`. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, JSON-LD `datePublished`, or Dublin Core `DC.date` / `dcterms.date` (in priority order). `description` also falls back to `DC.description` / `dcterms.description`. `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `categories` is extracted from multiple `<meta property="article:section">` tags or JSON-LD `articleSection` (string or array). `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`; when those are absent, `whatlang` detects an ISO 639-3 code from extracted text (minimum length and reliability gates). `extraction_quality` is a 0.0–1.0 confidence score from Markdown length, structure, semantic HTML, metadata, and link density. `page_type` is one of `article`, `forum`, `product`, or `page`.
 
 ### CLI `--format json` Output
 
@@ -198,6 +200,17 @@ web2md mcp
 
 Same metadata fields as the MCP response, minus the `url` field. Omitted fields are excluded from the JSON output (not `null`).
 
+### CLI `--format csv` Output
+
+Trafilatura-style CSV with a header row and one data row:
+
+```
+url,title,author,published_date,language,page_type,extraction_quality,text
+https://example.com/article,Article Title,Jane Doe,2025-01-15T08:30:00Z,en,article,0.86,"Plain text body..."
+```
+
+Fields containing commas, quotes, or newlines are RFC 4180–escaped. The `text` column is plain text (Markdown stripped).
+
 ## HTML Processing Pipeline
 
 1. **Browser.fetch()** → raw HTML
@@ -205,12 +218,13 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
 3. **Browser.post_load_wait()** → sleep `--wait` milliseconds after fetch (optional)
 4. **Browser.run_inline_scripts()** → evaluate inline `<script>` blocks when `--javascript` / `enable_javascript` (optional); flush `setTimeout`, `setInterval`, and `requestAnimationFrame` callbacks up to `--wait`
 5. **PageToMarkdown.convert()** → Markdown
-   - Extract main content if `main_content` is true (Trafilatura-style fallback: score semantic tags with bonus, top-level blocks, paragraph clusters; pick best candidate; strip boilerplate; fall back to JSON-LD `articleBody` / `description` or Open Graph description when heuristics score ≤ 100)
+   - Detect page type (`article` / `forum` / `product` / `page`) and apply extraction profile: article/product prefer main-content; product prefers keeping images
+   - Extract main content if `main_content` is true or the profile prefers it (Trafilatura-style fallback: score semantic tags with bonus, top-level blocks, paragraph clusters; pick best candidate; strip boilerplate; fall back to JSON-LD `articleBody` / `description` or Open Graph description when heuristics score ≤ 100)
    - Strip `<script>`, `<style>`, `<iframe>`
    - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
    - Strip elements matching `--exclude-selector` (`.class` or `#id`)
    - Extract code languages from `<code class="language-xxx">`
-   - Strip `<img>` unless `include_images` is true
+   - Strip `<img>` unless `include_images` is true or the product profile prefers images
    - **html_to_md::parse_html()** — DOM walk via `scraper`/html5ever:
      - Headings, paragraphs, links, images, lists, tables, blockquotes, inline bold/italic
      - HTML entity decoding (`&amp;`, `&#169;`, etc.)
@@ -219,6 +233,7 @@ Same metadata fields as the MCP response, minus the `url` field. Omitted fields 
    - Inject languages into fenced code blocks (` ```rust `)
    - Deduplicate repeated paragraph-level blocks (>20 chars, first occurrence kept)
    - Collapse excessive whitespace
+   - Append JSON-LD Product details (`## Product details`) for product pages when name/brand/SKU/price are available
    - Extract comments from forum/thread pages (detects `class="comment"`, `id="comment-N"`, `data-testid="comment"`, `data-author`; extracts author + text + nesting depth; appends as `## Comments` section with blockquotes and indentation)
 5. **PageToMarkdown.absolutize_links()** → convert relative URLs in `[text](url)` patterns to absolute URLs using the page URL as base
 6. **PageToMarkdown.to_plain_text()** → strip Markdown syntax when `--format text` (optional; uses `pulldown-cmark` event walk)
