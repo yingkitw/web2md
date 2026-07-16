@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use url::Url;
 use web2md::{
-    extract_feed_links, extract_page_metadata, feed_to_markdown, language_matches,
-    normalize_crawl_url, parse_feed, parse_sitemap_urls, truncate_with_marker, Browser,
-    BrowserOptions, ConvertOptions, McpRequest, McpServer, PageMetadata, PageToMarkdown,
+    content_fingerprint, extract_event, extract_faq, extract_feed_links, extract_job,
+    extract_page_metadata, extract_recipe, extract_summary, extract_topic, feed_to_markdown,
+    language_matches, normalize_crawl_url, parse_feed, parse_sitemap_urls,
+    truncate_by_tokens, truncate_with_marker, Browser, BrowserOptions, ConvertOptions,
+    McpRequest, McpServer, PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -28,6 +30,8 @@ enum OutputFormat {
     Tei,
     /// Emit plain Trafilatura-style XML (`<doc>` + `<main>`) for corpus pipelines
     Xml,
+    /// Emit deterministic brand/design profile (≈ Firecrawl `branding` format)
+    Branding,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -139,7 +143,55 @@ enum Commands {
         /// Do not load ~/.web2md/blacklist.txt
         #[arg(long)]
         no_user_blacklist: bool,
+        /// Keep only paragraphs relevant to this natural-language query (≈ Firecrawl `highlights`)
+        #[arg(long)]
+        topic: Option<String>,
+        /// Cap output length by token budget instead of characters
+        #[arg(long)]
+        max_tokens: Option<usize>,
+        /// Extract an extactive summary of this many sentences (≈ Firecrawl `summary`)
+        #[arg(long)]
+        summary: Option<usize>,
+        /// Force structured extractor: `recipe` / `faq` / `job` / `event` (LLM-free)
+        #[arg(long = "type")]
+        r#type: Option<String>,
+        /// Persist fetched pages as JSON files under this directory; survives restarts
+        #[arg(long)]
+        cache_dir: Option<String>,
+        /// Per-host requests-per-second cap; smaller = more polite
+        #[arg(long)]
+        rate: Option<f64>,
+        /// POST the result JSON to this webhook URL when fetch completes (n8n/Make/Zapier)
+        #[arg(long)]
+        webhook: Option<String>,
     },
+    /// Peek at a URL: return title + excerpt + key metadata only (cheaper than `fetch`)
+    Peek {
+        /// Target URL
+        url: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Polite delay between consecutive requests in milliseconds
+        #[arg(long)]
+        delay: Option<u64>,
+        /// Ignore robots.txt disallow rules and crawl-delay
+        #[arg(long)]
+        ignore_robots: bool,
+        /// Disable URL blacklist filtering
+        #[arg(long)]
+        no_blacklist: bool,
+        /// Output as structured JSON instead of plain text
+        #[arg(long)]
+        json: bool,
+    },
+    /// Interactive terminal browser (Lynx-like)
     Browse {
         /// Starting URL
         url: String,
@@ -188,6 +240,71 @@ enum Commands {
     },
     /// Run as an MCP server (stdio JSON-RPC)
     Mcp,
+    /// Diff two URLs (or URL vs. cached version) at the Markdown level
+    Diff {
+        /// First URL (or path to a cached Markdown file when using --cached-b)
+        url_a: String,
+        /// Second URL (or path to a cached Markdown file)
+        url_b: String,
+        /// Treat `url_b` as a path to a local Markdown file (skip fetch)
+        #[arg(long)]
+        cached_b: bool,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Emit machine-readable JSON summary instead of unified diff
+        #[arg(long)]
+        json: bool,
+    },
+    /// Extract a YouTube video transcript as Markdown (no video download)
+    Transcript {
+        /// YouTube watch or share URL
+        url: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Preferred caption language code (e.g. en, fr, de)
+        #[arg(long)]
+        lang: Option<String>,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Ignore robots.txt for this fetch
+        #[arg(long)]
+        ignore_robots: bool,
+    },
+    /// Poll a URL on an interval and emit whenever the content fingerprint (simhash) changes
+    Watch {
+        /// Target URL
+        url: String,
+        /// Poll interval in seconds (default: 300)
+        #[arg(long, default_value = "300")]
+        every: u64,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Persist seen fingerprints across restarts at this directory
+        #[arg(long)]
+        cache_dir: Option<String>,
+        /// Ignore robots.txt for this fetch
+        #[arg(long)]
+        ignore_robots: bool,
+    },
     /// Discover URLs from a website's sitemap.xml and RSS/Atom feeds
     Sitemap {
         /// Target URL (sitemap.xml will be fetched from the same origin)
@@ -297,6 +414,99 @@ fn apply_blacklist_options(
     options.extra_blacklist_files = blacklist_file;
 }
 
+/// Fetch a URL once and return its content fingerprint plus the
+/// plain-text body (used by the `watch` subcommand).
+async fn poll_once(browser: &Browser, url: &str) -> anyhow::Result<(String, String)> {
+    let html = browser.fetch(url).await?;
+    let html = browser.prepare_html(&html, url).await?;
+    let convert_opts = ConvertOptions::default();
+    let md = PageToMarkdown::convert_with(&html, &convert_opts, &[])?;
+    let meta = extract_page_metadata(&html, &md);
+    let body = PageToMarkdown::to_plain_text(&md);
+    let fp = meta.fingerprint.unwrap_or_else(|| content_fingerprint(&body));
+    Ok((fp, body))
+}
+
+fn unix_secs_string() -> String {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn watch_state_filename(url: &str) -> String {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(url.as_bytes());
+    let digest = hasher.finalize();
+    let name = digest
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+    format!("watch-{}.txt", &name[..16])
+}
+
+fn load_watch_state(dir: Option<&std::path::Path>, url: &str) -> anyhow::Result<Option<String>> {
+    let Some(dir) = dir else { return Ok(None) };
+    let path = dir.join(watch_state_filename(url));
+    if !path.exists() {
+        return Ok(None);
+    }
+    let data = std::fs::read_to_string(&path)?;
+    Ok(Some(data.trim().to_string()))
+}
+
+fn save_watch_state(
+    dir: Option<&std::path::Path>,
+    url: &str,
+    fingerprint: &str,
+) -> anyhow::Result<()> {
+    let Some(dir) = dir else { return Ok(()) };
+    if !dir.exists() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let path = dir.join(watch_state_filename(url));
+    std::fs::write(path, fingerprint.as_bytes())?;
+    Ok(())
+}
+
+/// Map a CLI `OutputFormat` to a lowercase identifier for use in webhook payloads.
+fn format_label(format: &OutputFormat) -> &'static str {
+    match format {
+        OutputFormat::Markdown => "markdown",
+        OutputFormat::Html => "html",
+        OutputFormat::Json => "json",
+        OutputFormat::Text => "text",
+        OutputFormat::Csv => "csv",
+        OutputFormat::Tei => "tei",
+        OutputFormat::Xml => "xml",
+        OutputFormat::Branding => "branding",
+    }
+}
+
+/// POST `body` as JSON to `url`. Returns Ok(()) for any 2xx response. Non-2xx
+/// are returned as errors so callers can log. Network errors also propagate.
+async fn post_webhook(url: &str, body: &str) -> anyhow::Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("building webhook client")?;
+    let resp = client
+        .post(url)
+        .header("content-type", "application/json")
+        .header("user-agent", "web2md-webhook/0.1")
+        .body(body.to_string())
+        .send()
+        .await
+        .context("POSTing webhook")?;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        anyhow::bail!("webhook returned HTTP {}", status)
+    }
+}
+
 /// Build [`BrowserOptions`] from common CLI flags shared by fetch/browse/batch.
 fn build_browser_options(
     timeout: Option<u64>,
@@ -375,6 +585,13 @@ async fn main() -> Result<()> {
             ignore_robots,
             blacklist_file,
             no_user_blacklist,
+            topic,
+            max_tokens,
+            summary,
+            r#type,
+            cache_dir,
+            rate,
+            webhook,
         }) => {
             let options = build_browser_options(
                 timeout,
@@ -389,6 +606,11 @@ async fn main() -> Result<()> {
                 blacklist_file,
                 ignore_robots,
             );
+            let mut options = options;
+            if let Some(dir) = cache_dir {
+                options.cache_dir = Some(std::path::PathBuf::from(dir));
+            }
+            options.host_rate_limit = rate;
             let browser = Browser::new(options)?;
 
             if depth > 0 {
@@ -413,7 +635,12 @@ async fn main() -> Result<()> {
                 let html = browser.fetch(&url).await?;
                 let html = browser.prepare_html(&html, &url).await?;
 
+                let format_label_value = format_label(&format);
                 let (mut result, frontmatter_meta) = match format {
+                    OutputFormat::Branding => {
+                        let profile = web2md::extract_branding(&html);
+                        (serde_json::to_string_pretty(&profile)?, None)
+                    }
                     OutputFormat::Html => {
                         if lang.is_some() {
                             anyhow::bail!("--lang requires a converted output format (not html)");
@@ -423,25 +650,75 @@ async fn main() -> Result<()> {
                                 "--only-with-metadata requires a converted output format (not html)"
                             );
                         }
+                        if r#type.is_some() {
+                            anyhow::bail!("--type requires a converted output format (not html)");
+                        }
                         (html.clone(), None)
                     }
                     format => {
-                        let convert_opts = ConvertOptions {
-                            include_images,
-                            keep_header,
-                            main_content,
-                            favor_precision: precision,
-                            favor_recall: recall,
-                            include_comments: !no_comments,
-                            include_tables: !no_tables,
-                            include_links: !no_links,
+                        let struct_result: Option<String> = match r#type.as_deref() {
+                            Some("recipe") => match extract_recipe(&html) {
+                                Ok(Some(md)) => Some(md),
+                                Ok(None) => None,
+                                Err(e) => {
+                                    eprintln!("--type recipe: {}, falling back", e);
+                                    None
+                                }
+                            },
+                            Some("faq") => match extract_faq(&html) {
+                                Ok(Some(md)) => Some(md),
+                                Ok(None) => None,
+                                Err(e) => {
+                                    eprintln!("--type faq: {}, falling back", e);
+                                    None
+                                }
+                            },
+                            Some("job") => match extract_job(&html) {
+                                Ok(Some(md)) => Some(md),
+                                Ok(None) => None,
+                                Err(e) => {
+                                    eprintln!("--type job: {}, falling back", e);
+                                    None
+                                }
+                            },
+                            Some("event") => match extract_event(&html) {
+                                Ok(Some(md)) => Some(md),
+                                Ok(None) => None,
+                                Err(e) => {
+                                    eprintln!("--type event: {}, falling back", e);
+                                    None
+                                }
+                            },
+                            Some(other) => {
+                                anyhow::bail!(
+                                    "unsupported --type {}; expected one of: recipe, faq, job, event",
+                                    other
+                                );
+                            }
+                            None => None,
                         };
-                        let md = PageToMarkdown::convert_with(
-                            &html,
-                            &convert_opts,
-                            &exclude_selector,
-                        )?;
-                        let md = PageToMarkdown::absolutize_links(&md, &url);
+                        let from_struct = struct_result.is_some();
+                        let mut md = match struct_result {
+                            Some(md) => md,
+                            None => {
+                                let convert_opts = ConvertOptions {
+                                    include_images,
+                                    keep_header,
+                                    main_content,
+                                    favor_precision: precision,
+                                    favor_recall: recall,
+                                    include_comments: !no_comments,
+                                    include_tables: !no_tables,
+                                    include_links: !no_links,
+                                };
+                                let body = PageToMarkdown::convert_with(
+                                    &html,
+                                    &convert_opts,
+                                    &exclude_selector,
+                                )?;
+                                PageToMarkdown::absolutize_links(&body, &url)
+                            }
+                        };
                         let meta = extract_page_metadata(&html, &md);
                         if let Some(ref target) = lang {
                             if !language_matches(meta.language.as_deref(), target) {
@@ -460,6 +737,23 @@ async fn main() -> Result<()> {
                                 meta.title.as_deref().unwrap_or("(missing)"),
                                 meta.published_date.as_deref().unwrap_or("(missing)")
                             );
+                        }
+                        if !from_struct {
+                            if let Some(ref t) = topic {
+                                md = match extract_topic(&md, t, None) {
+                                    Some(f) => PageToMarkdown::absolutize_links(&f, &url),
+                                    None => anyhow::bail!(
+                                        "--topic: no paragraphs matched query {:?}",
+                                        t
+                                    ),
+                                };
+                            }
+                            if let Some(sentences) = summary {
+                                md = match extract_summary(&md, sentences, meta.title.as_deref()) {
+                                    Some(s) => s,
+                                    None => md,
+                                };
+                            }
                         }
                         let fm_meta = matches!(format, OutputFormat::Markdown | OutputFormat::Text)
                             .then(|| meta.clone());
@@ -492,6 +786,7 @@ async fn main() -> Result<()> {
                                 meta.to_xml(&url, &text)
                             }
                             OutputFormat::Html => unreachable!(),
+                            OutputFormat::Branding => unreachable!(),
                         };
                         (out, fm_meta)
                     }
@@ -505,8 +800,22 @@ async fn main() -> Result<()> {
                     }
                 }
 
-                if let Some(max) = max_length {
+                if let Some(max) = max_tokens {
+                    result = truncate_by_tokens(&result, max);
+                } else if let Some(max) = max_length {
                     result = truncate_with_marker(&result, max);
+                }
+
+                if let Some(hook) = webhook.as_deref() {
+                    let payload = serde_json::json!({
+                        "event": "fetch.completed",
+                        "url": url,
+                        "format": format_label_value,
+                        "result": result,
+                    });
+                    if let Err(e) = post_webhook(hook, &payload.to_string()).await {
+                        eprintln!("webhook POST to {} failed: {}", hook, e);
+                    }
                 }
 
                 if let Some(path) = output_file {
@@ -552,6 +861,202 @@ async fn main() -> Result<()> {
         Some(Commands::Mcp) => {
             let server = McpServer::new()?;
             run_stdio_mcp(&server).await?;
+        }
+        Some(Commands::Diff {
+            url_a,
+            url_b,
+            cached_b,
+            timeout,
+            cookie,
+            header,
+            json,
+        }) => {
+            use web2md::diff_markdown;
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            let browser = Browser::new(options)?;
+            let html_a = browser.fetch(&url_a).await?;
+            let html_a = browser.prepare_html(&html_a, &url_a).await?;
+            let md_a = PageToMarkdown::convert(&html_a, false, false, false, &[])?;
+            let md_a = PageToMarkdown::absolutize_links(&md_a, &url_a);
+            let md_b = if cached_b {
+                std::fs::read_to_string(&url_b)
+                    .with_context(|| format!("reading cached Markdown from {}", url_b))?
+            } else {
+                let html_b = browser.fetch(&url_b).await?;
+                let html_b = browser.prepare_html(&html_b, &url_b).await?;
+                let body = PageToMarkdown::convert(&html_b, false, false, false, &[])?;
+                PageToMarkdown::absolutize_links(&body, &url_b)
+            };
+            let diff = diff_markdown(&url_a, &md_a, &url_b, &md_b);
+            if json {
+                let (added, removed) = web2md::summarize(&diff);
+                let out = serde_json::json!({
+                    "url_a": url_a,
+                    "url_b": url_b,
+                    "lines_added": added,
+                    "lines_removed": removed,
+                    "diff": diff,
+                });
+                println!("{}", serde_json::to_string_pretty(&out)?);
+            } else {
+                let (added, removed) = web2md::summarize(&diff);
+                eprintln!("+{} -{}\n", added, removed);
+                println!("{}", diff);
+            }
+        }
+        Some(Commands::Transcript {
+            url,
+            timeout,
+            lang,
+            cookie,
+            header,
+            ignore_robots,
+        }) => {
+            use web2md::{
+                extract_caption_track_url, is_youtube_url, parse_timed_text,
+                render_transcript_markdown,
+            };
+            if !is_youtube_url(&url) {
+                anyhow::bail!(
+                    "{} is not a recognized YouTube URL (expected youtube.com/watch or youtu.be)",
+                    url
+                );
+            }
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            options.respect_robots_txt = !ignore_robots;
+            let browser = Browser::new(options)?;
+            let watch_html = browser.fetch(&url).await?;
+            let track_url = match extract_caption_track_url(&watch_html, lang.as_deref()) {
+                Some(u) => u,
+                None => anyhow::bail!(
+                    "no caption track found in watch HTML for {} (page may not have captions)",
+                    url
+                ),
+            };
+            let caption_xml = browser.fetch(&track_url).await?;
+            let cues = parse_timed_text(&caption_xml)?;
+            let md = render_transcript_markdown(&cues);
+            print!("{}", md);
+        }
+        Some(Commands::Watch {
+            url,
+            every,
+            timeout,
+            cookie,
+            header,
+            cache_dir,
+            ignore_robots,
+        }) => {
+            use std::time::Duration as StdDuration;
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            options.respect_robots_txt = !ignore_robots;
+            // For watch, we deliberately bypass the persistent cache during the
+            // comparison fetch so each tick sees the live page, then store the
+            // resulting fingerprint in a sibling state file.
+            let state_path = cache_dir.as_deref().map(std::path::Path::new);
+            let browser = Browser::new(options)?;
+            let mut last_fp: Option<String> = load_watch_state(state_path, &url)?;
+            let interval = StdDuration::from_secs(every.max(1));
+            // First fetch happens immediately.
+            loop {
+                match poll_once(&browser, &url).await {
+                    Ok((fp, body)) => {
+                        if last_fp.as_deref() != Some(fp.as_str()) {
+                            let ts = unix_secs_string();
+                            println!(
+                                "{}\t{}\t{}\t{}",
+                                ts,
+                                url,
+                                fp,
+                                body.chars().take(80).collect::<String>()
+                            );
+                            last_fp = Some(fp.clone());
+                            let _ = save_watch_state(state_path, &url, &fp);
+                        }
+                    }
+                    Err(e) => eprintln!("watch error: {}", e),
+                }
+                tokio::time::sleep(interval).await;
+            }
+        }
+        Some(Commands::Peek {
+            url,
+            timeout,
+            cookie,
+            header,
+            delay,
+            ignore_robots,
+            no_blacklist,
+            json,
+        }) => {
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            if let Some(ms) = delay {
+                options.request_delay = Duration::from_millis(ms);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            options.respect_robots_txt = !ignore_robots;
+            options.filter_blacklisted_urls = !no_blacklist;
+            let browser = Browser::new(options)?;
+            let html = browser.fetch(&url).await?;
+            let html = browser.prepare_html(&html, &url).await?;
+            let meta = extract_page_metadata(&html, "");
+            let excerpt = meta.excerpt.clone().unwrap_or_default();
+            if json {
+                let output = serde_json::json!({
+                    "url": url,
+                    "title": meta.title,
+                    "description": meta.description,
+                    "author": meta.author,
+                    "published_date": meta.published_date,
+                    "site_name": meta.site_name,
+                    "language": meta.language,
+                    "excerpt": excerpt,
+                    "fingerprint": meta.fingerprint,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!("URL:        {}", url);
+                if let Some(t) = meta.title.as_deref() {
+                    println!("Title:      {}", t);
+                }
+                if let Some(d) = meta.description.as_deref() {
+                    println!("Description: {}", d);
+                }
+                if let Some(a) = meta.author.as_deref() {
+                    println!("Author:     {}", a);
+                }
+                if let Some(d) = meta.published_date.as_deref() {
+                    println!("Date:       {}", d);
+                }
+                if let Some(s) = meta.site_name.as_deref() {
+                    println!("Site:       {}", s);
+                }
+                if let Some(l) = meta.language.as_deref() {
+                    println!("Language:   {}", l);
+                }
+                if !excerpt.is_empty() {
+                    println!("\nExcerpt:\n  {}", excerpt.replace('\n', " "));
+                }
+            }
         }
         Some(Commands::Sitemap {
             url,

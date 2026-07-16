@@ -82,8 +82,16 @@ pub struct BrowserOptions {
     pub headers: Vec<String>,
     /// Minimum delay between consecutive requests to the same host
     pub request_delay: Duration,
+    /// Per-host requests-per-second limit. `None` or `0` disables per-host throttling.
+    /// Per-host pacing is tracked separately from the global `request_delay` so the
+    /// heavier of the two always applies.
+    pub host_rate_limit: Option<f64>,
     /// Cache TTL for fetched pages (zero = caching disabled)
     pub cache_ttl: Duration,
+    /// Optional directory for persistent JSONL cache files (survives process restarts).
+    /// When set, fetched pages persist under `{cache_dir}/{sha256(url)}.json` with the
+    /// same `cache_ttl` and override the in-memory cache.
+    pub cache_dir: Option<std::path::PathBuf>,
     /// Skip known non-content URLs (ads, tracking pixels) on secondary fetches
     pub filter_blacklisted_urls: bool,
     /// Fetch and honor robots.txt disallow rules and crawl-delay
@@ -105,7 +113,9 @@ impl Default for BrowserOptions {
             cookies: Vec::new(),
             headers: Vec::new(),
             request_delay: Duration::from_millis(0),
+            host_rate_limit: None,
             cache_ttl: Duration::from_secs(0),
+            cache_dir: None,
             filter_blacklisted_urls: true,
             respect_robots_txt: true,
             load_user_blacklist: true,
@@ -122,8 +132,12 @@ pub struct Browser {
     options: BrowserOptions,
     blacklist: BlacklistPatterns,
     last_request: Mutex<Option<Instant>>,
+    /// Last request timestamp per host (for per-host rate limiting).
+    per_host_last: Mutex<HashMap<String, Instant>>,
     cache: Mutex<HashMap<String, (String, Instant)>>,
     robots_cache: Mutex<HashMap<String, RobotsTxt>>,
+    /// Optional persistent file cache (when `options.cache_dir` is set).
+    persistent_cache: Option<crate::PersistentCache>,
 }
 
 impl Browser {
@@ -149,13 +163,28 @@ impl Browser {
         }
         let blacklist = BlacklistPatterns::builtin().merge(custom);
 
+        let persistent_cache = match options.cache_dir.as_ref() {
+            Some(dir) if !options.cache_ttl.is_zero() => {
+                match crate::PersistentCache::new(dir, options.cache_ttl) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        eprintln!("warning: failed to initialize persistent cache: {}", e);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
+
         Ok(Self {
             client,
             options,
             blacklist,
             last_request: Mutex::new(None),
+            per_host_last: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
             robots_cache: Mutex::new(HashMap::new()),
+            persistent_cache,
         })
     }
 
@@ -208,28 +237,70 @@ impl Browser {
         Ok(rules)
     }
 
-    /// Enforce delay from CLI `--delay` and robots.txt crawl-delay (whichever is greater).
-    async fn enforce_delay(&self, robots_delay: Option<Duration>) {
-        let delay = self
+    /// Enforce delay from CLI `--delay` and robots.txt crawl-delay (whichever is greater),
+    /// plus any per-host rate limit configured via `--rate`. The per-host pacing tracks
+    /// a separate timestamp per host so two different hosts may be queried in parallel
+    /// without interference.
+    async fn enforce_delay(&self, robots_delay: Option<Duration>, host: &str) {
+        let global_delay = self
             .options
             .request_delay
             .max(robots_delay.unwrap_or(Duration::ZERO));
-        if delay.is_zero() {
+        let host_delay = self
+            .options
+            .host_rate_limit
+            .filter(|r| *r > 0.0)
+            .map(|rps| Duration::from_secs_f64(1.0 / rps));
+
+        if global_delay.is_zero() && host_delay.is_none() {
             return;
         }
-        let mut guard = self.last_request.lock().unwrap();
-        if let Some(last) = *guard {
-            let elapsed = last.elapsed();
-            if elapsed < delay {
-                let remaining = delay - elapsed;
-                drop(guard);
-                tokio::time::sleep(remaining).await;
-                let mut guard = self.last_request.lock().unwrap();
-                *guard = Some(Instant::now());
-                return;
+
+        // Global pacing: block until `global_delay` has elapsed since the last request.
+        if !global_delay.is_zero() {
+            let sleep_for = {
+                let guard = self.last_request.lock().unwrap();
+                match *guard {
+                    Some(last) => {
+                        let elapsed = last.elapsed();
+                        if elapsed < global_delay {
+                            Some(global_delay - elapsed)
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                }
+            };
+            if let Some(d) = sleep_for {
+                tokio::time::sleep(d).await;
             }
+            let mut guard = self.last_request.lock().unwrap();
+            *guard = Some(Instant::now());
         }
-        *guard = Some(Instant::now());
+
+        // Per-host pacing: block until `host_delay` has elapsed since the last request to this host.
+        if let Some(hd) = host_delay {
+            let sleep_for = {
+                let guard = self.per_host_last.lock().unwrap();
+                match guard.get(host).copied() {
+                    Some(last) => {
+                        let elapsed = last.elapsed();
+                        if elapsed < hd {
+                            Some(hd - elapsed)
+                        } else {
+                            None
+                        }
+                    }
+                    None => None,
+                }
+            };
+            if let Some(d) = sleep_for {
+                tokio::time::sleep(d).await;
+            }
+            let mut guard = self.per_host_last.lock().unwrap();
+            guard.insert(host.to_string(), Instant::now());
+        }
     }
 
     /// Returns true when URL blacklist filtering is enabled and the URL is blocked.
@@ -258,8 +329,15 @@ impl Browser {
             None
         };
 
-        self.enforce_delay(robots_delay).await;
-        self.fetch_raw(url).await
+        self.enforce_delay(robots_delay, parsed.host_str().unwrap_or("")).await;
+        let body = self.fetch_raw(url).await?;
+        // Persist to persistent cache, if configured.
+        if let Some(cache) = &self.persistent_cache {
+            if let Err(e) = cache.put(url, &body) {
+                eprintln!("warning: failed to persist cache entry for {}: {}", url, e);
+            }
+        }
+        Ok(body)
     }
 
     /// HTTP GET without robots.txt checks (used for robots.txt itself).
@@ -298,7 +376,14 @@ impl Browser {
     }
 
     /// Look up a URL in the cache, returning the body if not expired.
+    /// Prefers persistent cache when configured, falls back to in-memory.
     fn lookup_cache(&self, url: &str) -> Option<String> {
+        if let Some(persistent) = &self.persistent_cache {
+            if let Some(body) = persistent.get(url) {
+                return Some(body);
+            }
+            return None;
+        }
         let mut cache = self.cache.lock().unwrap();
         if let Some((body, fetched_at)) = cache.get(url) {
             if fetched_at.elapsed() < self.options.cache_ttl {
@@ -892,5 +977,27 @@ mod tests {
         let urls = parse_sitemap_urls(xml);
         assert_eq!(urls.len(), 1);
         assert_eq!(urls[0], "https://example.com/page");
+    }
+
+    #[tokio::test]
+    async fn enforce_delay_throttles_per_host() {
+        let mut opts = BrowserOptions::default();
+        opts.host_rate_limit = Some(20.0); // 20 rps → 50ms floor per host
+        let browser = Browser::new(opts).unwrap();
+        let start = std::time::Instant::now();
+        browser.enforce_delay(None, "a.example").await;
+        browser.enforce_delay(None, "a.example").await;
+        browser.enforce_delay(None, "b.example").await; // independent clock
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= std::time::Duration::from_millis(45),
+            "expected at least ~50ms across two calls to the same host, got {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(180),
+            "expected much less than 200ms total, got {:?}",
+            elapsed
+        );
     }
 }

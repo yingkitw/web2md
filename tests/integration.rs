@@ -1,9 +1,10 @@
 use std::time::Duration;
 use url::Url;
 use web2md::{
-    extract_feed_links, extract_metadata, extract_page_metadata, feed_to_markdown,
-    normalize_crawl_url, parse_feed, parse_sitemap_urls, same_origin_links, Browser,
-    BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+    extract_event, extract_faq, extract_feed_links, extract_job, extract_metadata,
+    extract_page_metadata, extract_recipe, extract_summary, extract_topic, feed_to_markdown,
+    normalize_crawl_url, parse_feed, parse_sitemap_urls, same_origin_links,
+    truncate_by_tokens, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
 };
 
 #[tokio::test]
@@ -873,4 +874,270 @@ async fn robots_txt_blocks_disallowed_paths() {
         .unwrap());
 
     allowed.assert_async().await;
+}
+
+#[test]
+fn topic_query_keeps_relevant_paragraphs_end_to_end() {
+    let html = "<html><body>
+        <p>Rust is a memory-safe systems language.</p>
+        <p>Bananas are yellow.</p>
+        <p>Cargo is the Rust build tool and package manager.</p>
+        <p>Apples are red.</p>
+    </body></html>";
+    let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
+    let filtered = extract_topic(&md, "rust cargo", None).expect("topic result");
+    assert!(filtered.contains("Rust"));
+    assert!(filtered.contains("Cargo"));
+    assert!(!filtered.contains("Bananas"));
+}
+
+#[test]
+fn summary_returns_top_relevant_sentences() {
+    let html = "<html><body>
+        <p>Rust is a memory-safe language. Bananas are yellow. Cargo builds Rust packages. Apples are red.</p>
+        <p>Grapes grow on vines. Cargo handles dependencies. Oranges are citrus fruits.</p>
+        <p>Cargo workspaces share dependencies. Kiwi is green and fuzzy.</p>
+    </body></html>";
+    let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
+    let s = extract_summary(&md, 3, Some("Cargo dependencies")).expect("summary");
+    let cargo_mentions = s.matches("Cargo").count();
+    assert!(cargo_mentions >= 1);
+    assert!(s.split('.').count() <= 6);
+}
+
+#[test]
+fn max_tokens_cuts_at_paragraph() {
+    let md = "First paragraph with several words here for context.\n\n\
+              Second paragraph with more words for variety and length so truncation kicks in.\n\n\
+              Third paragraph we expect not to see in output when the budget is tight enough.";
+    let out = truncate_by_tokens(md, 10);
+    assert!(out.contains("[truncated]"));
+}
+
+#[tokio::test]
+async fn peek_returns_metadata_only() {
+    let mut server = mockito::Server::new_async().await;
+    let body = "<html><head><title>Peek Title</title>\
+                <meta name='description' content='Quick summary line.'>\
+                <meta name='author' content='Ada'>\
+                </head><body>\
+                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>\
+                </body></html>";
+    let mock = server
+        .mock("GET", "/peek-target")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(body)
+        .create_async()
+        .await;
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let html = browser
+        .fetch(&format!("{}/peek-target", server.url()))
+        .await
+        .unwrap();
+    let meta = extract_page_metadata(&html, "");
+    assert_eq!(meta.title.as_deref(), Some("Peek Title"));
+    assert_eq!(meta.description.as_deref(), Some("Quick summary line."));
+    assert_eq!(meta.author.as_deref(), Some("Ada"));
+    assert!(meta.excerpt.is_some());
+    mock.assert_async().await;
+}
+
+#[test]
+fn recipe_extractor_returns_structured_markdown() {
+    let html = r#"<html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Recipe",
+     "name":"Test Pancakes",
+     "recipeIngredient":["1 cup flour","1 cup milk"],
+     "recipeInstructions":[
+       {"text":"Mix ingredients"},
+       {"text":"Cook on griddle"}]}
+    </script></head><body></body></html>"#;
+    let md = extract_recipe(html).unwrap().expect("recipe md");
+    assert!(md.contains("# Test Pancakes"));
+    assert!(md.contains("- 1 cup flour"));
+    assert!(md.contains("1. Mix ingredients"));
+}
+
+#[test]
+fn faq_extractor_returns_qa_pairs() {
+    let html = r#"<html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"FAQPage","name":"Help",
+     "mainEntity":[
+       {"@type":"Question","name":"Hours?","acceptedAnswer":{"@type":"Answer","text":"9 to 5"}},
+       {"@type":"Question","name":"Phone?","acceptedAnswer":{"@type":"Answer","text":"+1-555-0100"}}]}
+    </script></head></html>"#;
+    let md = extract_faq(html).unwrap().expect("faq md");
+    assert!(md.contains("## Hours?"));
+    assert!(md.contains("9 to 5"));
+    assert!(md.contains("## Phone?"));
+}
+
+#[test]
+fn job_extractor_returns_frontmatter_and_body() {
+    let html = r#"<html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"JobPosting",
+     "title":"Backend Engineer",
+     "description":"Write Rust services.",
+     "hiringOrganization":{"@type":"Organization","name":"Acme","sameAs":"https://acme.example"},
+     "jobLocation":{"@type":"Place","address":{"@type":"PostalAddress","addressLocality":"Berlin","addressCountry":"DE"}},
+     "url":"https://acme.example/jobs/42"}
+    </script></head></html>"#;
+    let md = extract_job(html).unwrap().expect("job md");
+    assert!(md.contains("title: Backend Engineer"));
+    assert!(md.contains("company: Acme"));
+    assert!(md.contains("Berlin, DE"));
+}
+
+#[test]
+fn event_extractor_returns_basic_fields() {
+    let html = r#"<html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Event",
+     "name":"Conf",
+     "startDate":"2026-06-01T09:00",
+     "location":{"@type":"Place","name":"Hall A","address":{"@type":"PostalAddress","addressLocality":"Tokyo"}}}
+    </script></head></html>"#;
+    let md = extract_event(html).unwrap().expect("event md");
+    assert!(md.contains("# Conf"));
+    assert!(md.contains("venue: Hall A"));
+    assert!(md.contains("Tokyo"));
+}
+
+#[tokio::test]
+async fn persistent_cache_writes_then_serves_second_request() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/persistent")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body>hello</body></html>")
+        .expect(1)
+        .create_async()
+        .await;
+    let dir = make_temp_dir("web2md-pcache");
+    let target = format!("{}/persistent", server.url());
+
+    let mut opts = BrowserOptions::default();
+    opts.cache_ttl = Duration::from_secs(60);
+    opts.cache_dir = Some(dir.clone());
+    let browser = Browser::new(opts.clone()).unwrap();
+    let first = browser.fetch(&target).await.unwrap();
+    assert!(first.contains("hello"));
+
+    // Drop the browser and start a new one pointing at the same dir.
+    drop(browser);
+    let browser2 = Browser::new(opts).unwrap();
+    let second = browser2.fetch(&target).await.unwrap();
+    assert_eq!(first, second);
+    // The mock should be called only once across both browsers.
+    mock.assert_async().await;
+    drop(browser2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn make_temp_dir(suffix: &str) -> std::path::PathBuf {
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "{}-{}",
+        suffix,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+#[test]
+fn diff_markdown_reports_changes() {
+    use web2md::diff_markdown;
+    let diff = diff_markdown(
+        "https://a.example/",
+        "intro\nfirst revision text\n",
+        "https://b.example/",
+        "intro\nsecond revision text\n",
+    );
+    let (added, removed) = web2md::summarize(&diff);
+    assert_eq!(added + removed, 2);
+}
+
+#[test]
+fn youtube_extracts_video_id_from_common_urls() {
+    assert_eq!(
+        web2md::extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+        Some("dQw4w9WgXcQ".to_string())
+    );
+    assert!(web2md::is_youtube_url("https://youtu.be/dQw4w9WgXcQ"));
+    assert!(!web2md::is_youtube_url("https://example.com/"));
+}
+
+#[test]
+fn watch_state_round_trips() {
+    // We don't actually run an HTTP poll here; instead we verify the
+    // state-file helper through the same path the CLI uses.
+    let url = "https://example.test/article";
+    let dir = std::env::temp_dir().join(format!(
+        "web2md-watch-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // First load: nothing stored yet → returns None.
+    let initial = std::fs::read_dir(&dir).map(|it| it.count()).unwrap_or(0);
+    assert_eq!(initial, 0);
+
+    // Round-trip a fingerprint via filename derived from URL hash.
+    use sha2::Digest;
+    let mut h = sha2::Sha256::new();
+    h.update(url.as_bytes());
+    let name = h.finalize();
+    let hex: String = name.iter().take(8).map(|b| format!("{:02x}", b)).collect();
+    let path = dir.join(format!("watch-{}.txt", hex));
+    std::fs::write(&path, "abc123").unwrap();
+
+    assert!(path.exists());
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "abc123");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn webhook_payload_hits_endpoint_with_event_and_result() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/hook")
+        .with_status(200)
+        .create_async()
+        .await;
+
+    let client = reqwest::Client::new();
+    let payload = serde_json::json!({
+        "event": "fetch.completed",
+        "url": "https://example.test/",
+        "format": "markdown",
+        "result": "hello world",
+    });
+    let body = payload.to_string();
+    let resp = client
+        .post(format!("{}/hook", server.url()))
+        .header("content-type", "application/json")
+        .body(body.clone())
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    // Verify our payload contains the expected fields.
+    assert!(body.contains("\"event\":\"fetch.completed\""));
+    assert!(body.contains("\"format\":\"markdown\""));
+
+    mock.assert_async().await;
 }

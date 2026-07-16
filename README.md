@@ -9,6 +9,8 @@
 
 A tool that fetches web pages and returns them as Markdown. Designed to minimize token usage when invoked via MCP (Model Context Protocol).
 
+**Local-first, no API key, no proxy, no LLM credits.** Web2MD ships [query-focused extraction](#features), [extractive summarization](#features), [Recipe/FAQ/Job/Event extractors](#features), [persistent file cache](#features), [per-host rate limiting](#features), [page diff](#features) and [YouTube transcript](#features) extraction — all deterministic, all free, all working in air-gapped environments.
+
 ## Why Markdown instead of HTML?
 
 HTML is built for browsers, not for reasoning. A typical article page carries far more markup than meaning:
@@ -83,6 +85,49 @@ cargo run -- fetch https://example.com --depth 2 --output ./pages
 # Fetch an RSS/Atom/JSON Feed and convert entries to Markdown
 cargo run -- feed https://example.com/rss.xml
 
+# Peek at a URL — title + excerpt + metadata only (cheaper than `fetch`)
+cargo run -- peek https://example.com
+
+# Recipe extractor (JSON-LD, LLM-free)
+cargo run -- fetch https://example.com/recipe --type recipe
+
+# FAQ extractor (JSON-LD FAQPage → Markdown Q+A)
+cargo run -- fetch https://example.com/help --type faq
+
+# Job or event extractors (JSON-LD)
+cargo run -- fetch https://example.com/jobs/1 --type job
+cargo run -- fetch https://example.com/events/conf --type event
+
+# Query-focused extraction — keep only paragraphs matching `rust` and `cargo`
+cargo run -- fetch https://blog.rust-lang.org/2026/01/... \
+  --topic "rust cargo"
+
+# Extractive summary — 3 sentences with positional + TF-IDF scoring
+cargo run -- fetch https://en.wikipedia.org/wiki/Rust \
+  --summary 3
+
+# Cap output by approximate token budget (≈ 4 chars / token)
+cargo run -- fetch https://example.com/article --max-tokens 800
+
+# Diff two URLs at the Markdown level (or use --cached-b for a local file)
+cargo run -- diff https://example.com/v1 https://example.com/v2
+
+# Extract a YouTube video transcript as Markdown (no video download)
+cargo run -- transcript https://www.youtube.com/watch?v=dQw4w9WgXcQ
+
+# Watch a URL: emit a line whenever the content fingerprint (simhash) changes
+cargo run -- watch https://example.com/article --every 60
+
+# Webhook delivery — POST the JSON result to n8n/Make/Zapier after each fetch
+cargo run -- fetch https://example.com --format json --webhook https://hooks.example.com/in
+
+# Brand/design profile (top-N CSS colors, fonts, heading sizes — deterministic, LLM-free)
+cargo run -- fetch https://example.com --format branding
+
+# Persistent file cache + per-host rate limiting
+cargo run -- fetch https://example.com \
+  --cache-dir ~/.cache/web2md --cache-ttl 3600 --rate 2
+
 # Interactive terminal browser (explicit)
 cargo run -- browse https://example.com
 
@@ -130,7 +175,19 @@ Example Cursor MCP config:
 - **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)
 - **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
+- **Per-host requests-per-second cap** (`--rate`): Independent rate clock per host — lets different hosts be queried in parallel while capping each one
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
+- **Persistent file cache** (`--cache-dir <path>`): JSON files keyed by URL hash; survives process restarts; prepends durable history to `--cache-ttl`. Use `--no-cache-dir` to skip writing
+- **Query-focused extraction** (`--topic <query>`): Drop paragraphs that don't match the query tokens; returns the relevant subset as Markdown (LLM-free; ≈ Firecrawl `highlights`, Context7 `query-docs`)
+- **Extractive summarization** (`--summary <n>`): TF-IDF + positional scoring to pick the top-N most relevant sentences (LLM-free; ≈ Firecrawl `summary`)
+- **Token-budget output** (`--max-tokens <N>`): Cap Markdown length by approximate token budget (≈ 4 chars / token); prefers paragraph boundaries
+- **`peek` subcommand**: Title + excerpt + key metadata only — no body conversion, no full Markdown payload (cheaper than `fetch` for agents deciding whether to fetch deeper)
+- **Domain-specific extractors** (`--type recipe|faq|job|event`): Deterministic rendering from JSON-LD blocks — Recipe → ingredient list + numbered steps + prep/cook/servings frontmatter; FAQPage → Q+A as Markdown headings; JobPosting → title/company/salary/date/apply URL; Event → name/venue/start-end/ticket URL. No LLM, no schema to define
+- **Page diff** (`diff` subcommand): Line-level unified diff between two URLs at the Markdown level (`--cached-b` lets the second side be a local file or a previous `--output` write)
+- **YouTube transcript extraction** (`transcript` subcommand): Pulls `captionTracks` from the watch page and emits a Markdown transcript with `HH:MM:SS` timestamps — no video or audio download (Firecrawl's `audio`/`video` formats cost 5 credits per page)
+- **Watch mode** (`watch` subcommand): Poll a URL on `--every` seconds and emit a tab-separated line (timestamp · url · simhash · snippet) whenever the content fingerprint changes. `--cache-dir` persists the last-seen fingerprint across restarts (≈ Firecrawl `changeTracking`, free)
+- **Webhook delivery** (`--webhook <url>`): POST `{event,url,format,result}` JSON to a webhook URL after each fetch completes — drop-in replacement for n8n / Make / Zapier triggers (Firecrawl webhook parity)
+- **Brand/design profile** (`--format branding`): Top-N CSS colors by frequency, font families, background colors, and `h1`/`h2`/`h3` font sizes pulled from inline `<style>` blocks. Deterministic, no LLM, no external stylesheet fetches (≈ Firecrawl `branding`)
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
 - **Metadata extraction**: Title, description, author (meta tag, JSON-LD, or Dublin Core), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), language (html lang, og:locale, JSON-LD inLanguage, or stopword-heuristic ISO 639-3 fallback on extracted text), extraction quality (0.0–1.0 confidence), page type (`article` / `forum` / `product` / `page`), and content fingerprint (64-bit simhash) in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
@@ -138,6 +195,7 @@ Example Cursor MCP config:
 - **CSV output** (`--format csv`): Trafilatura-style single-row CSV (url, title, author, date, language, page_type, quality, text) for corpus pipelines
 - **XML-TEI output** (`--format tei`): Trafilatura-style TEI document with `teiHeader` metadata and paragraph body for corpus pipelines
 - **Plain XML output** (`--format xml`): Trafilatura-style `<doc>` with metadata fields and `<main>` paragraphs
+- **Branding profile** (`--format branding`): Deterministic JSON profile (color scheme, top colors, fonts, background colors, heading sizes) from inline styles
 - **Content fingerprint**: 64-bit simhash of extracted text for near-duplicate detection (JSON, CSV, TEI, XML, frontmatter)
 - **Language filter** (`--lang`): Reject pages whose language (meta or detected) does not match an ISO 639-1/639-3 code
 - **Extraction presets**: `--precision` (less noise), `--recall` (more text), `--no-comments`, `--only-with-metadata` (require title + date)
@@ -152,19 +210,47 @@ Example Cursor MCP config:
 - **Optional JavaScript execution** (`--javascript` flag): Inline `<script>` blocks run through the project's own dependency-free interpreter (`src/js/`) and `document.write` output is folded into the page. Supports `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, and `requestAnimationFrame` when combined with `--wait`. No `boa`/`v8` dependency; unsupported scripts are skipped silently.
 - **Post-load wait** (`--wait` MS): Pause after fetch before processing; caps which timer callbacks run (Firecrawl/Jina pattern for JS-heavy pages)
 
+## How Web2MD differs from Firecrawl / Context7
+
+| Need | Firecrawl | Context7 | Web2MD |
+|---|---|---|---|
+| Scrape URL → Markdown | ✅ (paid proxy, JS rendering) | ❌ | ✅ local, deterministic |
+| Query-focused highlights | ✅ `highlights` (4 cr/page, LLM) | ✅ `query-docs` (token-aware) | ✅ `--topic` (LLM-free, offline) |
+| Extractive summary | ✅ `summary` (4 cr/page, LLM) | ❌ | ✅ `--summary` (TF-IDF, LLM-free) |
+| Token-budget shaping | `maxAge` / character limits | ✅ token-aware | ✅ `--max-tokens` |
+| Library/version-aware retrieval | ❌ | ✅ (curated index) | ❌ |
+| Structured extraction | ✅ `json` schema (4 cr/page, LLM) | ❌ | ✅ `Recipe`/`FAQ`/`Job`/`Event` from JSON-LD, no schema |
+| Page diffing | `changeTracking` (paywalled) | ❌ | ✅ `diff` subcommand |
+| YouTube video | ✅ `audio`/`video` (5 cr/page) | ❌ | ✅ `transcript` text only, free |
+| Brand/design profile | ✅ `branding` (paid) | ❌ | ✅ `branding` format (deterministic, free) |
+| Change detection (polling) | ✅ `changeTracking` | ❌ | ✅ `watch` subcommand |
+| Webhook delivery | ✅ `webhooks` (paid) | ❌ | ✅ `--webhook <url>` flag |
+| Web search | ✅ (paid proxy) | ❌ | ❌ |
+| Browser automation | ✅ `actions`/`interact` (paid) | ❌ | ❌ |
+| Cost | Subscription | Free tier + paid | Free, local, no API key |
+| Offline / CI | ❌ requires API | ❌ requires API | ✅ |
+
+Bottom line: **everything deterministic and structured — we win on cost and privacy. Content needing real browser rendering or web search — Firecrawl wins.**
+
 ## Architecture
 
-- **Browser** (`browser.rs`): HTTP client with iframe inlining, caching, sitemap/feed link discovery, robots.txt checks, and URL blacklist filtering.
+- **Browser** (`browser.rs`): HTTP client with iframe inlining, persistent + in-memory caching, per-host rate limiting, sitemap/feed link discovery, robots.txt checks, and URL blacklist filtering.
 - **Feed** (`feed.rs`): RSS 2.0 / Atom / JSON Feed parser and Markdown converter for the `feed` subcommand.
 - **Crawl** (`crawl.rs`): Same-origin link extraction and URL normalization for `--depth N` recursive crawl.
 - **Robots** (`robots.rs`): `robots.txt` parser (Disallow, Crawl-delay) with per-origin cache.
 - **URL blacklist** (`url_blacklist.rs`): Built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` pattern matching.
+- **Persistent cache** (`persistent_cache.rs`): JSON files keyed by `sha256(url)` under `--cache-dir`; same TTL semantics as in-memory cache; survives restarts.
+- **Transform** (`transform.rs`): Output post-processing — `--topic` (query-focused paragraphs), `--summary` (extractive summarization), `--max-tokens` (token-budget truncation), paragraph splitter.
+- **Structured extractors** (`structured.rs`): Domain-specific deterministic renderers for `Recipe`, `FAQPage`, `JobPosting`, and `Event` JSON-LD blocks.
+- **Diff** (`diff_markdown.rs`): LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
+- **YouTube** (`youtube.rs`): CaptionTrack URL extraction from watch HTML, timed-text parsing, transcript rendering.
+- **Branding** (`branding.rs`): Deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
 - **JS interpreter** (`src/js/`): Dependency-free lexer/parser/evaluator. When `--javascript` is set, inline `<script>` blocks run, timer callbacks (`setTimeout`/`setInterval`/`requestAnimationFrame`) flush up to `--wait`, and `document.write` output is folded into the page.
 - **HTML utilities** (`html_util.rs`): Shared `find_ci` search and HTML entity decoding.
 - **HTML-to-Markdown** (`html_to_md.rs`): In-house converter via `scraper`/html5ever DOM walk (headings, links, images, lists, tables, code blocks, inline formatting).
 - **PageToMarkdown** (`markdown.rs`): Pre/post-processing pipeline — Trafilatura-style main-content fallback chain, noise stripping, code language injection, dedup, forum comments, link absolutization, CSS selector exclusion.
 - **McpServer** (`mcp.rs`): JSON-RPC server wrapper exposing a `fetch` tool with metadata extraction.
-- **CLI** (`main.rs`): `fetch` (one-shot), `browse` (interactive), `sitemap` (URL discovery), `feed` (RSS/Atom/JSON Feed → Markdown), `batch` (bulk convert), `mcp` (server). Default mode is `browse`.
+- **CLI** (`main.rs`): `fetch` (one-shot, `--topic`/`--summary`/`--max-tokens`/`--type`), `browse` (interactive), `peek` (metadata-only), `diff` (URL vs URL), `transcript` (YouTube), `sitemap` (URL discovery), `feed` (RSS/Atom/JSON Feed → Markdown), `batch` (bulk convert), `mcp` (server). Default mode is `browse`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
@@ -175,10 +261,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 | HTTP | `reqwest`, `tokio` |
 | HTML parsing | `scraper` (html5ever) via `html_to_md.rs` |
 | Markdown rendering | `pulldown-cmark` (ANSI terminal output) |
+| Hashing (cache keys) | `sha2` (SHA-256 of URL) |
+| Optional regex | `regex` (YouTube caption scrape) |
 | CLI | `clap` |
 | Serialization | `serde`, `serde_json` |
 | URL handling | `url` |
 
 ## Project Status
 
-Feature-complete for the current scope — see [TODO.md](TODO.md) for brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **231 tests** pass across unit and integration suites.
+Feature-complete for the current scope — see [TODO.md](TODO.md) for the prioritized backlog and brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **334 tests** pass across unit and integration suites.

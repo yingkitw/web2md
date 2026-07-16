@@ -34,7 +34,7 @@ After each batch of features, perform a quality pass:
 - **Consistency**: Match existing code style and patterns
 
 ### 6. Competitive Intelligence
-Research similar HTML-to-Markdown and web scraping tools (Trafilatura, Firecrawl, Readability.js, Mercury Parser, etc.). Identify capabilities they have that this project lacks. Add the most valuable ones to the `TODO.md` brainstorming section. Prioritize features that provide clear competitive advantage.
+Research similar web-to-markdown and document-extraction tools (Trafilatura, Firecrawl, Context7, Readability.js, Mercury Parser, Jina Reader, etc.). Identify capabilities they have that this project lacks. Add the most valuable ones to the `TODO.md` brainstorming section. Prioritize features that provide clear competitive advantage under our "no LLM, no SaaS, no API key" constraint — features that *can* be done deterministically from JSON-LD, regex, or local statistics beat paid equivalents and should win.
 
 ### 7. Update Documentation
 Keep all project docs aligned with the current implementation:

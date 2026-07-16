@@ -3,6 +3,8 @@
 ## Done
 
 - [x] Project scaffold (workspace, crate, deps)
+- [x] Competitive intelligence v1: compared HTML-to-Markdown tools (Readability.js, etc.); in-house converter retained
+- [x] Competitive intelligence v2: brainstormed vs Firecrawl + Context7 (see Brainstorming v2)
 - [x] Browser module: HTTP fetch with mock tests
 - [x] Markdown module: HTML-to-Markdown conversion
 - [x] MCP server module: JSON-RPC request/response types
@@ -81,12 +83,28 @@
 - [x] Target-language filter: `--lang` ISO 639-1/639-3 rejects pages whose language does not match
 - [x] Plain XML export (`--format xml`): Trafilatura-style `<doc>` with metadata and `<main>` paragraphs
 - [x] Extraction presets: `--precision` / `--recall`, `--no-comments`, `--only-with-metadata` (CLI + MCP)
+- [x] Competitive intelligence v2: brainstormed vs Firecrawl + Context7 (see Brainstorming v2 below)
+- [x] `--topic` query-focused paragraph extraction (LLM-free; beats Firecrawl `highlights` 4 cr + Context7 `query-docs`)
+- [x] `--summary` extractive summarization via TF-IDF + position scoring (LLM-free; beats Firecrawl `summary` 4 cr)
+- [x] `--max-tokens` token-budget output (chars/4 approximation; cheaper than character `max_length`)
+- [x] `peek` subcommand — return title + excerpt + key metadata only; skip body conversion
+- [x] Recipe extractor (`--type recipe`) — JSON-LD Recipe → ingredient list + numbered steps + YAML frontmatter (prep/cook/servings)
+- [x] FAQ extractor (`--type faq`) — JSON-LD FAQPage → Q+A as Markdown headings
+- [x] Job posting extractor (`--type job`) — JSON-LD JobPosting → title/company/salary/date/apply
+- [x] Event extractor (`--type event`) — JSON-LD Event → name/venue/start-end/ticket URL
+- [x] Persistent file cache (`--cache-dir <path>`) — JSON files keyed by URL SHA-256; survives runs; better than in-memory TTL
+- [x] Per-host token-bucket rate limiting (`--rate <req/s>`) — independent rate clock per host
+- [x] `diff` subcommand — diff two URLs (or current vs cached file via `--cached-b`) at the Markdown line level
+- [x] YouTube transcript extraction (watch page → captionTracks → timed text → MD with timestamps)
+- [x] New shared modules: `transform.rs`, `structured.rs`, `persistent_cache.rs`, `diff_markdown.rs`, `youtube.rs`, `branding.rs`
+- [x] New direct deps: `sha2` (cache key hashing), `regex` (already transitive; promoted to direct for YouTube captions)
+- [x] `watch` subcommand (`src/main.rs::poll_once`): poll a URL on `--every` interval, emit a tab-separated line (timestamp, url, simhash, snippet) whenever the fingerprint changes; persists last-seen fingerprint under `--cache-dir` so restarts don't re-fire
+- [x] `--webhook <url>` flag: POST `{event,url,format,result}` JSON to a webhook URL after each `fetch` completes (Firecrawl webhook parity for n8n/Make/Zapier integrations)
+- [x] `branding` output format (`--format branding`, `src/branding.rs`): deterministic color/font/heading extraction from inline `<style>` blocks (≈ Firecrawl `branding` format, no LLM)
 
 ## In Progress
 
-## Pending
-
-_None — all planned features are implemented. See Brainstorming for future ideas._
+_None — this cycle is complete. See Brainstorming for next-wave ideas._
 
 ## Brainstorming
 
@@ -97,3 +115,45 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 - Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
 - `--no-tables` / `--include-links` element toggles (Trafilatura parity)
 - Word/character count fields on `PageMetadata`
+
+### Brainstorming v2 — beating Firecrawl and Context7
+
+**Our strategic advantages** (local-first, no API key, no SaaS, no proxy, in-house extraction, free forever):
+
+1. **No LLM dependency** — every feature below is deterministic from JSON-LD, microdata, or local statistics. Cheaper, faster, deterministic, private.
+2. **No API key / no rate limit / no proxy** — usable offline, in CI, in air-gapped environments.
+3. **Context7-equivalent token shaping for any page** — Firecrawl just hands back the page; we can shape output by query, budget, or topic.
+4. **Domain-specific extractors** that Firecrawl doesn't ship as turnkey formats (Recipe, FAQPage, JobPosting, Event — all JSON-LD).
+
+**What Firecrawl has that we don't**: web search (paid proxy), browser automation (`actions`/`interact`), screenshots, audio/video extraction, branding extraction, webhooks.
+
+**What Context7 has that we don't**: pre-curated library index, automatic version detection, library-aware retrieval.
+
+**Prioritized backlog** (see Pending for items being implemented this cycle):
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 1 | `--topic` query-focused paragraph extraction | Firecrawl `highlights`, Context7 `query-docs` | ✅ Done |
+| 2 | `--summary` extractive summarization (LLM-free TF scoring) | Firecrawl `summary` (LLM, 4 cr) | ✅ Done |
+| 3 | `--max-tokens` token-budget output | Firecrawl `maxAge`/`max_length`, Context7 token shaping | ✅ Done |
+| 4 | `peek` subcommand — metadata + excerpt only | Firecrawl none — saves full fetch cost | ✅ Done |
+| 5 | Recipe extractor (`--type recipe`, JSON-LD Recipe) | Firecrawl `json` schema (4 cr) | ✅ Done |
+| 6 | FAQ extractor (`--type faq`, JSON-LD FAQPage) | Firecrawl `json` schema (4 cr) | ✅ Done |
+| 7 | Job posting extractor (`--type job`, JSON-LD JobPosting) | Firecrawl none specifically | ✅ Done |
+| 8 | Event extractor (`--type event`, JSON-LD Event) | Firecrawl none specifically | ✅ Done |
+| 9 | Persistent file cache (`--cache-dir`) survives runs | Firecrawl cloud cache (paid) | ✅ Done |
+| 10 | Per-host token-bucket rate limiting (`--rate`) | Firecrawl flat 60s/page + paid enhanced proxy | ✅ Done |
+| 11 | `diff` subcommand — URL vs URL or vs cached | Firecrawl `changeTracking` (paywalled) | ✅ Done |
+| 12 | YouTube transcript extraction (text-only) | Firecrawl `video`/`audio` extraction (5 cr) | ✅ Done |
+| 13 | `watch` subcommand — poll URL, emit on simhash change | Firecrawl `changeTracking` (polling) | ✅ Done |
+| 14 | `--webhook <url>` delivery (n8n/Make/Zapier) | Firecrawl webhooks (paid tier) | ✅ Done |
+| 15 | `branding` output format (top-N CSS colors + fonts) | Firecrawl `branding` (paid format) | ✅ Done |
+
+**Later** (lower leverage, requires external services or large effort):
+- Web search (needs a free backend: DuckDuckGo HTML / SearXNG; no API key)
+- Headless browser backend (`headless_chrome` opt-in) for true SPA support and screenshot
+- PDF/DOCX parsing from URLs (`lopdf`, `docx-rs`) — keep out unless demand warrants the binary-size cost
+- Local-web search backend: index CLI docs and serve them via Context7-compatible endpoints
+- Library doc fetcher: `crates.io` / `docs.rs` / `npmjs.com` / `pypi.org` README + API reference → MD (a poor-person's Context7 for any registry)
+- Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
+- `--no-tables` / `--include-links` explicit element toggles for Trafilatura parity

@@ -20,7 +20,15 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 | Markdown rendering | `pulldown-cmark` (ANSI terminal via `render_markdown_ansi`) |
 | Language detection | Built-in stopword heuristic (ISO 639-3 fallback when HTML metadata lacks language) |
 | HTML utilities | `html_util.rs` — case-insensitive search, entity decoding |
+| Persistent cache keys | `sha2` (SHA-256 of URL → JSON file) |
+| Optional regex | `regex` (used by YouTube caption-track URL extraction) |
 | Conversion pipeline | `markdown.rs` (`PageToMarkdown`) wraps `html_to_md::parse_html` |
+| Output transforms | `transform.rs` — `--topic`, `--summary`, `--max-tokens`, paragraph splitter |
+| Domain-specific extractors | `structured.rs` — Recipe, FAQPage, JobPosting, Event JSON-LD → Markdown |
+| Page diffing | `diff_markdown.rs` — LCS-based unified diff for the `diff` subcommand |
+| Persistent cache | `persistent_cache.rs` — JSON files keyed by URL hash; `--cache-dir` |
+| YouTube transcripts | `youtube.rs` — watch-page captionTrack URL extraction + timed-text parser |
+| Brand/design extraction | `branding.rs` — top-N colors / fonts / heading sizes from inline `<style>` blocks |
 | CLI | `clap` 4.x |
 | Test HTTP mocking | `mockito` (dev) |
 
@@ -74,8 +82,13 @@ web2md <URL>
 # One-shot fetch to stdout
 web2md fetch <URL> [FLAGS]
   --max-length N       Truncate output after N characters
+  --max-tokens N       Cap output by approximate token budget (≈ 4 chars / token); prefers paragraph boundaries
+  --max-length N       Truncate output after N characters
   --timeout SECONDS    Request timeout (default: 30)
   --include-images     Emit Markdown image references
+  --no-comments         Skip forum/thread comment extraction
+  --no-tables           Skip HTML tables in output
+  --no-links            Emit link text only (strip Markdown [text](url))
   --cookie NAME=VAL    Send cookie (repeatable)
   --header "Name: Val" Send custom header (repeatable)
   --format markdown    Output as Markdown (default)
@@ -85,15 +98,20 @@ web2md fetch <URL> [FLAGS]
   --format csv         Output Trafilatura-style CSV (header + one data row)
   --format tei         Output XML-TEI document (teiHeader + body paragraphs)
   --format xml         Output plain Trafilatura-style XML (<doc> + <main>)
+  --format branding    Output deterministic brand/design profile (top colors / fonts / heading sizes)
+  --type TYPE          Domain extractor: recipe | faq | job | event (LLM-free JSON-LD rendering)
+  --topic QUERY        Keep only paragraphs relevant to this query (LLM-free; ≈ Firecrawl `highlights`)
+  --summary N          Return top-N sentences by TF-IDF + positional scoring (LLM-free; ≈ Firecrawl `summary`)
   --lang CODE          Require page language to match ISO 639-1 or 639-3 (e.g. en, eng)
   --precision           Favor extraction precision (less noise, stricter main-content)
   --recall              Favor extraction recall (more text, looser main-content)
-  --no-comments         Skip forum/thread comment extraction
   --only-with-metadata  Require title and published_date or fail
   --render             ANSI colors: bold headings, underlined links, colored code
   --delay MS           Polite delay between requests in milliseconds
-  --keep-header        Preserve <header> tags (stripped by default)
+  --rate RPS           Per-host requests-per-second cap (independent rate clock per host)
   --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
+  --cache-dir DIR      Persist fetched pages as JSON files (sha256 → file) under DIR; survives restarts
+  --webhook URL        POST result JSON to this webhook URL after fetch (n8n/Make/Zapier)
   --main-content       Extract only <article>, <main>, or [role=main] content
   -o, --output FILE    Write output to file instead of stdout
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
@@ -144,6 +162,41 @@ web2md batch <FILE> [FLAGS]
 
 # MCP server (stdio JSON-RPC)
 web2md mcp
+
+# Peek at a URL: return title + excerpt + key metadata only (cheaper than `fetch`)
+web2md peek <URL> [FLAGS]
+  --json                     Emit structured JSON instead of plain text
+  --timeout SECONDS          Request timeout
+  --cookie NAME=VAL          Send cookie (repeatable)
+  --header "Name: Val"       Send custom header (repeatable)
+  --delay MS                 Polite delay between requests
+  --ignore-robots            Ignore robots.txt
+  --no-blacklist             Disable URL blacklist filtering
+
+# Diff two URLs at the Markdown level (or use --cached-b for a local file)
+web2md diff <URL_A> <URL_B> [FLAGS]
+  --cached-b                 Treat URL_B as a path to a local Markdown file
+  --json                     Emit machine-readable JSON summary
+  --timeout SECONDS          Request timeout
+  --cookie NAME=VAL          Send cookie (repeatable)
+  --header "Name: Val"       Send custom header (repeatable)
+
+# Extract a YouTube video transcript as Markdown (no video download)
+web2md transcript <URL> [FLAGS]
+  --lang CODE                Preferred caption language code (e.g. en, fr, de)
+  --timeout SECONDS          Request timeout
+  --cookie NAME=VAL          Send cookie (repeatable)
+  --header "Name: Val"       Send custom header (repeatable)
+  --ignore-robots            Ignore robots.txt
+
+# Poll a URL on an interval and emit whenever the content fingerprint (simhash) changes
+web2md watch <URL> [FLAGS]
+  --every SECONDS            Poll interval (default: 300)
+  --cache-dir DIR            Persist seen fingerprints across restarts
+  --timeout SECONDS          Request timeout
+  --cookie NAME=VAL          Send cookie (repeatable)
+  --header "Name: Val"       Send custom header (repeatable)
+  --ignore-robots            Ignore robots.txt
 ```
 
 ### MCP JSON-RPC Request
@@ -322,8 +375,95 @@ Trafilatura-style plain XML:
 - Malformed HTML → best-effort Markdown extraction via html5ever tree repair (`scraper`)
 - Iframe fetch failure → silently omitted (no error)
 
+## Output Transforms (`transform.rs`)
+
+Apply **after** HTML → Markdown conversion, before output:
+
+- `--topic <query>`: keep only paragraphs whose plain-text matches query tokens (case-insensitive substring + token overlap); preserves original order; fails fast if nothing matches. LLM-free.
+- `--summary <n>`: rank sentences by TF-IDF with title-weighted terms + early-position bonus; emit the top-N sentences in source order. LLM-free.
+- `--max-tokens <N>`: cap Markdown length by approximate token budget (≈ 4 chars / token); prefers paragraph boundaries; falls back to character cut with `[truncated]` marker.
+
+## Domain-Specific Extractors (`structured.rs`)
+
+Deterministic rendering of JSON-LD blocks (no LLM, no schema to define):
+
+- `--type recipe`: JSON-LD `Recipe` → ingredient bullet list + numbered `recipeInstructions` + YAML frontmatter (title, description, author, yield, category, cuisine, prep_minutes, cook_minutes, total_minutes).
+- `--type faq`: JSON-LD `FAQPage` `mainEntity` array → Q+A as Markdown headings (each `Question` = heading, `acceptedAnswer`/`suggestedAnswer` = body).
+- `--type job`: JSON-LD `JobPosting` → title, company, location, salary (formatted as `amount currency /unit`), date_posted, apply URL, description. Frontmatter + labeled body.
+- `--type event`: JSON-LD `Event` → name, start/end date, venue (name + address), ticket URL, price.
+
+When the JSON-LD is missing or ambiguous (multiple distinct blocks of the same type), the extractor returns `None` or `Err`; the CLI falls back to plain Markdown conversion with a stderr notice.
+
+## Persistent Cache
+
+When `--cache-dir <dir>` is set alongside `--cache-ttl`, fetched pages persist as `{sha256(url)}.json` files inside `dir`. Same TTL semantics as the in-memory cache; survives process restarts; shared across runs. `--cache-dir` with `cache_ttl = 0` disables both layers.
+
+## Per-host Rate Limiting
+
+`--rate <req/s>` enforces an independent token-bucket per host. The heavier of the global `--delay` (or robots.txt `Crawl-delay`) and the per-host clock applies on every request. Per-host clocks are keyed by host name only, so two different hosts queried in parallel will not block each other.
+
+## YouTube Transcript Extraction
+
+`transcript <URL>`:
+
+1. Detect `youtube.com/watch?v=…`, `youtube.com/shorts/…`, `youtu.be/…`, or `youtube.com/embed/…`.
+2. Fetch the watch page; locate `captionTracks` JSON in the inline JS payload.
+3. Pick the first track (or the one matching `--lang`).
+4. Fetch the caption file (timed text XML); parse `<text start dur>` cues.
+5. Emit Markdown with `HH:MM:SS` timestamps per cue.
+
+No video or audio is downloaded. Cost is purely two HTTP requests.
+
+## Brand/Design Profile (`--format branding`)
+
+`extract_branding` walks inline `<style>` blocks (no external stylesheet fetches) and emits a JSON profile:
+
+- `color_scheme` (`"light"` / `"dark"` / `"unknown"`) — guessed from average luminance of the top color.
+- `colors` — top-20 hex tokens by frequency (normalized; `#fff` → `#ffffff`).
+- `fonts` — distinct font families referenced in any `font-family:` declaration.
+- `background_colors` — distinct tokens used as `background` or `background-color`.
+- `heading_sizes` — `font-size:` declarations scoped to `h1` / `h2` / `h3` selectors, in source order.
+
+No LLM, no JS rendering, fully deterministic. Cost is the same as `fetch` plus serialization of the profile.
+
+## Page Diffing (`diff` subcommand)
+
+`diff <URL_A> <URL_B> [--cached-b]` computes a line-level unified diff between two Markdown renderings:
+
+- Both URLs are fetched with the default options, converted to Markdown, and compared.
+- `--cached-b <path>` skips the second fetch and reads `<path>` as a local Markdown file (e.g. a previous `--output` artifact).
+- `--json` emits a summary `{url_a, url_b, lines_added, lines_removed, diff}` instead of the raw diff.
+- The engine is a custom O(n·m) longest-common-subsequence over lines — no external crate dependency.
+
+## Watch Mode (`watch` subcommand)
+
+`watch <URL> [--every SECONDS] [--cache-dir DIR]` polls a URL in a loop and emits a tab-separated line whenever the content fingerprint (simhash) changes:
+
+1. Fetch + convert → compute `content_fingerprint(text)`.
+2. Compare with the previously-seen fingerprint.
+3. If different, print `timestamp\turl\tfingerprint\tsnippet` to stdout.
+4. `--cache-dir DIR` persists the last-seen fingerprint across restarts so reboots don't re-fire.
+5. Failures (timeouts, non-2xx) are printed to stderr but do not stop the loop.
+
+Emits nothing while the page is unchanged — agents can `tail -f` it as a firehose.
+
+## Webhook Delivery (`--webhook`)
+
+After each `fetch` completes, if `--webhook <URL>` is set, the result is POSTed as JSON:
+
+```json
+{
+  "event": "fetch.completed",
+  "url": "https://example.com/article",
+  "format": "markdown",
+  "result": "..."
+}
+```
+
+Non-2xx responses are logged to stderr; the local fetch result is still printed to stdout. Drops into n8n / Make / Zapier / Hugging Face Pipelines.
+
 ## Quality Bar
 
-- All features have unit tests (221 tests across lib, main, and integration suites)
-- `cargo test` must pass before merge
-- Warnings noted but not blocking
+- All features have unit and integration tests (334 tests across lib, main, and integration suites at last count)
+- `cargo build` and `cargo test` must pass before merge
+- Warnings noted but not blocking; pre-existing clippy items are filed for future cleanup

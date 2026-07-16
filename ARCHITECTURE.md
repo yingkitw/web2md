@@ -11,18 +11,36 @@ main.rs
   │                     ├── --format json → extract_page_metadata → structured JSON output
   │                     ├── --format csv → extract_page_metadata → Trafilatura-style CSV row
   │                     ├── --format tei → extract_page_metadata → TEI XML document
+  │                     ├── --format branding → branding::extract_branding → deterministic design profile JSON
+  │                     ├── --type {recipe|faq|job|event} → structured.rs (JSON-LD → Markdown) → stdout
+  │                     ├── --topic <query> → transform::extract_topic (LLM-free paragraphs) → stdout
+  │                     ├── --summary <n>  → transform::extract_summary (TF-IDF) → stdout
+  │                     ├── --max-tokens <N> → transform::truncate_by_tokens → stdout
+  │                     ├── --cache-dir <path> → persistent_cache.rs (sha256 → JSON file) → reused on next fetch
+  │                     ├── --rate <rps> → Browser::enforce_delay per-host clock
+  │                     ├── --webhook <url> → main::post_webhook → POST `{event,url,format,result}`
   │                     └── --format xml → extract_page_metadata → plain `<doc>` XML
+  ├── peek command   → Browser → extract_page_metadata (no body conversion) → key fields only
+  ├── diff command   → Browser ×2 (or cached file) → diff_markdown::diff_markdown → unified-diff output
+  ├── transcript cmd → Browser (watch page) → youtube::extract_caption_track_url → Browser (track file) → youtube::parse_timed_text → MD with timestamps
+  ├── watch command  → Browser (poll loop) → main::poll_once → content_fingerprint → emit on change; persists last-seen fingerprint under --cache-dir
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
   ├── feed command    → Browser → parse_feed → feed_to_markdown (or JSON) → stdout / file
   ├── batch command   → Browser → run_inline_scripts → PageToMarkdown → stdout or output directory
   └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client, fetch raw HTML, inline iframe content, in-memory cache with TTL, sitemap XML parsing, RSS/Atom feed link extraction, run_inline_scripts() (gated by enable_javascript), URL blacklist filtering on secondary fetches
+  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **per-host rate-limit clock**; sitemap XML parsing; RSS/Atom feed link extraction; run_inline_scripts() (gated by enable_javascript); URL blacklist filtering on secondary fetches
+  ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `prune()`, `invalidate()`
   ├── feed.rs      : RSS 2.0 / Atom / JSON Feed parser (`parse_feed`) and Markdown converter (`feed_to_markdown`)
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
   ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser
+  ├── transform.rs   : **Output shaping layer** — `extract_topic` (query-focused paragraphs), `extract_summary` (extractive TF-IDF), `truncate_by_tokens`, `split_paragraphs`. All LLM-free.
+  ├── structured.rs  : **Domain-specific extractors** — `extract_recipe`, `extract_faq`, `extract_job`, `extract_event`. Walk JSON-LD blocks directly; render deterministic Markdown with YAML frontmatter.
+  ├── diff_markdown.rs : **Page diffing** — LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
+  ├── youtube.rs     : **YouTube transcripts** — detect watch/shorts/embed/shortlink URLs; locate `captionTracks`; parse timed-text XML; render Markdown with `HH:MM:SS` timestamps. No video download.
+  ├── branding.rs    : **Brand/design profile** — deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
   ├── js/          : Built-in dependency-free JavaScript subset interpreter
   │     ├── ast.rs     : AST node types (expressions, statements, operators)
   │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)
@@ -106,25 +124,39 @@ URL ──► Browser.fetch() ──► raw HTML
 
 5. **MCP over stdio**: The MCP server reads JSON-RPC requests from stdin and writes responses to stdout. This aligns with the MCP spec and makes it trivial to wire into any MCP host.
 
+6. **No-LLM extraction across the board**: All "smart" output shaping (`--topic`, `--summary`, `--max-tokens`, structured extractors, branding, watch change-detection) is implemented locally via regex, TF-IDF, JSON-LD parsing, and simhash fingerprinting. The bet is that deterministic local extraction closes 80–90% of Firecrawl's value at zero credit cost, with deterministic behavior and full offline support — and that the remaining 10–20% (genuine LLM judgment, browser rendering, search) can wait until/unless demand warrants the dependency cost.
+
+7. **Two cache layers, one API**: In-memory (`Browser.cache`, gated by `--cache-ttl`) and on-disk (`--cache-dir`, sha256-keyed JSON files under the directory) share the same TTL semantics. The on-disk layer is checked first when configured; the in-memory cache remains the default for ephemeral CLI runs.
+
 ## Dependencies
 
 | Crate | Role |
 |---|---|
-| `reqwest` | HTTP client |
+| `reqwest` | HTTP client (slim features: `native-tls` + `http2` + `charset`) |
 | `tokio` | Async runtime |
 | `scraper` | HTML parsing (html5ever) for `html_to_md` |
 | `pulldown-cmark` | Markdown → ANSI terminal rendering |
 | `clap` | CLI argument parsing |
-| `serde` / `serde_json` | JSON serialization (MCP, `--format json`) |
-| `scraper` | HTML parsing (html5ever) for Markdown conversion |
+| `serde` / `serde_json` | JSON serialization (MCP, `--format json`, branding, webhook payload) |
 | `url` | URL parsing, resolution, absolutization |
+| `sha2` | SHA-256 for persistent-cache file names and watch-state identifiers |
+| `regex` | YouTube caption-track URL extraction |
 | `anyhow` | Error handling |
 | `mockito` | HTTP mocking in tests (dev) |
+
+No dedicated HTML-to-Markdown, headless-browser, language-detection, or PDF/DOCX-rendering crates are pulled in. All such capabilities are implemented in-house to keep the binary small (~5 MB release) and the audit surface manageable.
 
 ## Deployment Topology
 
 - Local interactive: `cargo run -- <URL>` (browse mode)
 - Local one-shot: `cargo run -- fetch <URL> [--render] [--format json]`
 - MCP Host: `cargo run -- mcp` (stdio transport)
-- Release binary: `cargo build --release` (LTO + stripped, ~4MB)
+- Watch loop: `cargo run -- watch <URL> --every 60` (agent firehose)
+- Release binary: `cargo build --release` (LTO + stripped, ~5 MB)
 - CI/Release: GitHub Actions builds for Linux (x86_64/aarch64), macOS (x86_64/aarch64), Windows (x86_64) on tag push
+
+## Test Coverage
+
+- **334 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
+- New modules since the v0.1.x baseline (`transform`, `structured`, `persistent_cache`, `diff_markdown`, `youtube`, `branding`) ship with their own unit suites
