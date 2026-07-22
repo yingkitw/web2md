@@ -25,7 +25,7 @@ pub fn split_paragraphs(md: &str) -> Vec<String> {
             }
             buf.push_str(line);
             fenced += 1;
-            if fenced % 2 == 0 {
+            if fenced.is_multiple_of(2) {
                 out.push(std::mem::take(&mut buf));
             }
             continue;
@@ -74,10 +74,10 @@ fn strip_markdown(s: &str) -> String {
             continue;
         }
         let stripped = trimmed
-            .trim_start_matches(|c: char| c == '-' || c == '*' || c == '+')
+            .trim_start_matches(['-', '*', '+'])
             .trim_start();
         let stripped = strip_md_links(stripped);
-        let stripped = stripped.replace('*', "").replace('_', "");
+        let stripped = stripped.replace(['*', '_'], "");
         out.push_str(&stripped);
         out.push(' ');
     }
@@ -90,19 +90,17 @@ fn strip_md_links(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'[' {
-            if let Some(close) = s[i + 1..].find(']') {
+        if bytes[i] == b'['
+            && let Some(close) = s[i + 1..].find(']') {
                 let label = &s[i + 1..i + 1 + close];
                 let after = &s[i + 1 + close..];
-                if after.starts_with("](") {
-                    if let Some(end) = after[2..].find(')') {
+                if after.starts_with("](")
+                    && let Some(end) = after[2..].find(')') {
                         out.push_str(label);
                         i += 1 + close + 2 + end + 1;
                         continue;
                     }
-                }
             }
-        }
         out.push(s.as_bytes()[i] as char);
         i += 1;
     }

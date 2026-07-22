@@ -238,9 +238,7 @@ fn first_text_tag(xml: &str, tag: &str) -> Option<String> {
     let close = format!("</{}>", tag);
     let mut pos = 0;
     while pos < xml.len() {
-        let Some(rel) = find_ci(&xml[pos..], &open) else {
-            return None;
-        };
+        let rel = find_ci(&xml[pos..], &open)?;
         let start = pos + rel;
         let after_name = start + open.len();
         if after_name < xml.len() {
@@ -251,17 +249,13 @@ fn first_text_tag(xml: &str, tag: &str) -> Option<String> {
             }
         }
         // Self-closing or empty
-        let Some(gt) = xml[start..].find('>') else {
-            return None;
-        };
+        let gt = xml[start..].find('>')?;
         let open_tag = &xml[start..start + gt + 1];
         if open_tag.ends_with("/>") {
             return None;
         }
         let after_open = start + gt + 1;
-        let Some(rel_end) = find_ci(&xml[after_open..], &close) else {
-            return None;
-        };
+        let rel_end = find_ci(&xml[after_open..], &close)?;
         let raw = xml[after_open..after_open + rel_end].trim();
         return Some(normalize_text(raw));
     }
@@ -286,8 +280,8 @@ fn first_atom_link(xml: &str) -> Option<String> {
             break;
         };
         let tag = &search[start..=start + gt];
-        if let Some(href) = extract_attr(tag, "href") {
-            if !href.is_empty() {
+        if let Some(href) = extract_attr(tag, "href")
+            && !href.is_empty() {
                 let is_alternate = find_ci(tag, "rel=\"alternate\"").is_some()
                     || find_ci(tag, "rel='alternate'").is_some()
                     || find_ci(tag, "rel=").is_none();
@@ -298,7 +292,6 @@ fn first_atom_link(xml: &str) -> Option<String> {
                     first = Some(href);
                 }
             }
-        }
         pos = start + gt + 1;
     }
     first

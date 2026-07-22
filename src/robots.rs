@@ -109,12 +109,11 @@ fn parse_groups(content: &str) -> Vec<RobotsGroup> {
                 current.as_mut().unwrap().disallow.push(value.to_string());
             }
             "crawl-delay" if current.is_some() => {
-                if let Ok(secs) = value.parse::<f64>() {
-                    if secs >= 0.0 {
+                if let Ok(secs) = value.parse::<f64>()
+                    && secs >= 0.0 {
                         current.as_mut().unwrap().crawl_delay =
                             Some(Duration::from_secs_f64(secs));
                     }
-                }
             }
             _ => {}
         }

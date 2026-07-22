@@ -122,13 +122,12 @@ fn parse_caption_array(block: &str, prefer_lang: Option<&str>) -> Option<String>
             }
             b'}' => {
                 depth -= 1;
-                if depth == 0 {
-                    if let Some(s) = start.take() {
+                if depth == 0
+                    && let Some(s) = start.take() {
                         objects.push(
                             std::str::from_utf8(&bytes[s..=i]).unwrap_or("").to_string(),
                         );
                     }
-                }
             }
             _ => {}
         }
@@ -140,11 +139,10 @@ fn parse_caption_array(block: &str, prefer_lang: Option<&str>) -> Option<String>
     let mut first: Option<String> = None;
     if let Some(lang) = prefer_lang {
         for obj in &objects {
-            if lang_re.captures(obj).map(|c| c[1].to_string()).as_deref() == Some(lang) {
-                if let Some(u) = url_re.captures(obj) {
+            if lang_re.captures(obj).map(|c| c[1].to_string()).as_deref() == Some(lang)
+                && let Some(u) = url_re.captures(obj) {
                     return Some(unquote_yt(&u[1]));
                 }
-            }
         }
     }
     for obj in &objects {

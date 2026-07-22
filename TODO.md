@@ -101,10 +101,25 @@
 - [x] `watch` subcommand (`src/main.rs::poll_once`): poll a URL on `--every` interval, emit a tab-separated line (timestamp, url, simhash, snippet) whenever the fingerprint changes; persists last-seen fingerprint under `--cache-dir` so restarts don't re-fire
 - [x] `--webhook <url>` flag: POST `{event,url,format,result}` JSON to a webhook URL after each `fetch` completes (Firecrawl webhook parity for n8n/Make/Zapier integrations)
 - [x] `branding` output format (`--format branding`, `src/branding.rs`): deterministic color/font/heading extraction from inline `<style>` blocks (≈ Firecrawl `branding` format, no LLM)
+- [x] Competitive intelligence v3: brainstormed vs Firecrawl v2.11 (see Brainstorming v3 below)
+- [x] `--format links` — all `<a href>` + text as JSON (Firecrawl `links` parity, free)
+- [x] `--format images` — all `<img src>` + alt/title as JSON (Firecrawl `images` parity, free)
+- [x] `--format product` — JSON-LD Product → structured JSON with variants/offers (Firecrawl `product` parity, deterministic, free)
+- [x] `--include-selector` — keep only HTML elements matching CSS selectors before conversion (Firecrawl `includeTags` parity)
+- [x] `--pii-redact` — regex redact emails, phone numbers, SSNs, credit cards from output (Firecrawl PII redaction, 4 cr → free)
+- [x] `--mobile` flag — mobile User-Agent for responsive sites (Firecrawl `mobile: true` parity)
+- [x] `map` subcommand — discover all URLs from HTML `<a href>` links (Firecrawl `/map` endpoint parity)
+- [x] `search` subcommand — DuckDuckGo HTML web search, no API key, with `--fetch` to convert results to Markdown (Firecrawl `/search` parity, free)
+- [x] `docs` subcommand — fetch README + metadata from crates.io, docs.rs, npm, or PyPI (poor-person's Context7, no API key, free)
+- [x] `--proxy <url>` flag — route requests through HTTP/SOCKS proxy (Firecrawl proxy parity)
+- [x] `--auth user:pass` flag — basic authentication for protected pages
+- [x] New shared modules: `extract.rs` (links/images/product), `redact.rs` (PII redaction), `search.rs` (DDG web search), `docs.rs` (library doc fetcher)
+- [x] `--proxy`/`--auth` extended to `peek` and `batch` commands (consistency — all HTTP-making commands now support proxy/auth)
+- [x] Codebase audit: fixed regex-in-loop perf bug in `branding.rs` (OnceLock), collapsed dead if/else, resolved 96 clippy warnings → 0, added `--proxy`/`--auth` to `peek`/`batch`
 
 ## In Progress
 
-_None — this cycle is complete. See Brainstorming for next-wave ideas._
+_None — v3 cycle is complete. See Brainstorming for next-wave ideas._
 
 ## Brainstorming
 
@@ -118,16 +133,16 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 
 ### Brainstorming v2 — beating Firecrawl and Context7
 
-**Our strategic advantages** (local-first, no API key, no SaaS, no proxy, in-house extraction, free forever):
+**Our strategic advantages** (local-first, no API key, no SaaS, in-house extraction, free forever):
 
 1. **No LLM dependency** — every feature below is deterministic from JSON-LD, microdata, or local statistics. Cheaper, faster, deterministic, private.
-2. **No API key / no rate limit / no proxy** — usable offline, in CI, in air-gapped environments.
+2. **No API key / no rate limit** — usable offline, in CI, in air-gapped environments. (`--proxy` available for corporate networks.)
 3. **Context7-equivalent token shaping for any page** — Firecrawl just hands back the page; we can shape output by query, budget, or topic.
 4. **Domain-specific extractors** that Firecrawl doesn't ship as turnkey formats (Recipe, FAQPage, JobPosting, Event — all JSON-LD).
 
-**What Firecrawl has that we don't**: web search (paid proxy), browser automation (`actions`/`interact`), screenshots, audio/video extraction, branding extraction, webhooks.
+**What Firecrawl has that we don't**: browser automation (`actions`/`interact`), screenshots, audio/video extraction, PDF/DOCX parsing.
 
-**What Context7 has that we don't**: pre-curated library index, automatic version detection, library-aware retrieval.
+**What Context7 has that we don't**: pre-curated library index, automatic version detection, library-aware retrieval. (We now have `docs` subcommand for live README fetching from any registry.)
 
 **Prioritized backlog** (see Pending for items being implemented this cycle):
 
@@ -149,11 +164,44 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 | 14 | `--webhook <url>` delivery (n8n/Make/Zapier) | Firecrawl webhooks (paid tier) | ✅ Done |
 | 15 | `branding` output format (top-N CSS colors + fonts) | Firecrawl `branding` (paid format) | ✅ Done |
 
+### Brainstorming v3 — surpassing Firecrawl v2.11
+
+**Firecrawl's current edge** (from docs.firecrawl.dev, v2.11):
+- `links` format — all links as JSON
+- `images` format — all images as JSON
+- `product` format — deterministic structured product (title, price, variants)
+- `includeTags` / `excludeTags` — CSS selector content filtering
+- `mobile: true` — mobile device emulation
+- PII redaction — 4 credits/page, regex-based
+- `/map` endpoint — discover all URLs on a site
+- `/search` — web search (paid proxy)
+- `/interact` — browser automation (paid)
+- `screenshot` — page screenshots (paid)
+- PDF/DOCX parsing (paid, 1 cr/page)
+
+**Our strategy**: implement every deterministic Firecrawl feature locally, free, offline. Skip only features that fundamentally require a SaaS proxy or headless browser.
+
+**Prioritized backlog v3**:
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 16 | `--format links` — all `<a href>` + text as JSON | Firecrawl `links` format | ✅ Done |
+| 17 | `--format images` — all `<img>` + alt as JSON | Firecrawl `images` format | ✅ Done |
+| 18 | `--format product` — JSON-LD Product → structured JSON | Firecrawl `product` (deterministic, free) | ✅ Done |
+| 19 | `--include-selector` — keep only matching elements | Firecrawl `includeTags` | ✅ Done |
+| 20 | `--pii-redact` — regex redact emails/phones/SSN/cards | Firecrawl PII redaction (4 cr → free) | ✅ Done |
+| 21 | `--mobile` flag — mobile User-Agent | Firecrawl `mobile: true` | ✅ Done |
+| 22 | `map` subcommand — discover all URLs from HTML | Firecrawl `/map` endpoint | ✅ Done |
+| 23 | `search` subcommand — DDG HTML web search, no API key | Firecrawl `/search` (paid proxy) | ✅ Done |
+| 24 | `docs` subcommand — fetch README from any registry | Context7 (curated index) | ✅ Done |
+| 25 | `--proxy` flag — HTTP/SOCKS proxy support | Firecrawl proxy support | ✅ Done |
+| 26 | `--auth` flag — basic authentication | Firecrawl auth header | ✅ Done |
+
 **Later** (lower leverage, requires external services or large effort):
-- Web search (needs a free backend: DuckDuckGo HTML / SearXNG; no API key)
+- Web search — ✅ Done (DuckDuckGo HTML, `search` subcommand)
 - Headless browser backend (`headless_chrome` opt-in) for true SPA support and screenshot
 - PDF/DOCX parsing from URLs (`lopdf`, `docx-rs`) — keep out unless demand warrants the binary-size cost
 - Local-web search backend: index CLI docs and serve them via Context7-compatible endpoints
-- Library doc fetcher: `crates.io` / `docs.rs` / `npmjs.com` / `pypi.org` README + API reference → MD (a poor-person's Context7 for any registry)
+- Library doc fetcher — ✅ Done (`docs` subcommand, crates.io/docs.rs/npm/PyPI)
 - Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
-- `--no-tables` / `--include-links` explicit element toggles for Trafilatura parity
+- `--no-tables` / `--include-links` explicit element toggles for Trafilatura parity — ✅ Already implemented

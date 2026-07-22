@@ -52,15 +52,12 @@ pub(crate) fn collect_meta_attr_values(html: &str, attr_key: &str, attr_val: &st
         };
         let tag_end = pos + rel_end;
         let tag = &html[pos..=tag_end];
-        if find_ci(tag, &format!("{}=\"{}\"", attr_key, attr_val)).is_some()
-            || find_ci(tag, &format!("{}='{}'", attr_key, attr_val)).is_some()
-        {
-            if let Some(val) = extract_attr(tag, "content") {
-                if !val.is_empty() {
+        if (find_ci(tag, &format!("{}=\"{}\"", attr_key, attr_val)).is_some()
+            || find_ci(tag, &format!("{}='{}'", attr_key, attr_val)).is_some())
+            && let Some(val) = extract_attr(tag, "content")
+                && !val.is_empty() {
                     values.push(val);
                 }
-            }
-        }
         i = tag_end + 1;
     }
     values
@@ -136,11 +133,10 @@ pub(crate) fn extract_link_rel(html: &str, rel: &str) -> Option<String> {
             let pos = i + pos;
             let tag_end = html[pos..].find('>').map(|e| pos + e)?;
             let tag = &html[pos..=tag_end];
-            if link_rel_matches(tag, &rel_lower) {
-                if let Some(href) = extract_attr(tag, "href") {
+            if link_rel_matches(tag, &rel_lower)
+                && let Some(href) = extract_attr(tag, "href") {
                     return Some(href);
                 }
-            }
             i = tag_end + 1;
         } else {
             break;

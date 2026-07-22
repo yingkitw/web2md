@@ -101,11 +101,10 @@ pub fn summarize(diff: &str) -> (usize, usize) {
             if !rest.starts_with("++") {
                 added += 1;
             }
-        } else if let Some(rest) = line.strip_prefix('-') {
-            if !rest.starts_with("--") {
+        } else if let Some(rest) = line.strip_prefix('-')
+            && !rest.starts_with("--") {
                 removed += 1;
             }
-        }
     }
     (added, removed)
 }

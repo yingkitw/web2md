@@ -35,7 +35,7 @@ Agents consume the web through tools. Every page fetch costs context window, lat
 - **Actionable links** — Relative URLs are absolutized so an agent can follow numbered links in terminal browse mode or chain fetches across a site without guessing base paths.
 - **Structured output** — `--format json`, `--format csv`, `--format tei`, `--format xml`, and YAML frontmatter (`--frontmatter`) give agents machine-readable metadata alongside prose, useful for citations, filtering, and downstream pipelines.
 - **Polite crawling** — `--delay`, caching (`--cache-ttl`), `robots.txt` respect, and batch mode let research agents process URL lists without hammering servers or re-fetching the same page.
-- **Auth for gated content** — Cookies and custom headers (`--cookie`, `--header`) let agents reach documentation, dashboards, or member-only pages when credentials are provided.
+- **Auth for gated content** — Cookies, custom headers (`--cookie`, `--header`), and HTTP Basic Auth (`--auth`) let agents reach documentation, dashboards, or member-only pages when credentials are provided. Proxy support (`--proxy`) routes requests through corporate or geo proxies.
 
 In short: **Web2MD turns the web into a format agents can read, reason over, and act on** — without burning context on markup nobody needs.
 
@@ -124,6 +124,50 @@ cargo run -- fetch https://example.com --format json --webhook https://hooks.exa
 # Brand/design profile (top-N CSS colors, fonts, heading sizes — deterministic, LLM-free)
 cargo run -- fetch https://example.com --format branding
 
+# Extract all links as JSON (≈ Firecrawl `links` format)
+cargo run -- fetch https://example.com --format links
+
+# Extract all images as JSON (≈ Firecrawl `images` format)
+cargo run -- fetch https://example.com --format images
+
+# Extract structured product from JSON-LD (≈ Firecrawl `product` format, deterministic)
+cargo run -- fetch https://example.com/product --format product
+
+# Keep only elements matching CSS selectors (≈ Firecrawl `includeTags`)
+cargo run -- fetch https://example.com --include-selector article --include-selector .content
+
+# Redact PII (emails, phones, SSNs, credit cards) from output (≈ Firecrawl PII redaction, free)
+cargo run -- fetch https://example.com --pii-redact
+
+# Use mobile User-Agent (≈ Firecrawl `mobile: true`)
+cargo run -- fetch https://example.com --mobile
+
+# Route through a proxy (≈ Firecrawl proxy support)
+cargo run -- fetch https://example.com --proxy http://proxy:8080
+cargo run -- fetch https://example.com --proxy socks5://proxy:1080
+
+# Basic authentication for protected pages
+cargo run -- fetch https://example.com/private --auth user:password
+
+# Proxy and auth also work on peek and batch
+cargo run -- peek https://example.com/private --auth user:password
+cargo run -- batch urls.txt --proxy http://proxy:8080 --auth user:password
+
+# Discover all URLs on a page (≈ Firecrawl /map endpoint)
+cargo run -- map https://example.com --same-origin
+
+# Web search via DuckDuckGo — no API key (≈ Firecrawl /search, free)
+cargo run -- search "rust web scraping" --limit 5
+
+# Search and fetch each result as Markdown
+cargo run -- search "rust web scraping" --limit 3 --fetch
+
+# Fetch library docs from any registry (≈ poor-person's Context7, free)
+cargo run -- docs serde --registry crates
+cargo run -- docs express --registry npm
+cargo run -- docs requests --registry pypi
+cargo run -- docs tokio --registry docsrs
+
 # Persistent file cache + per-host rate limiting
 cargo run -- fetch https://example.com \
   --cache-dir ~/.cache/web2md --cache-ttl 3600 --rate 2
@@ -173,7 +217,7 @@ Example Cursor MCP config:
 - **Main content extraction** (`--main-content`): Trafilatura-style fallback chain — scores semantic tags (`<article>`, `<main>`, `[role="main"]`), top-level `<div>`/`<section>` blocks (text vs link density), and paragraph clusters; picks the best candidate, strips link-heavy boilerplate paragraphs; falls back to JSON-LD / Open Graph structured content when heuristics score poorly. Article and product pages also prefer main-content extraction automatically via page-type profiles
 - **Page-type profiles**: `article` / `product` prefer main content; `product` keeps images and appends a JSON-LD Product details section (name, brand, SKU, price); `forum` keeps the full thread and appends structured comments
 - **Code language detection**: Preserves language annotations from `<code class="language-xxx">` as fenced block languages (` ```rust `)
-- **Auth support**: Cookies (`--cookie`) and custom headers (`--header`) for authenticated pages
+- **Auth support**: Cookies (`--cookie`), custom headers (`--header`), and HTTP Basic Auth (`--auth user:password`) for authenticated pages
 - **Rate limiting** (`--delay`): Polite delay between consecutive requests to avoid hammering servers
 - **Per-host requests-per-second cap** (`--rate`): Independent rate clock per host — lets different hosts be queried in parallel while capping each one
 - **Caching** (`--cache-ttl`): In-memory cache with configurable TTL to avoid re-fetching the same URL
@@ -188,6 +232,17 @@ Example Cursor MCP config:
 - **Watch mode** (`watch` subcommand): Poll a URL on `--every` seconds and emit a tab-separated line (timestamp · url · simhash · snippet) whenever the content fingerprint changes. `--cache-dir` persists the last-seen fingerprint across restarts (≈ Firecrawl `changeTracking`, free)
 - **Webhook delivery** (`--webhook <url>`): POST `{event,url,format,result}` JSON to a webhook URL after each fetch completes — drop-in replacement for n8n / Make / Zapier triggers (Firecrawl webhook parity)
 - **Brand/design profile** (`--format branding`): Top-N CSS colors by frequency, font families, background colors, and `h1`/`h2`/`h3` font sizes pulled from inline `<style>` blocks. Deterministic, no LLM, no external stylesheet fetches (≈ Firecrawl `branding`)
+- **Links extraction** (`--format links`): All `<a href>` URLs and link text as JSON, deduplicated, with relative URLs resolved to absolute (≈ Firecrawl `links` format, free)
+- **Images extraction** (`--format images`): All `<img src>` URLs with alt and title text as JSON, deduplicated, with relative URLs resolved (≈ Firecrawl `images` format, free)
+- **Product extraction** (`--format product`): Structured JSON from JSON-LD `Product` schema — name, brand, description, SKU, MPN, GTIN, image, and variant/offer details (price, currency, availability, condition). Deterministic, no LLM (≈ Firecrawl `product` format, free)
+- **Include selector** (`--include-selector`): Keep only HTML elements matching CSS selectors (e.g. `article`, `.content`, `#main`) before conversion — complement to `--exclude-selector` (≈ Firecrawl `includeTags`)
+- **PII redaction** (`--pii-redact`): Regex-based redaction of email addresses, phone numbers, Social Security Numbers, and credit card numbers from output. Replaces with `[REDACTED_EMAIL]`, `[REDACTED_PHONE]`, etc. (≈ Firecrawl PII redaction, 4 cr → free)
+- **Mobile User-Agent** (`--mobile`): Send requests with an iPhone Safari User-Agent string for sites that serve different content to mobile devices (≈ Firecrawl `mobile: true`)
+- **Proxy support** (`--proxy`): Route all requests through an HTTP or SOCKS proxy (e.g. `--proxy http://proxy:8080`, `--proxy socks5://proxy:1080`). Useful for geo-restricted content or corporate networks. Available on `fetch`, `peek`, and `batch` (≈ Firecrawl proxy support)
+- **Basic authentication** (`--auth`): Send HTTP Basic Auth credentials with requests for password-protected pages (format: `--auth user:password`). Available on `fetch`, `peek`, and `batch`
+- **URL discovery** (`map` subcommand): Extract all `<a href>` URLs from a page, with optional `--same-origin` filtering and `--json` output (≈ Firecrawl `/map` endpoint)
+- **Web search** (`search` subcommand): Search the web via DuckDuckGo's HTML endpoint — no API key required. Returns titles, URLs, and snippets as Markdown or JSON. Use `--fetch` to also fetch and convert each result page to Markdown (≈ Firecrawl `/search`, free)
+- **Library docs** (`docs` subcommand): Fetch README and metadata from any package registry — crates.io, docs.rs, npm, or PyPI. No API key, no curated index. Returns version, description, repository, license, and full README as Markdown or JSON (≈ poor-person's Context7, free)
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
 - **Metadata extraction**: Title, description, author (meta tag, JSON-LD, or Dublin Core), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), language (html lang, og:locale, JSON-LD inLanguage, or stopword-heuristic ISO 639-3 fallback on extracted text), extraction quality (0.0–1.0 confidence), page type (`article` / `forum` / `product` / `page`), and content fingerprint (64-bit simhash) in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
@@ -218,19 +273,29 @@ Example Cursor MCP config:
 | Query-focused highlights | ✅ `highlights` (4 cr/page, LLM) | ✅ `query-docs` (token-aware) | ✅ `--topic` (LLM-free, offline) |
 | Extractive summary | ✅ `summary` (4 cr/page, LLM) | ❌ | ✅ `--summary` (TF-IDF, LLM-free) |
 | Token-budget shaping | `maxAge` / character limits | ✅ token-aware | ✅ `--max-tokens` |
-| Library/version-aware retrieval | ❌ | ✅ (curated index) | ❌ |
+| Library/version-aware retrieval | ❌ | ✅ (curated index) | ✅ `docs` subcommand (any registry, live) |
 | Structured extraction | ✅ `json` schema (4 cr/page, LLM) | ❌ | ✅ `Recipe`/`FAQ`/`Job`/`Event` from JSON-LD, no schema |
+| Product extraction | ✅ `product` (deterministic) | ❌ | ✅ `--format product` (JSON-LD, free) |
+| Links extraction | ✅ `links` format | ❌ | ✅ `--format links` (free) |
+| Images extraction | ✅ `images` format | ❌ | ✅ `--format images` (free) |
+| CSS selector filtering | ✅ `includeTags` / `excludeTags` | ❌ | ✅ `--include-selector` / `--exclude-selector` |
+| PII redaction | ✅ (4 cr/page) | ❌ | ✅ `--pii-redact` (free) |
+| Mobile emulation | ✅ `mobile: true` | ❌ | ✅ `--mobile` |
+| Proxy support | ✅ | ❌ | ✅ `--proxy` |
+| Basic authentication | ✅ | ❌ | ✅ `--auth` |
+| URL discovery | ✅ `/map` endpoint | ❌ | ✅ `map` subcommand |
 | Page diffing | `changeTracking` (paywalled) | ❌ | ✅ `diff` subcommand |
 | YouTube video | ✅ `audio`/`video` (5 cr/page) | ❌ | ✅ `transcript` text only, free |
 | Brand/design profile | ✅ `branding` (paid) | ❌ | ✅ `branding` format (deterministic, free) |
 | Change detection (polling) | ✅ `changeTracking` | ❌ | ✅ `watch` subcommand |
 | Webhook delivery | ✅ `webhooks` (paid) | ❌ | ✅ `--webhook <url>` flag |
-| Web search | ✅ (paid proxy) | ❌ | ❌ |
+| Web search | ✅ (paid proxy) | ❌ | ✅ `search` subcommand (DDG, free) |
 | Browser automation | ✅ `actions`/`interact` (paid) | ❌ | ❌ |
+| Screenshot | ✅ (paid) | ❌ | ❌ |
 | Cost | Subscription | Free tier + paid | Free, local, no API key |
 | Offline / CI | ❌ requires API | ❌ requires API | ✅ |
 
-Bottom line: **everything deterministic and structured — we win on cost and privacy. Content needing real browser rendering or web search — Firecrawl wins.**
+Bottom line: **everything deterministic and structured — we win on cost and privacy. Content needing real browser rendering — Firecrawl wins. Web search — we now match with DuckDuckGo, free.**
 
 ## Architecture
 
@@ -245,12 +310,16 @@ Bottom line: **everything deterministic and structured — we win on cost and pr
 - **Diff** (`diff_markdown.rs`): LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
 - **YouTube** (`youtube.rs`): CaptionTrack URL extraction from watch HTML, timed-text parsing, transcript rendering.
 - **Branding** (`branding.rs`): Deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
+- **Extract** (`extract.rs`): Deterministic page-element extractors — `extract_links`, `extract_images`, `extract_product` for `--format links`/`images`/`product` (Firecrawl parity, free).
+- **Redact** (`redact.rs`): Regex-based PII redaction (emails, phones, SSNs, credit cards) for `--pii-redact`.
+- **Search** (`search.rs`): DuckDuckGo HTML web search — builds query URL, parses result HTML for titles/URLs/snippets, decodes DDG redirect URLs. No API key.
+- **Docs** (`docs.rs`): Library documentation fetcher — fetches README and metadata from crates.io, docs.rs, npm, or PyPI. Parses JSON APIs, converts HTML readmes to Markdown. No API key, no curated index.
 - **JS interpreter** (`src/js/`): Dependency-free lexer/parser/evaluator. When `--javascript` is set, inline `<script>` blocks run, timer callbacks (`setTimeout`/`setInterval`/`requestAnimationFrame`) flush up to `--wait`, and `document.write` output is folded into the page.
 - **HTML utilities** (`html_util.rs`): Shared `find_ci` search and HTML entity decoding.
 - **HTML-to-Markdown** (`html_to_md.rs`): In-house converter via `scraper`/html5ever DOM walk (headings, links, images, lists, tables, code blocks, inline formatting).
 - **PageToMarkdown** (`markdown.rs`): Pre/post-processing pipeline — Trafilatura-style main-content fallback chain, noise stripping, code language injection, dedup, forum comments, link absolutization, CSS selector exclusion.
 - **McpServer** (`mcp.rs`): JSON-RPC server wrapper exposing a `fetch` tool with metadata extraction.
-- **CLI** (`main.rs`): `fetch` (one-shot, `--topic`/`--summary`/`--max-tokens`/`--type`), `browse` (interactive), `peek` (metadata-only), `diff` (URL vs URL), `transcript` (YouTube), `sitemap` (URL discovery), `feed` (RSS/Atom/JSON Feed → Markdown), `batch` (bulk convert), `mcp` (server). Default mode is `browse`.
+- **CLI** (`main.rs`): `fetch` (one-shot, `--topic`/`--summary`/`--max-tokens`/`--type`/`--format links|images|product|branding`/`--pii-redact`/`--mobile`/`--include-selector`/`--proxy`/`--auth`), `browse` (interactive), `peek` (metadata-only, `--proxy`/`--auth`), `diff` (URL vs URL), `transcript` (YouTube), `sitemap` (URL discovery), `map` (URL discovery from HTML), `search` (DDG web search), `docs` (library docs from any registry), `feed` (RSS/Atom/JSON Feed → Markdown), `batch` (bulk convert, `--proxy`/`--auth`), `mcp` (server). Default mode is `browse`.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
@@ -262,11 +331,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 | HTML parsing | `scraper` (html5ever) via `html_to_md.rs` |
 | Markdown rendering | `pulldown-cmark` (ANSI terminal output) |
 | Hashing (cache keys) | `sha2` (SHA-256 of URL) |
-| Optional regex | `regex` (YouTube caption scrape) |
+| Optional regex | `regex` (YouTube caption scrape, PII redaction) |
+| URL encoding | `urlencoding` (search query encoding) |
 | CLI | `clap` |
 | Serialization | `serde`, `serde_json` |
 | URL handling | `url` |
 
 ## Project Status
 
-Feature-complete for the current scope — see [TODO.md](TODO.md) for the prioritized backlog and brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **334 tests** pass across unit and integration suites.
+Feature-complete for the current scope — see [TODO.md](TODO.md) for the prioritized backlog and brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **401 tests** pass across unit and integration suites.

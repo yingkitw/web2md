@@ -50,11 +50,9 @@ pub fn extract_feed_links(html: &str) -> Vec<String> {
                     || tag.contains("application/atom+xml")
                     || tag.contains("application/feed+json"))
                     && tag.contains("alternate")
-                {
-                    if let Some(href) = extract_attr(tag, "href") {
+                    && let Some(href) = extract_attr(tag, "href") {
                         feeds.push(href);
                     }
-                }
                 pos = start + end + 1;
             } else {
                 break;
@@ -102,6 +100,10 @@ pub struct BrowserOptions {
     pub extra_blacklist_files: Vec<String>,
     /// Post-load wait after fetch (milliseconds) for JS-heavy pages; also caps setTimeout flush
     pub post_load_wait: Duration,
+    /// Optional HTTP/SOCKS proxy URL (e.g. "http://proxy:8080", "socks5://proxy:1080")
+    pub proxy: Option<String>,
+    /// Optional basic auth credentials (format: "user:password")
+    pub basic_auth: Option<String>,
 }
 
 impl Default for BrowserOptions {
@@ -121,6 +123,8 @@ impl Default for BrowserOptions {
             load_user_blacklist: true,
             extra_blacklist_files: Vec::new(),
             post_load_wait: Duration::from_millis(0),
+            proxy: None,
+            basic_auth: None,
         }
     }
 }
@@ -143,21 +147,27 @@ pub struct Browser {
 impl Browser {
     /// Build a new Browser with the given options
     pub fn new(options: BrowserOptions) -> Result<Self> {
-        let client = ClientBuilder::new()
+        let mut builder = ClientBuilder::new()
             .timeout(options.timeout)
             .user_agent(&options.user_agent)
-            .redirect(reqwest::redirect::Policy::default())
+            .redirect(reqwest::redirect::Policy::default());
+
+        if let Some(ref proxy_url) = options.proxy {
+            let proxy = reqwest::Proxy::all(proxy_url)
+                .context("Failed to parse proxy URL")?;
+            builder = builder.proxy(proxy);
+        }
+
+        let client = builder
             .build()
             .context("Failed to build HTTP client")?;
 
         let mut custom = BlacklistPatterns::default();
-        if options.load_user_blacklist {
-            if let Some(path) = crate::url_blacklist::default_user_blacklist_path() {
-                if path.is_file() {
+        if options.load_user_blacklist
+            && let Some(path) = crate::url_blacklist::default_user_blacklist_path()
+                && path.is_file() {
                     custom = custom.merge(BlacklistPatterns::load_file(&path)?);
                 }
-            }
-        }
         for path in &options.extra_blacklist_files {
             custom = custom.merge(BlacklistPatterns::load_file(std::path::Path::new(path))?);
         }
@@ -311,11 +321,10 @@ impl Browser {
     /// Fetch raw HTML from a URL
     pub async fn fetch(&self, url: &str) -> Result<String> {
         // Check cache first
-        if !self.options.cache_ttl.is_zero() {
-            if let Some(cached) = self.lookup_cache(url) {
+        if !self.options.cache_ttl.is_zero()
+            && let Some(cached) = self.lookup_cache(url) {
                 return Ok(cached);
             }
-        }
 
         let parsed = Url::parse(url).context("Invalid URL")?;
         let robots_delay = if self.options.respect_robots_txt && !is_robots_txt_url(&parsed) {
@@ -332,11 +341,10 @@ impl Browser {
         self.enforce_delay(robots_delay, parsed.host_str().unwrap_or("")).await;
         let body = self.fetch_raw(url).await?;
         // Persist to persistent cache, if configured.
-        if let Some(cache) = &self.persistent_cache {
-            if let Err(e) = cache.put(url, &body) {
+        if let Some(cache) = &self.persistent_cache
+            && let Err(e) = cache.put(url, &body) {
                 eprintln!("warning: failed to persist cache entry for {}: {}", url, e);
             }
-        }
         Ok(body)
     }
 
@@ -356,6 +364,10 @@ impl Browser {
                 req = req.header(name.trim(), value.trim());
             }
         }
+        if let Some(ref auth) = self.options.basic_auth
+            && let Some((user, pass)) = auth.split_once(':') {
+                req = req.basic_auth(user.trim(), Some(pass.trim()));
+            }
 
         let resp = req.send().await.context("HTTP request failed")?;
 
@@ -423,10 +435,7 @@ impl Browser {
                         if self.is_url_blocked(&resolved) {
                             String::new()
                         } else {
-                            match self.fetch(&resolved).await {
-                                Ok(content) => content,
-                                Err(_) => String::new(),
-                            }
+                            self.fetch(&resolved).await.unwrap_or_default()
                         }
                     } else {
                         String::new()
@@ -546,11 +555,10 @@ fn resolve_iframe_src(base: &str, src: &str) -> String {
         }
         return src.to_string();
     }
-    if let Ok(base_url) = Url::parse(base) {
-        if let Ok(resolved) = base_url.join(src) {
+    if let Ok(base_url) = Url::parse(base)
+        && let Ok(resolved) = base_url.join(src) {
             return resolved.to_string();
         }
-    }
     src.to_string()
 }
 
@@ -642,6 +650,100 @@ mod tests {
 
         assert!(html.contains("API"));
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_sends_basic_auth() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/protected")
+            .match_header("authorization", "Basic dXNlcjpwYXNz")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Authorized</body></html>")
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.basic_auth = Some("user:pass".to_string());
+        let browser = Browser::new(opts).unwrap();
+        let html = browser
+            .fetch(&format!("{}/protected", server.url()))
+            .await
+            .unwrap();
+
+        assert!(html.contains("Authorized"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_basic_auth_trims_whitespace() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/protected")
+            .match_header("authorization", "Basic dXNlcjpwYXNz")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>OK</body></html>")
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.basic_auth = Some("  user :  pass  ".to_string());
+        let browser = Browser::new(opts).unwrap();
+        let html = browser
+            .fetch(&format!("{}/protected", server.url()))
+            .await
+            .unwrap();
+
+        assert!(html.contains("OK"));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_basic_auth_missing_colon_sends_no_auth() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/page")
+            .match_header("authorization", mockito::Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>No auth</body></html>")
+            .create_async()
+            .await;
+
+        let mut opts = BrowserOptions::default();
+        opts.basic_auth = Some("nopassword".to_string());
+        let browser = Browser::new(opts).unwrap();
+        let html = browser
+            .fetch(&format!("{}/page", server.url()))
+            .await
+            .unwrap();
+
+        assert!(html.contains("No auth"));
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn browser_proxy_option_defaults_to_none() {
+        let opts = BrowserOptions::default();
+        assert!(opts.proxy.is_none());
+        assert!(opts.basic_auth.is_none());
+    }
+
+    #[test]
+    fn browser_proxy_option_can_be_set() {
+        let mut opts = BrowserOptions::default();
+        opts.proxy = Some("http://proxy:8080".to_string());
+        assert_eq!(opts.proxy.as_deref(), Some("http://proxy:8080"));
+    }
+
+    #[tokio::test]
+    async fn browser_invalid_proxy_url_returns_error() {
+        let mut opts = BrowserOptions::default();
+        opts.proxy = Some("%%not-a-valid-url%%".to_string());
+        let result = Browser::new(opts);
+        assert!(result.is_err());
     }
 
     #[tokio::test]

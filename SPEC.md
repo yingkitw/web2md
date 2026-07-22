@@ -99,6 +99,9 @@ web2md fetch <URL> [FLAGS]
   --format tei         Output XML-TEI document (teiHeader + body paragraphs)
   --format xml         Output plain Trafilatura-style XML (<doc> + <main>)
   --format branding    Output deterministic brand/design profile (top colors / fonts / heading sizes)
+  --format links       Output all links as JSON (≈ Firecrawl `links` format)
+  --format images      Output all images as JSON (≈ Firecrawl `images` format)
+  --format product     Output structured product from JSON-LD (≈ Firecrawl `product` format, deterministic)
   --type TYPE          Domain extractor: recipe | faq | job | event (LLM-free JSON-LD rendering)
   --topic QUERY        Keep only paragraphs relevant to this query (LLM-free; ≈ Firecrawl `highlights`)
   --summary N          Return top-N sentences by TF-IDF + positional scoring (LLM-free; ≈ Firecrawl `summary`)
@@ -112,6 +115,11 @@ web2md fetch <URL> [FLAGS]
   --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
   --cache-dir DIR      Persist fetched pages as JSON files (sha256 → file) under DIR; survives restarts
   --webhook URL        POST result JSON to this webhook URL after fetch (n8n/Make/Zapier)
+  --include-selector SEL  Keep only HTML elements matching CSS selector (e.g. article, .content); repeatable
+  --pii-redact         Redact PII (emails, phones, SSNs, credit cards) from output
+  --mobile             Use mobile User-Agent for the request
+  --proxy URL          Route requests through HTTP/SOCKS proxy (e.g. http://proxy:8080, socks5://proxy:1080)
+  --auth USER:PASS     Basic authentication credentials (format: user:password)
   --main-content       Extract only <article>, <main>, or [role=main] content
   -o, --output FILE    Write output to file instead of stdout
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
@@ -130,6 +138,32 @@ web2md sitemap <URL> [FLAGS]
   --cookie NAME=VAL    Send cookie (repeatable)
   --header "Name: Val" Send custom header (repeatable)
   --feeds              Also check HTML page for RSS/Atom/JSON Feed links
+
+# Discover all URLs on a page by extracting <a href> links (≈ Firecrawl /map)
+web2md map <URL> [FLAGS]
+  --timeout SECONDS    Request timeout
+  --cookie NAME=VAL    Send cookie (repeatable)
+  --header "Name: Val" Send custom header (repeatable)
+  --same-origin        Only list URLs on the same origin as the target
+  --json               Output as JSON array instead of one URL per line
+  --ignore-robots      Ignore robots.txt disallow rules and crawl-delay
+
+# Web search via DuckDuckGo (no API key required; ≈ Firecrawl /search, free)
+web2md search <QUERY> [FLAGS]
+  -t, --timeout SECONDS  Request timeout
+  -l, --limit N          Maximum number of results to return
+  --json                 Output as JSON array instead of Markdown
+  --fetch                Fetch and convert each result URL to Markdown
+  --cookie NAME=VAL      Send cookie (repeatable)
+  -H, --header "Name: Val"  Send custom header (repeatable)
+
+# Fetch library docs from any registry (≈ poor-person's Context7, free)
+web2md docs <NAME> [FLAGS]
+  -r, --registry REG     Package registry: crates | docsrs | npm | pypi (default: crates)
+  -T, --timeout SECONDS  Request timeout
+  --json                 Output as JSON instead of Markdown
+  --cookie NAME=VAL      Send cookie (repeatable)
+  -H, --header "Name: Val"  Send custom header (repeatable)
 
 # Fetch RSS/Atom/JSON Feed and convert entries to Markdown
 web2md feed <URL> [FLAGS]
@@ -159,6 +193,8 @@ web2md batch <FILE> [FLAGS]
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
   --ignore-robots       Ignore robots.txt disallow rules and crawl-delay
+  --proxy URL           Route requests through HTTP/SOCKS proxy
+  --auth USER:PASS      Basic authentication credentials
 
 # MCP server (stdio JSON-RPC)
 web2md mcp
@@ -172,6 +208,8 @@ web2md peek <URL> [FLAGS]
   --delay MS                 Polite delay between requests
   --ignore-robots            Ignore robots.txt
   --no-blacklist             Disable URL blacklist filtering
+  --proxy URL                Route requests through HTTP/SOCKS proxy
+  --auth USER:PASS           Basic authentication credentials
 
 # Diff two URLs at the Markdown level (or use --cached-b for a local file)
 web2md diff <URL_A> <URL_B> [FLAGS]
@@ -426,6 +464,126 @@ No video or audio is downloaded. Cost is purely two HTTP requests.
 
 No LLM, no JS rendering, fully deterministic. Cost is the same as `fetch` plus serialization of the profile.
 
+## Links Extraction (`--format links`)
+
+`extract_links` walks all `<a href>` tags in the HTML and emits a JSON array of `{url, text}` objects:
+
+- Relative URLs are resolved to absolute using the page URL as base.
+- Fragment-only (`#...`), empty, and `data:` hrefs are skipped.
+- Links are deduplicated by URL (first occurrence kept) in document order.
+- Link text is extracted from the anchor's inner HTML (tags stripped, entities decoded).
+
+No LLM, fully deterministic (≈ Firecrawl `links` format, free).
+
+## Images Extraction (`--format images`)
+
+`extract_images` walks all `<img>` tags in the HTML and emits a JSON array of `{src, alt?, title?}` objects:
+
+- Relative `src` URLs are resolved to absolute using the page URL as base.
+- `data:` URLs are skipped.
+- Images are deduplicated by `src` (first occurrence kept) in document order.
+- `alt` and `title` are included when present and non-empty.
+
+No LLM, fully deterministic (≈ Firecrawl `images` format, free).
+
+## Product Extraction (`--format product`)
+
+`extract_product` reads JSON-LD `Product` blocks and emits a structured JSON object:
+
+```json
+{
+  "name": "Widget",
+  "brand": "Acme",
+  "description": "...",
+  "category": "Tools",
+  "sku": "W-100",
+  "mpn": "...",
+  "gtin": "...",
+  "image": "https://...",
+  "url": "https://...",
+  "variants": [
+    {"price": "19.99", "currency": "USD", "availability": "https://schema.org/InStock"}
+  ]
+}
+```
+
+- First `Product` JSON-LD block wins; subsequent blocks are ignored.
+- `offers` can be a single `Offer` object or an array — each becomes a variant.
+- Returns an error if no `Product` JSON-LD is found on the page.
+
+No LLM, fully deterministic (≈ Firecrawl `product` format, free).
+
+## Include Selector (`--include-selector`)
+
+`--include-selector <SEL>` keeps only HTML elements matching the given CSS selector(s) before conversion. Multiple selectors can be given (repeatable). Uses `scraper`'s CSS selector engine (html5ever). If no matches are found, the original HTML is used unchanged. Complements `--exclude-selector` (≈ Firecrawl `includeTags`).
+
+## PII Redaction (`--pii-redact`)
+
+When `--pii-redact` is set, the output is passed through regex-based PII redaction after conversion:
+
+- **Emails** → `[REDACTED_EMAIL]`
+- **SSNs** (US format `NNN-NN-NNNN`) → `[REDACTED_SSN]`
+- **Credit cards** (13–19 digit groups with spaces or dashes) → `[REDACTED_CC]`
+- **Phone numbers** (US and international) → `[REDACTED_PHONE]`
+
+Applied after all other transforms (topic, summary, truncation). No LLM, fully deterministic (≈ Firecrawl PII redaction, 4 cr → free).
+
+## Mobile User-Agent (`--mobile`)
+
+When `--mobile` is set, the HTTP client sends an iPhone Safari User-Agent string instead of the default Web2MD desktop UA. Useful for sites that serve different content to mobile devices (≈ Firecrawl `mobile: true`).
+
+## Proxy Support (`--proxy`)
+
+When `--proxy <URL>` is set, all HTTP requests are routed through the specified proxy. Supports HTTP, HTTPS, and SOCKS5 proxy URLs:
+
+- `http://proxy:8080` — HTTP proxy
+- `https://proxy:8443` — HTTPS proxy
+- `socks5://proxy:1080` — SOCKS5 proxy
+
+Configured at the `reqwest::ClientBuilder` level via `reqwest::Proxy::all()`, so all requests including iframe inlining, robots.txt fetches, and persistent cache revalidation go through the proxy. Available on `fetch`, `peek`, and `batch` commands (≈ Firecrawl proxy support).
+
+## Basic Authentication (`--auth`)
+
+When `--auth user:password` is set, HTTP Basic Auth credentials are sent with every request via `reqwest::RequestBuilder::basic_auth()`. Applied per-request in `fetch_raw()` so it covers all fetches including iframes and robots.txt. Available on `fetch`, `peek`, and `batch` commands.
+
+## URL Discovery (`map` subcommand)
+
+`map <URL>` fetches a page and extracts all `<a href>` URLs:
+
+- URLs are resolved to absolute and deduplicated.
+- `--same-origin` filters to only URLs on the same scheme + host as the target.
+- `--json` outputs a JSON array of URL strings; default is one URL per line.
+- `--ignore-robots` skips robots.txt checks.
+
+No LLM, fully deterministic (≈ Firecrawl `/map` endpoint, free).
+
+## Web Search (`search` subcommand)
+
+`search <QUERY>` performs a web search via DuckDuckGo's HTML endpoint — no API key required:
+
+1. Builds URL `https://html.duckduckgo.com/html/?q=<encoded_query>&kp=1&kl=us-en&s=0&df=&v_q=<limit>`
+2. Fetches the HTML response via the standard `Browser` HTTP client.
+3. Parses `result__a` class links for titles and URLs, and `result__snippet` class elements for snippets.
+4. Decodes DuckDuckGo redirect URLs (`//duckduckgo.com/l/?uddg=<encoded>`) to extract the actual target URL.
+5. `--limit N` truncates to the first N results.
+6. `--json` outputs a JSON array of `{title, url, snippet}` objects; default is Markdown with numbered links and blockquote snippets.
+7. `--fetch` additionally fetches each result URL and converts it to Markdown, emitting `{index, title, url, snippet, markdown}` JSON or `---\n## N. [Title](URL)\n\n<markdown>` sections.
+
+No API key, no subscription, fully local HTTP (≈ Firecrawl `/search`, free).
+
+## Library Docs (`docs` subcommand)
+
+`docs <NAME> [--registry crates|docsrs|npm|pypi]` fetches README and metadata from any package registry — no API key, no curated index:
+
+1. **crates.io** (`--registry crates`, default): Fetches `https://crates.io/api/v1/crates/<name>` JSON for metadata (version, description, repository, license), then fetches README from `https://docs.rs/crate/<name>/latest/source/README.md`.
+2. **docs.rs** (`--registry docsrs`): Fetches README directly from `https://docs.rs/crate/<name>/latest/source/README.md`.
+3. **npm** (`--registry npm`): Fetches `https://registry.npmjs.org/<name>` JSON — extracts `dist-tags.latest` version, `readme` field (HTML converted to Markdown), description, repository, homepage, license.
+4. **PyPI** (`--registry pypi`): Fetches `https://pypi.org/pypi/<name>/json` — extracts version, summary, `info.description` (HTML or Markdown based on `description_content_type`), project URLs, license.
+
+Output is Markdown with metadata header + README body, or `--json` for structured `{registry, name, version, description, repository, homepage, documentation, license, readme}`.
+
+No API key, no subscription (≈ poor-person's Context7, free).
+
 ## Page Diffing (`diff` subcommand)
 
 `diff <URL_A> <URL_B> [--cached-b]` computes a line-level unified diff between two Markdown renderings:
@@ -464,6 +622,6 @@ Non-2xx responses are logged to stderr; the local fetch result is still printed 
 
 ## Quality Bar
 
-- All features have unit and integration tests (334 tests across lib, main, and integration suites at last count)
+- All features have unit and integration tests (401 tests across lib, main, and integration suites at last count)
 - `cargo build` and `cargo test` must pass before merge
-- Warnings noted but not blocking; pre-existing clippy items are filed for future cleanup
+- `cargo clippy` passes with 0 warnings

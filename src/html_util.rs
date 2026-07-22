@@ -43,13 +43,12 @@ pub(crate) fn decode_html_entities(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'&' {
-            if let Some((decoded, len)) = decode_entity(&text[i..]) {
+        if bytes[i] == b'&'
+            && let Some((decoded, len)) = decode_entity(&text[i..]) {
                 out.push_str(&decoded);
                 i += len;
                 continue;
             }
-        }
         out.push(text[i..].chars().next().unwrap());
         i += text[i..].chars().next().unwrap().len_utf8();
     }

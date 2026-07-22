@@ -484,11 +484,11 @@ pub fn content_fingerprint(text: &str) -> String {
     let mut weights = [0i32; 64];
     for token in &tokens {
         let h = fnv1a64(token.as_bytes());
-        for i in 0..64 {
+        for (i, w) in weights.iter_mut().enumerate() {
             if (h >> i) & 1 == 1 {
-                weights[i] += 1;
+                *w += 1;
             } else {
-                weights[i] -= 1;
+                *w -= 1;
             }
         }
     }
@@ -764,8 +764,8 @@ fn extract_json_ld_image(html: &str) -> Option<String> {
             if let Some(url) = image.get("url").and_then(|v| v.as_str()) {
                 return Some(url.to_string());
             }
-            if let Some(arr) = image.as_array() {
-                if let Some(first) = arr.first() {
+            if let Some(arr) = image.as_array()
+                && let Some(first) = arr.first() {
                     if let Some(url) = first.as_str() {
                         return Some(url.to_string());
                     }
@@ -773,7 +773,6 @@ fn extract_json_ld_image(html: &str) -> Option<String> {
                         return Some(url.to_string());
                     }
                 }
-            }
         }
     }
     None

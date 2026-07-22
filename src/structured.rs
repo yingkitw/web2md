@@ -195,7 +195,7 @@ fn frontmatter_block(fields: &[(&str, String)]) -> String {
         if v.is_empty() {
             continue;
         }
-        out.push_str(&format!("{}: {}\n", k, yaml_escape(&v)));
+        out.push_str(&format!("{}: {}\n", k, yaml_escape(v)));
     }
     out.push_str("---\n\n");
     out
@@ -665,7 +665,7 @@ pub fn extract_event(html: &str) -> Result<Option<String>, StructuredError> {
     let name = first_nonempty_string(event, &["name"])
         .unwrap_or_else(|| "Event".to_string());
     let start = first_nonempty_string(event, &["startDate"])
-        .or_else(|| duration_to_iso8601(event.get("startDate")).map(|s| s))
+        .or_else(|| duration_to_iso8601(event.get("startDate")))
         .unwrap_or_default();
     let end = first_nonempty_string(event, &["endDate"]).unwrap_or_default();
     let status = first_nonempty_string(event, &["eventStatus"])

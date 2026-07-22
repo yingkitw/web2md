@@ -1,6 +1,6 @@
 [package]
 name = "web2md"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2024"
 authors = ["Ying Kit WONG"]
 description = "A tool that fetches web pages and returns them as Markdown for MCP token efficiency"
@@ -23,6 +23,7 @@ pulldown-cmark = "0.12"
 scraper = "0.23"
 sha2 = "0.10"
 regex = "1"
+urlencoding = "2.1"
 
 [dev-dependencies]
 mockito = "1.4"

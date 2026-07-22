@@ -85,14 +85,12 @@ impl PersistentCache {
             if path.extension().and_then(|s| s.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(data) = std::fs::read_to_string(&path) {
-                if let Ok(c) = serde_json::from_str::<CacheEntry>(&data) {
-                    if !self.is_fresh(&c) {
+            if let Ok(data) = std::fs::read_to_string(&path)
+                && let Ok(c) = serde_json::from_str::<CacheEntry>(&data)
+                    && !self.is_fresh(&c) {
                         let _ = std::fs::remove_file(&path);
                         removed += 1;
                     }
-                }
-            }
         }
         Ok(removed)
     }

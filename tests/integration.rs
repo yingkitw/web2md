@@ -5,6 +5,8 @@ use web2md::{
     extract_page_metadata, extract_recipe, extract_summary, extract_topic, feed_to_markdown,
     normalize_crawl_url, parse_feed, parse_sitemap_urls, same_origin_links,
     truncate_by_tokens, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+    doc_result_to_markdown, parse_crates_io, parse_npm, parse_pypi, registry_url,
+    DocResult, Registry,
 };
 
 #[tokio::test]
@@ -1140,4 +1142,268 @@ async fn webhook_payload_hits_endpoint_with_event_and_result() {
     assert!(body.contains("\"format\":\"markdown\""));
 
     mock.assert_async().await;
+}
+
+// ---------------------------------------------------------------------------
+// docs subcommand — integration tests with mockito
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn docs_crates_io_end_to_end() {
+    let mut server = mockito::Server::new_async().await;
+
+    let api_mock = server
+        .mock("GET", "/api/v1/crates/serde")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"crate":{"max_version":"1.0.193","description":"A serialization framework","repository":"https://github.com/serde-rs/serde","homepage":null,"documentation":"https://serde.rs","license":"MIT OR Apache-2.0"}}"#)
+        .create_async()
+        .await;
+
+    let readme_mock = server
+        .mock("GET", "/crate/serde/latest/source/README.md")
+        .with_status(200)
+        .with_header("content-type", "text/plain")
+        .with_body("# Serde\n\nA framework for serializing and deserializing data.")
+        .create_async()
+        .await;
+
+    let base = server.url();
+    let api_url = format!("{}/api/v1/crates/serde", base);
+    let readme_url = format!("{}/crate/serde/latest/source/README.md", base);
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+
+    let api_body = browser.fetch(&api_url).await.unwrap();
+    let mut result = parse_crates_io(&api_body, "serde").unwrap();
+
+    let readme_body = browser.fetch(&readme_url).await.unwrap();
+    if !readme_body.is_empty() && !readme_body.contains("<!DOCTYPE") {
+        result.readme = readme_body;
+    }
+
+    assert_eq!(result.registry, "crates.io");
+    assert_eq!(result.name, "serde");
+    assert_eq!(result.version.as_deref(), Some("1.0.193"));
+    assert_eq!(result.license.as_deref(), Some("MIT OR Apache-2.0"));
+    assert!(result.readme.contains("# Serde"));
+
+    let md = doc_result_to_markdown(&result);
+    assert!(md.contains("# serde (crates.io)"));
+    assert!(md.contains("**Version:** 1.0.193"));
+    assert!(md.contains("---"));
+
+    api_mock.assert_async().await;
+    readme_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn docs_npm_end_to_end() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("GET", "/express")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r##"{
+            "dist-tags": {"latest": "4.18.2"},
+            "versions": {
+                "4.18.2": {
+                    "description": "Fast web framework",
+                    "repository": {"url": "git+https://github.com/expressjs/express.git"},
+                    "homepage": "https://expressjs.com",
+                    "license": "MIT"
+                }
+            },
+            "readme": "# Express\n\nFast web framework for Node.js"
+        }"##)
+        .create_async()
+        .await;
+
+    let url = format!("{}/express", server.url());
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let body = browser.fetch(&url).await.unwrap();
+    let result = parse_npm(&body, "express").unwrap();
+
+    assert_eq!(result.registry, "npm");
+    assert_eq!(result.version.as_deref(), Some("4.18.2"));
+    assert!(result.readme.contains("# Express"));
+
+    let md = doc_result_to_markdown(&result);
+    assert!(md.contains("# express (npm)"));
+    assert!(md.contains("**License:** MIT"));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn docs_pypi_end_to_end() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("GET", "/pypi/requests/json")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r##"{
+            "info": {
+                "version": "2.31.0",
+                "summary": "Python HTTP for Humans",
+                "home_page": "https://requests.readthedocs.io",
+                "license": "Apache 2.0",
+                "description": "# Requests\n\nHTTP library for Python",
+                "description_content_type": "text/markdown",
+                "project_urls": {
+                    "Source": "https://github.com/psf/requests",
+                    "Documentation": "https://requests.readthedocs.io"
+                }
+            }
+        }"##)
+        .create_async()
+        .await;
+
+    let url = format!("{}/pypi/requests/json", server.url());
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let body = browser.fetch(&url).await.unwrap();
+    let result = parse_pypi(&body, "requests").unwrap();
+
+    assert_eq!(result.registry, "pypi");
+    assert_eq!(result.version.as_deref(), Some("2.31.0"));
+    assert_eq!(
+        result.repository.as_deref(),
+        Some("https://github.com/psf/requests")
+    );
+    assert!(result.readme.contains("# Requests"));
+
+    let md = doc_result_to_markdown(&result);
+    assert!(md.contains("# requests (pypi)"));
+    assert!(md.contains("**License:** Apache 2.0"));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn docs_docsrs_end_to_end() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("GET", "/crate/tokio/latest/source/README.md")
+        .with_status(200)
+        .with_header("content-type", "text/plain")
+        .with_body("# Tokio\n\nAn async runtime for Rust.")
+        .create_async()
+        .await;
+
+    let url = format!("{}/crate/tokio/latest/source/README.md", server.url());
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let body = browser.fetch(&url).await.unwrap();
+
+    let result = DocResult {
+        registry: "docs.rs",
+        name: "tokio".to_string(),
+        version: None,
+        description: None,
+        repository: None,
+        homepage: None,
+        documentation: Some("https://docs.rs/tokio".to_string()),
+        license: None,
+        readme: body,
+    };
+
+    let md = doc_result_to_markdown(&result);
+    assert!(md.contains("# tokio (docs.rs)"));
+    assert!(md.contains("**Documentation:** https://docs.rs/tokio"));
+    assert!(md.contains("# Tokio"));
+
+    mock.assert_async().await;
+}
+
+#[test]
+fn docs_registry_url_builders() {
+    let (url, is_json) = registry_url(Registry::Crates, "serde");
+    assert!(url.contains("crates.io"));
+    assert!(is_json);
+
+    let (url, is_json) = registry_url(Registry::Docsrs, "tokio");
+    assert!(url.contains("docs.rs"));
+    assert!(!is_json);
+
+    let (url, is_json) = registry_url(Registry::Npm, "express");
+    assert!(url.contains("registry.npmjs.org"));
+    assert!(is_json);
+
+    let (url, is_json) = registry_url(Registry::Pypi, "requests");
+    assert!(url.contains("pypi.org"));
+    assert!(is_json);
+}
+
+// ---------------------------------------------------------------------------
+// proxy & auth — integration tests with mockito
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn proxy_and_auth_combined_end_to_end() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("GET", "/secure")
+        .match_header("authorization", "Basic YWRtaW46czNjcjN0")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body>Secure content</body></html>")
+        .create_async()
+        .await;
+
+    let mut opts = BrowserOptions::default();
+    opts.basic_auth = Some("admin:s3cr3t".to_string());
+    let browser = Browser::new(opts).unwrap();
+    let html = browser
+        .fetch(&format!("{}/secure", server.url()))
+        .await
+        .unwrap();
+
+    assert!(html.contains("Secure content"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn auth_sent_on_iframe_fetches() {
+    let mut server = mockito::Server::new_async().await;
+
+    let iframe_mock = server
+        .mock("GET", "/widget")
+        .match_header("authorization", "Basic dXNlcjpwYXNz")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<p>Widget</p>")
+        .create_async()
+        .await;
+
+    let main_mock = server
+        .mock("GET", "/main")
+        .match_header("authorization", "Basic dXNlcjpwYXNz")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(format!(
+            "<html><body><iframe src=\"{}/widget\"></iframe></body></html>",
+            server.url()
+        ))
+        .create_async()
+        .await;
+
+    let mut opts = BrowserOptions::default();
+    opts.basic_auth = Some("user:pass".to_string());
+    opts.respect_robots_txt = false;
+    let browser = Browser::new(opts).unwrap();
+    let html = browser
+        .fetch(&format!("{}/main", server.url()))
+        .await
+        .unwrap();
+    let inlined = browser
+        .inline_iframes(&html, &format!("{}/main", server.url()))
+        .await
+        .unwrap();
+
+    assert!(inlined.contains("Widget"));
+    iframe_mock.assert_async().await;
+    main_mock.assert_async().await;
 }

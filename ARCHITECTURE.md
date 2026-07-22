@@ -12,6 +12,12 @@ main.rs
   │                     ├── --format csv → extract_page_metadata → Trafilatura-style CSV row
   │                     ├── --format tei → extract_page_metadata → TEI XML document
   │                     ├── --format branding → branding::extract_branding → deterministic design profile JSON
+  │                     ├── --format links → extract::extract_links → JSON array of {url, text}
+  │                     ├── --format images → extract::extract_images → JSON array of {src, alt, title}
+  │                     ├── --format product → extract::extract_product → structured JSON from JSON-LD Product
+  │                     ├── --include-selector → filter_by_include_selectors (scraper CSS) → kept elements only
+  │                     ├── --pii-redact → redact::redact_pii → regex PII redaction on output
+  │                     ├── --mobile → mobile User-Agent string for HTTP requests
   │                     ├── --type {recipe|faq|job|event} → structured.rs (JSON-LD → Markdown) → stdout
   │                     ├── --topic <query> → transform::extract_topic (LLM-free paragraphs) → stdout
   │                     ├── --summary <n>  → transform::extract_summary (TF-IDF) → stdout
@@ -20,17 +26,20 @@ main.rs
   │                     ├── --rate <rps> → Browser::enforce_delay per-host clock
   │                     ├── --webhook <url> → main::post_webhook → POST `{event,url,format,result}`
   │                     └── --format xml → extract_page_metadata → plain `<doc>` XML
-  ├── peek command   → Browser → extract_page_metadata (no body conversion) → key fields only
+  ├── peek command   → Browser (--proxy/--auth supported) → extract_page_metadata (no body conversion) → key fields only
   ├── diff command   → Browser ×2 (or cached file) → diff_markdown::diff_markdown → unified-diff output
   ├── transcript cmd → Browser (watch page) → youtube::extract_caption_track_url → Browser (track file) → youtube::parse_timed_text → MD with timestamps
   ├── watch command  → Browser (poll loop) → main::poll_once → content_fingerprint → emit on change; persists last-seen fingerprint under --cache-dir
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
+  ├── map command     → Browser → extract::extract_links → URL list (optional --same-origin, --json)
+  ├── search command  → Browser (DDG HTML) → search::parse_ddg_results → results (Markdown or JSON, optional --fetch)
+  ├── docs command    → Browser (registry API or docs.rs) → docs::parse_crates_io/parse_npm/parse_pypi → DocResult (Markdown or JSON)
   ├── feed command    → Browser → parse_feed → feed_to_markdown (or JSON) → stdout / file
-  ├── batch command   → Browser → run_inline_scripts → PageToMarkdown → stdout or output directory
+  ├── batch command   → Browser (--proxy/--auth supported) → run_inline_scripts → PageToMarkdown → stdout or output directory
   └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **per-host rate-limit clock**; sitemap XML parsing; RSS/Atom feed link extraction; run_inline_scripts() (gated by enable_javascript); URL blacklist filtering on secondary fetches
+  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **per-host rate-limit clock**; sitemap XML parsing; RSS/Atom feed link extraction; run_inline_scripts() (gated by enable_javascript); URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
   ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `prune()`, `invalidate()`
   ├── feed.rs      : RSS 2.0 / Atom / JSON Feed parser (`parse_feed`) and Markdown converter (`feed_to_markdown`)
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
@@ -41,6 +50,10 @@ lib.rs
   ├── diff_markdown.rs : **Page diffing** — LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
   ├── youtube.rs     : **YouTube transcripts** — detect watch/shorts/embed/shortlink URLs; locate `captionTracks`; parse timed-text XML; render Markdown with `HH:MM:SS` timestamps. No video download.
   ├── branding.rs    : **Brand/design profile** — deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
+  ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product` from HTML/JSON-LD; output via `--format links`/`images`/`product`.
+  ├── redact.rs      : **PII redaction** — regex-based redaction of emails, phones, SSNs, credit cards; invoked by `--pii-redact`.
+  ├── search.rs      : **Web search** — DuckDuckGo HTML endpoint scraping; `parse_ddg_results` extracts titles/URLs/snippets; `decode_ddg_redirect` resolves DDG redirect links; `results_to_markdown` renders numbered links with blockquote snippets.
+  ├── docs.rs        : **Library docs** — fetches README + metadata from crates.io, docs.rs, npm, PyPI; `parse_crates_io`/`parse_npm`/`parse_pypi` parse JSON APIs; `doc_result_to_markdown` renders metadata header + README body.
   ├── js/          : Built-in dependency-free JavaScript subset interpreter
   │     ├── ast.rs     : AST node types (expressions, statements, operators)
   │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)
@@ -157,6 +170,7 @@ No dedicated HTML-to-Markdown, headless-browser, language-detection, or PDF/DOCX
 
 ## Test Coverage
 
-- **334 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- **401 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
 - All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
-- New modules since the v0.1.x baseline (`transform`, `structured`, `persistent_cache`, `diff_markdown`, `youtube`, `branding`) ship with their own unit suites
+- New modules since the v0.1.x baseline (`transform`, `structured`, `persistent_cache`, `diff_markdown`, `youtube`, `branding`, `extract`, `redact`, `search`, `docs`) ship with their own unit suites
+- `cargo clippy` passes with **0 warnings**

@@ -121,11 +121,10 @@ fn convert_element(
         }
         "img" => {
             if in_anchor {
-                if let Some(alt) = element.value().attr("alt") {
-                    if !alt.is_empty() {
+                if let Some(alt) = element.value().attr("alt")
+                    && !alt.is_empty() {
                         append_text(out, alt, in_pre, in_code);
                     }
-                }
             } else {
                 ensure_inline_break(out);
                 let src = element.value().attr("src").unwrap_or("");
@@ -282,11 +281,10 @@ fn link_label(element: ElementRef<'_>, inner: &str, href: &str) -> String {
 
 fn href_label_from_url(href: &str) -> String {
     if let Ok(url) = url::Url::parse(href) {
-        if let Some(segments) = url.path_segments() {
-            if let Some(seg) = segments.filter(|s| !s.is_empty()).last() {
+        if let Some(mut segments) = url.path_segments()
+            && let Some(seg) = segments.rfind(|s| !s.is_empty()) {
                 return seg.replace('-', " ");
             }
-        }
         if let Some(host) = url.host_str() {
             return host.to_string();
         }
@@ -472,7 +470,7 @@ fn clean_markdown(text: &str) -> String {
             out.push('\n');
         }
     }
-    separate_adjacent_markdown(&out.trim().to_string())
+    separate_adjacent_markdown(out.trim())
 }
 
 /// Break concatenated `[link](url)[link2](url)` patterns onto separate lines.

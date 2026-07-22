@@ -17,13 +17,11 @@ pub fn extract_page_links(html: &str, base_url: &str) -> Vec<String> {
             let start = pos + start;
             if let Some(end) = html[start..].find('>') {
                 let tag = &html[start..=start + end];
-                if let Some(href) = extract_attr(tag, "href") {
-                    if let Some(resolved) = normalize_crawl_url(&href, base_url) {
-                        if seen.insert(resolved.clone()) {
+                if let Some(href) = extract_attr(tag, "href")
+                    && let Some(resolved) = normalize_crawl_url(&href, base_url)
+                        && seen.insert(resolved.clone()) {
                             links.push(resolved);
                         }
-                    }
-                }
                 pos = start + end + 1;
             } else {
                 break;

@@ -13,6 +13,7 @@
 use regex::Regex;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 #[derive(Debug, Serialize)]
 pub struct BrandingProfile {
@@ -59,14 +60,13 @@ pub fn extract_branding(html: &str) -> BrandingProfile {
             };
             let prop = decl[..idx].trim().to_ascii_lowercase();
             let val = decl[idx + 1..].trim().to_string();
-            if prop.ends_with("color") || prop == "background" {
-                if let Some(token) = first_color_token(&val) {
+            if (prop.ends_with("color") || prop == "background")
+                && let Some(token) = first_color_token(&val) {
                     *color_counts.entry(token.clone()).or_insert(0) += 1;
                     if prop == "background-color" || prop == "background" {
                         background_colors.push(token);
                     }
                 }
-            }
             if prop == "font-family" {
                 for f in split_font_family(&val) {
                     if !fonts.contains(&f) {
@@ -97,8 +97,11 @@ pub fn extract_branding(html: &str) -> BrandingProfile {
                 let t = s.trim().to_ascii_lowercase();
                 t == "h1" || t == "h2" || t == "h3"
             }) {
-                let size_re =
-                    Regex::new(r"(?i)font-size\s*:\s*([^;]+)").unwrap();
+                static SIZE_RE: OnceLock<Regex> = OnceLock::new();
+                let size_re = SIZE_RE.get_or_init(|| {
+                    #[allow(clippy::regex_creation_in_loops)]
+                    Regex::new(r"(?i)font-size\s*:\s*([^;]+)").unwrap()
+                });
                 if let Some(c) = size_re.captures(body) {
                     heading_sizes.push(HeadingSize {
                         selector,
@@ -187,8 +190,6 @@ fn normalize_hex(s: &str) -> String {
             out.push(c);
         }
         format!("#{}", out)
-    } else if body.len() == 6 || body.len() == 8 {
-        s.to_string()
     } else {
         s.to_string()
     }

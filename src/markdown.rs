@@ -10,20 +10,18 @@ fn markdown_link_text_chars(md: &str) -> usize {
     let bytes = md.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'[' {
-            if let Some(close) = md[i + 1..].find(']') {
+        if bytes[i] == b'['
+            && let Some(close) = md[i + 1..].find(']') {
                 let label = &md[i + 1..i + 1 + close];
                 let after = &md[i + 1 + close..];
-                if after.starts_with("](") {
-                    if let Some(end) = after[2..].find(')') {
+                if after.starts_with("](")
+                    && let Some(end) = after[2..].find(')') {
                         let _ = end;
                         total += label.chars().count();
                         i += 1 + close + 2 + end + 1;
                         continue;
                     }
-                }
             }
-        }
         i += 1;
     }
     total
@@ -103,11 +101,10 @@ fn extract_language_class(tag: &str) -> Option<String> {
     let val_end = after[val_start..].find(quote)? + val_start;
     let class_val = &after[val_start..val_end];
     for cls in class_val.split_whitespace() {
-        if let Some(lang) = cls.strip_prefix("language-") {
-            if !lang.is_empty() {
+        if let Some(lang) = cls.strip_prefix("language-")
+            && !lang.is_empty() {
                 return Some(lang.to_string());
             }
-        }
     }
     None
 }
@@ -288,8 +285,8 @@ impl PageToMarkdown {
             Self::strip_markdown_links(&md)
         };
 
-        if opts.include_comments {
-            if let Some(comments) = Self::extract_comments(&original_html) {
+        if opts.include_comments
+            && let Some(comments) = Self::extract_comments(&original_html) {
                 let comments = if opts.include_links {
                     comments
                 } else {
@@ -297,7 +294,6 @@ impl PageToMarkdown {
                 };
                 return Ok(format!("{}\n\n{}", md, comments));
             }
-        }
         Ok(md)
     }
 
@@ -465,8 +461,8 @@ impl PageToMarkdown {
         if let Some(details) = Self::extract_product_details(&original_html) {
             on_block(details);
         }
-        if opts.include_comments {
-            if let Some(comments) = Self::extract_comments(&original_html) {
+        if opts.include_comments
+            && let Some(comments) = Self::extract_comments(&original_html) {
                 let comments = if opts.include_links {
                     comments
                 } else {
@@ -474,7 +470,6 @@ impl PageToMarkdown {
                 };
                 on_block(comments);
             }
-        }
         Ok(())
     }
 
@@ -696,20 +691,18 @@ impl PageToMarkdown {
         let mut i = 0;
         while i < md.len() {
             let rest = &md[i..];
-            if rest.starts_with("![") {
-                if let Some((alt, end)) = parse_md_link_at(md, i + 1) {
+            if rest.starts_with("![")
+                && let Some((alt, end)) = parse_md_link_at(md, i + 1) {
                     result.push_str(&alt);
                     i = end;
                     continue;
                 }
-            }
-            if rest.starts_with('[') {
-                if let Some((text, end)) = parse_md_link_at(md, i) {
+            if rest.starts_with('[')
+                && let Some((text, end)) = parse_md_link_at(md, i) {
                     result.push_str(&text);
                     i = end;
                     continue;
                 }
-            }
             let ch = rest.chars().next().unwrap();
             result.push(ch);
             i += ch.len_utf8();
@@ -820,11 +813,10 @@ impl PageToMarkdown {
                 if !class_name.is_empty() {
                     result = Self::strip_elements_by_attr(&result, "class", class_name);
                 }
-            } else if let Some(id_val) = trimmed.strip_prefix('#') {
-                if !id_val.is_empty() {
+            } else if let Some(id_val) = trimmed.strip_prefix('#')
+                && !id_val.is_empty() {
                     result = Self::strip_elements_by_attr(&result, "id", id_val);
                 }
-            }
         }
         result
     }
@@ -1011,15 +1003,14 @@ impl PageToMarkdown {
         }
 
         let best = candidates.into_iter().max_by_key(|(_, score)| *score);
-        if let Some((content, score)) = best {
-            if score > threshold {
+        if let Some((content, score)) = best
+            && score > threshold {
                 if favor_recall {
                     return content;
                 }
                 let min_para = if favor_precision { 50 } else { 30 };
                 return Self::strip_boilerplate_paragraphs(&content, min_para);
             }
-        }
 
         if let Some(structured) = extract_structured_content(html) {
             return structured;
@@ -1514,8 +1505,8 @@ impl PageToMarkdown {
         }
         // <cite> or <address>
         for tag in &["<cite", "<address"] {
-            if let Some(pos) = find_ci(html, tag) {
-                if let Some(gt) = html[pos..].find('>') {
+            if let Some(pos) = find_ci(html, tag)
+                && let Some(gt) = html[pos..].find('>') {
                     let content_start = pos + gt + 1;
                     let close = format!("</{}", &tag[1..]);
                     if let Some(end) = find_ci(&html[content_start..], &close) {
@@ -1526,7 +1517,6 @@ impl PageToMarkdown {
                         }
                     }
                 }
-            }
         }
         None
     }
@@ -1639,16 +1629,14 @@ fn extract_structured_content(html: &str) -> Option<String> {
 }
 
 fn structured_text_from_json(json: &serde_json::Value) -> Option<String> {
-    if let Some(body) = json.get("articleBody").and_then(|v| v.as_str()) {
-        if let Some(text) = substantial_structured_text(body) {
+    if let Some(body) = json.get("articleBody").and_then(|v| v.as_str())
+        && let Some(text) = substantial_structured_text(body) {
             return Some(text);
         }
-    }
-    if let Some(desc) = json.get("description").and_then(|v| v.as_str()) {
-        if let Some(text) = substantial_structured_text(desc) {
+    if let Some(desc) = json.get("description").and_then(|v| v.as_str())
+        && let Some(text) = substantial_structured_text(desc) {
             return Some(text);
         }
-    }
     json.get("@graph")
         .and_then(|v| v.as_array())
         .and_then(|items| items.iter().find_map(structured_text_from_json))

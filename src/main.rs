@@ -5,13 +5,18 @@ use web2md::{
     extract_page_metadata, extract_recipe, extract_summary, extract_topic, feed_to_markdown,
     language_matches, normalize_crawl_url, parse_feed, parse_sitemap_urls,
     truncate_by_tokens, truncate_with_marker, Browser, BrowserOptions, ConvertOptions,
-    McpRequest, McpServer, PageMetadata, PageToMarkdown,
+    DocResult, McpRequest, McpServer, PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::collections::{HashSet, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
+
+const MOBILE_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1 Web2MD/",
+    env!("CARGO_PKG_VERSION")
+);
 
 /// Output format for the fetch command
 #[derive(Clone, Debug, ValueEnum)]
@@ -32,6 +37,12 @@ enum OutputFormat {
     Xml,
     /// Emit deterministic brand/design profile (≈ Firecrawl `branding` format)
     Branding,
+    /// Emit all links as JSON (≈ Firecrawl `links` format)
+    Links,
+    /// Emit all images as JSON (≈ Firecrawl `images` format)
+    Images,
+    /// Emit structured product from JSON-LD (≈ Firecrawl `product` format, deterministic)
+    Product,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -54,6 +65,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Commands {
     /// Fetch a single URL and print Markdown to stdout
     Fetch {
@@ -164,6 +176,21 @@ enum Commands {
         /// POST the result JSON to this webhook URL when fetch completes (n8n/Make/Zapier)
         #[arg(long)]
         webhook: Option<String>,
+        /// CSS-like selector to keep only matching HTML elements (e.g. `article`, `.content`); can be given multiple times
+        #[arg(long)]
+        include_selector: Vec<String>,
+        /// Redact PII (emails, phone numbers, SSNs, credit cards) from output
+        #[arg(long)]
+        pii_redact: bool,
+        /// Use a mobile User-Agent string for the request
+        #[arg(long)]
+        mobile: bool,
+        /// Route requests through an HTTP/SOCKS proxy (e.g. "http://proxy:8080", "socks5://proxy:1080")
+        #[arg(long)]
+        proxy: Option<String>,
+        /// Basic authentication credentials (format: "user:password")
+        #[arg(long)]
+        auth: Option<String>,
     },
     /// Peek at a URL: return title + excerpt + key metadata only (cheaper than `fetch`)
     Peek {
@@ -190,6 +217,12 @@ enum Commands {
         /// Output as structured JSON instead of plain text
         #[arg(long)]
         json: bool,
+        /// Route requests through an HTTP/SOCKS proxy (e.g. "http://proxy:8080", "socks5://proxy:1080")
+        #[arg(long)]
+        proxy: Option<String>,
+        /// Basic authentication credentials (format: "user:password")
+        #[arg(long)]
+        auth: Option<String>,
     },
     /// Interactive terminal browser (Lynx-like)
     Browse {
@@ -322,6 +355,72 @@ enum Commands {
         #[arg(long)]
         feeds: bool,
     },
+    /// Discover all URLs on a page by extracting <a href> links (≈ Firecrawl /map)
+    Map {
+        /// Target URL
+        url: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+        /// Only list URLs on the same origin as the target
+        #[arg(long)]
+        same_origin: bool,
+        /// Output as JSON array instead of one URL per line
+        #[arg(long)]
+        json: bool,
+        /// Ignore robots.txt disallow rules and crawl-delay
+        #[arg(long)]
+        ignore_robots: bool,
+    },
+    /// Web search via DuckDuckGo (no API key required; ≈ Firecrawl /search, free)
+    Search {
+        /// Search query
+        query: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Maximum number of results to return
+        #[arg(short, long)]
+        limit: Option<usize>,
+        /// Output as JSON instead of Markdown
+        #[arg(long)]
+        json: bool,
+        /// Fetch and convert each result URL to Markdown (uses --limit to cap fetches)
+        #[arg(long)]
+        fetch: bool,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+    },
+    /// Fetch library documentation from any registry (≈ poor-person's Context7, free)
+    Docs {
+        /// Package name (e.g. serde, express, requests)
+        name: String,
+        /// Package registry
+        #[arg(short, long, value_enum, default_value = "crates")]
+        registry: web2md::Registry,
+        /// Request timeout in seconds
+        #[arg(short = 'T', long)]
+        timeout: Option<u64>,
+        /// Output as JSON instead of Markdown
+        #[arg(long)]
+        json: bool,
+        /// Cookie to send with the request (format: name=value); can be given multiple times
+        #[arg(short, long)]
+        cookie: Vec<String>,
+        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
+        #[arg(short = 'H', long)]
+        header: Vec<String>,
+    },
     /// Fetch an RSS, Atom, or JSON Feed and convert entries to Markdown
     Feed {
         /// Feed URL (RSS 2.0, Atom, or JSON Feed)
@@ -400,6 +499,12 @@ enum Commands {
         /// Do not load ~/.web2md/blacklist.txt
         #[arg(long)]
         no_user_blacklist: bool,
+        /// Route requests through an HTTP/SOCKS proxy (e.g. "http://proxy:8080", "socks5://proxy:1080")
+        #[arg(long)]
+        proxy: Option<String>,
+        /// Basic authentication credentials (format: "user:password")
+        #[arg(long)]
+        auth: Option<String>,
     },
 }
 
@@ -481,6 +586,9 @@ fn format_label(format: &OutputFormat) -> &'static str {
         OutputFormat::Tei => "tei",
         OutputFormat::Xml => "xml",
         OutputFormat::Branding => "branding",
+        OutputFormat::Links => "links",
+        OutputFormat::Images => "images",
+        OutputFormat::Product => "product",
     }
 }
 
@@ -507,7 +615,36 @@ async fn post_webhook(url: &str, body: &str) -> anyhow::Result<()> {
     }
 }
 
+/// Keep only HTML elements matching the given CSS selectors (e.g. `article`, `.content`, `#main`).
+/// Returns the concatenated inner HTML of all matching elements. If no selectors
+/// are given or no matches are found, returns the original HTML unchanged.
+fn filter_by_include_selectors(html: &str, selectors: &[String]) -> String {
+    if selectors.is_empty() {
+        return html.to_string();
+    }
+    use scraper::{Html, Selector};
+    let document = Html::parse_document(html);
+    let mut kept = String::new();
+    for sel_str in selectors {
+        let trimmed = sel_str.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(selector) = Selector::parse(trimmed) {
+            for element in document.select(&selector) {
+                kept.push_str(&element.html());
+            }
+        }
+    }
+    if kept.is_empty() {
+        html.to_string()
+    } else {
+        format!("<html><body>{}</body></html>", kept)
+    }
+}
+
 /// Build [`BrowserOptions`] from common CLI flags shared by fetch/browse/batch.
+#[allow(clippy::too_many_arguments)]
 fn build_browser_options(
     timeout: Option<u64>,
     delay: Option<u64>,
@@ -592,6 +729,11 @@ async fn main() -> Result<()> {
             cache_dir,
             rate,
             webhook,
+            include_selector,
+            pii_redact,
+            mobile,
+            proxy,
+            auth,
         }) => {
             let options = build_browser_options(
                 timeout,
@@ -611,6 +753,15 @@ async fn main() -> Result<()> {
                 options.cache_dir = Some(std::path::PathBuf::from(dir));
             }
             options.host_rate_limit = rate;
+            if mobile {
+                options.user_agent = MOBILE_USER_AGENT.to_string();
+            }
+            if let Some(ref p) = proxy {
+                options.proxy = Some(p.clone());
+            }
+            if let Some(ref a) = auth {
+                options.basic_auth = Some(a.clone());
+            }
             let browser = Browser::new(options)?;
 
             if depth > 0 {
@@ -634,12 +785,27 @@ async fn main() -> Result<()> {
             } else {
                 let html = browser.fetch(&url).await?;
                 let html = browser.prepare_html(&html, &url).await?;
+                let html = filter_by_include_selectors(&html, &include_selector);
 
                 let format_label_value = format_label(&format);
                 let (mut result, frontmatter_meta) = match format {
                     OutputFormat::Branding => {
                         let profile = web2md::extract_branding(&html);
                         (serde_json::to_string_pretty(&profile)?, None)
+                    }
+                    OutputFormat::Links => {
+                        let links = web2md::extract_links(&html, &url);
+                        (serde_json::to_string_pretty(&links)?, None)
+                    }
+                    OutputFormat::Images => {
+                        let images = web2md::extract_images(&html, &url);
+                        (serde_json::to_string_pretty(&images)?, None)
+                    }
+                    OutputFormat::Product => {
+                        match web2md::extract_product(&html) {
+                            Some(product) => (serde_json::to_string_pretty(&product)?, None),
+                            None => anyhow::bail!("no JSON-LD Product found on this page"),
+                        }
                     }
                     OutputFormat::Html => {
                         if lang.is_some() {
@@ -720,15 +886,14 @@ async fn main() -> Result<()> {
                             }
                         };
                         let meta = extract_page_metadata(&html, &md);
-                        if let Some(ref target) = lang {
-                            if !language_matches(meta.language.as_deref(), target) {
+                        if let Some(ref target) = lang
+                            && !language_matches(meta.language.as_deref(), target) {
                                 anyhow::bail!(
                                     "page language {:?} does not match --lang {}",
                                     meta.language.as_deref().unwrap_or("(unknown)"),
                                     target
                                 );
                             }
-                        }
                         if only_with_metadata
                             && (meta.title.is_none() || meta.published_date.is_none())
                         {
@@ -787,23 +952,28 @@ async fn main() -> Result<()> {
                             }
                             OutputFormat::Html => unreachable!(),
                             OutputFormat::Branding => unreachable!(),
+                            OutputFormat::Links => unreachable!(),
+                            OutputFormat::Images => unreachable!(),
+                            OutputFormat::Product => unreachable!(),
                         };
                         (out, fm_meta)
                     }
                 };
 
-                if frontmatter {
-                    if let Some(meta) = frontmatter_meta {
-                        if let Some(fm) = meta.to_frontmatter(Some(&url)) {
+                if frontmatter
+                    && let Some(meta) = frontmatter_meta
+                        && let Some(fm) = meta.to_frontmatter(Some(&url)) {
                             result = format!("{}{}", fm, result);
                         }
-                    }
-                }
 
                 if let Some(max) = max_tokens {
                     result = truncate_by_tokens(&result, max);
                 } else if let Some(max) = max_length {
                     result = truncate_with_marker(&result, max);
+                }
+
+                if pii_redact {
+                    result = web2md::redact_pii(&result);
                 }
 
                 if let Some(hook) = webhook.as_deref() {
@@ -1003,6 +1173,8 @@ async fn main() -> Result<()> {
             ignore_robots,
             no_blacklist,
             json,
+            proxy,
+            auth,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -1015,6 +1187,12 @@ async fn main() -> Result<()> {
             options.headers = header;
             options.respect_robots_txt = !ignore_robots;
             options.filter_blacklisted_urls = !no_blacklist;
+            if let Some(ref p) = proxy {
+                options.proxy = Some(p.clone());
+            }
+            if let Some(ref a) = auth {
+                options.basic_auth = Some(a.clone());
+            }
             let browser = Browser::new(options)?;
             let html = browser.fetch(&url).await?;
             let html = browser.prepare_html(&html, &url).await?;
@@ -1121,6 +1299,182 @@ async fn main() -> Result<()> {
                 eprintln!("No sitemap or feed URLs found.");
             }
         }
+        Some(Commands::Map {
+            url,
+            timeout,
+            cookie,
+            header,
+            same_origin,
+            json,
+            ignore_robots,
+        }) => {
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            options.respect_robots_txt = !ignore_robots;
+            let browser = Browser::new(options)?;
+            let html = browser.fetch(&url).await?;
+            let html = browser.prepare_html(&html, &url).await?;
+            let mut links = web2md::extract_links(&html, &url);
+            if same_origin {
+                let base = Url::parse(&url).ok();
+                if let Some(base) = &base {
+                    links.retain(|l| {
+                        Url::parse(&l.url)
+                            .map(|parsed| {
+                                parsed.scheme() == base.scheme()
+                                    && parsed.host_str() == base.host_str()
+                            })
+                            .unwrap_or(false)
+                    });
+                }
+            }
+            let urls: Vec<&str> = links.iter().map(|l| l.url.as_str()).collect();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&urls)?);
+            } else {
+                for u in &urls {
+                    println!("{}", u);
+                }
+            }
+        }
+        Some(Commands::Search {
+            query,
+            timeout,
+            limit,
+            json,
+            fetch,
+            cookie,
+            header,
+        }) => {
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            let browser = Browser::new(options)?;
+
+            let search_url = web2md::ddg_search_url(&query, limit);
+            let html = browser.fetch(&search_url).await.context("Failed to fetch search results")?;
+            let mut results = web2md::parse_ddg_results(&html);
+            if let Some(max) = limit {
+                results.truncate(max);
+            }
+
+            if fetch {
+                // Fetch and convert each result URL to Markdown
+                for (i, r) in results.iter().enumerate() {
+                    if let Ok(page_html) = browser.fetch(&r.url).await {
+                        let page_html = browser.prepare_html(&page_html, &r.url).await?;
+                        let md = PageToMarkdown::convert(&page_html, false, false, false, &[])?;
+                        let md = PageToMarkdown::absolutize_links(&md, &r.url);
+                        if json {
+                            let out = serde_json::json!({
+                                "index": i + 1,
+                                "title": r.title,
+                                "url": r.url,
+                                "snippet": r.snippet,
+                                "markdown": md,
+                            });
+                            println!("{}", serde_json::to_string_pretty(&out)?);
+                        } else {
+                            println!("---\n## {}. [{}]({})\n\n{}\n", i + 1, r.title, r.url, md);
+                        }
+                    }
+                }
+            } else if json {
+                println!("{}", serde_json::to_string_pretty(&results)?);
+            } else {
+                let md = web2md::results_to_markdown(&results);
+                println!("{}", md);
+            }
+        }
+        Some(Commands::Docs {
+            name,
+            registry,
+            timeout,
+            json,
+            cookie,
+            header,
+        }) => {
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            options.cookies = cookie;
+            options.headers = header;
+            let browser = Browser::new(options)?;
+
+            let (url, is_json) = web2md::registry_url(registry, &name);
+            let body = browser.fetch(&url).await.context("Failed to fetch docs")?;
+
+            let mut result = if is_json {
+                match registry {
+                    web2md::Registry::Crates => {
+                        let mut dr = web2md::parse_crates_io(&body, &name)
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        // For crates.io, also fetch README from docs.rs
+                        let docsrs_url = format!(
+                            "https://docs.rs/crate/{}/latest/source/README.md",
+                            name
+                        );
+                        if let Ok(readme) = browser.fetch(&docsrs_url).await
+                            && !readme.is_empty() && !readme.contains("<!DOCTYPE") {
+                                dr.readme = readme;
+                            }
+                        dr
+                    }
+                    web2md::Registry::Npm => {
+                        web2md::parse_npm(&body, &name).map_err(|e| anyhow::anyhow!(e))?
+                    }
+                    web2md::Registry::Pypi => {
+                        web2md::parse_pypi(&body, &name).map_err(|e| anyhow::anyhow!(e))?
+                    }
+                    web2md::Registry::Docsrs => {
+                        // docs.rs URL is not JSON, but if we got here it's the README text
+                        DocResult {
+                            registry: "docs.rs",
+                            name: name.clone(),
+                            version: None,
+                            description: None,
+                            repository: None,
+                            homepage: None,
+                            documentation: Some(format!("https://docs.rs/{}", name)),
+                            license: None,
+                            readme: body,
+                        }
+                    }
+                }
+            } else {
+                // docs.rs README — raw text
+                DocResult {
+                    registry: "docs.rs",
+                    name: name.clone(),
+                    version: None,
+                    description: None,
+                    repository: None,
+                    homepage: None,
+                    documentation: Some(format!("https://docs.rs/{}", name)),
+                    license: None,
+                    readme: body,
+                }
+            };
+
+            if result.readme.is_empty() {
+                result.readme = "(No README found.)".to_string();
+            }
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                let md = web2md::doc_result_to_markdown(&result);
+                println!("{}", md);
+            }
+        }
         Some(Commands::Feed {
             url,
             timeout,
@@ -1209,6 +1563,8 @@ async fn main() -> Result<()> {
             ignore_robots,
             blacklist_file,
             no_user_blacklist,
+            proxy,
+            auth,
         }) => {
             let content = std::fs::read_to_string(&file)
                 .context("Failed to read batch file")?;
@@ -1237,6 +1593,13 @@ async fn main() -> Result<()> {
                 blacklist_file,
                 ignore_robots,
             );
+            let mut options = options;
+            if let Some(ref p) = proxy {
+                options.proxy = Some(p.clone());
+            }
+            if let Some(ref a) = auth {
+                options.basic_auth = Some(a.clone());
+            }
             let browser = Browser::new(options)?;
 
             // Create output directory if specified
@@ -1314,6 +1677,7 @@ async fn main() -> Result<()> {
 }
 
 /// Recursively fetch and convert same-origin pages up to `depth` link hops.
+#[allow(clippy::too_many_arguments)]
 async fn crawl_fetch(
     browser: &Browser,
     start_url: &str,
@@ -1498,7 +1862,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
                 let rendered = renderer.render_chunk(&block);
                 let trimmed = rendered.trim_end();
                 if !trimmed.is_empty() {
-                    print!("{trimmed}\n");
+                    println!("{trimmed}");
                 }
                 let _ = io::stdout().flush();
             },
@@ -1520,9 +1884,7 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
         match input {
             "q" | "Q" => break,
             "b" | "B" => {
-                if current > 0 {
-                    current -= 1;
-                }
+                current = current.saturating_sub(1);
             }
             "f" | "F" => {
                 if current < history.len() - 1 {
@@ -1542,14 +1904,13 @@ async fn browse_loop(start_url: String, options: BrowserOptions, include_images:
                 }
             }
             num => {
-                if let Ok(n) = num.parse::<usize>() {
-                    if n > 0 && n <= links.len() {
+                if let Ok(n) = num.parse::<usize>()
+                    && n > 0 && n <= links.len() {
                         let target = resolve_url(&url, &links[n - 1]);
                         history.truncate(current + 1);
                         history.push(target);
                         current += 1;
                     }
-                }
             }
         }
     }
@@ -1568,11 +1929,10 @@ fn resolve_url(base: &str, relative: &str) -> String {
         }
         return relative.to_string();
     }
-    if let Ok(base_url) = url::Url::parse(base) {
-        if let Ok(resolved) = base_url.join(relative) {
+    if let Ok(base_url) = url::Url::parse(base)
+        && let Ok(resolved) = base_url.join(relative) {
             return resolved.to_string();
         }
-    }
     relative.to_string()
 }
 
@@ -1784,11 +2144,10 @@ fn render_markdown_ansi(md: &str, number_links: bool) -> (String, Vec<String>) {
 /// Display label for links with no visible anchor text.
 fn fallback_link_label(url: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url) {
-        if let Some(segments) = parsed.path_segments() {
-            if let Some(seg) = segments.filter(|s| !s.is_empty()).last() {
+        if let Some(mut segments) = parsed.path_segments()
+            && let Some(seg) = segments.rfind(|s| !s.is_empty()) {
                 return seg.replace('-', " ");
             }
-        }
         if let Some(host) = parsed.host_str() {
             return host.to_string();
         }
@@ -1875,6 +2234,7 @@ fn render_ansi_table(rows: &[Vec<String>], aligns: &[pulldown_cmark::Alignment])
     for (ri, row) in rows.iter().enumerate() {
         let is_header = ri == 0 && row.len() == cols;
         out.push_str("\x1b[90m│\x1b[0m ");
+        #[allow(clippy::needless_range_loop)]
         for ci in 0..cols {
             let cell = row.get(ci).map(|s| s.as_str()).unwrap_or("");
             let align = aligns.get(ci).unwrap_or(&pulldown_cmark::Alignment::None);

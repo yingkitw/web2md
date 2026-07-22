@@ -94,7 +94,7 @@ impl Scope {
 
     fn has(&self, name: &str) -> bool {
         self.vars.contains_key(name)
-            || self.parent.as_ref().map_or(false, |p| p.borrow().has(name))
+            || self.parent.as_ref().is_some_and(|p| p.borrow().has(name))
     }
 }
 
@@ -319,11 +319,10 @@ impl Interpreter {
                 }
                 loop {
                     self.tick()?;
-                    if let Some(c) = cond {
-                        if !truthy(&self.eval(c, &loop_env)?) {
+                    if let Some(c) = cond
+                        && !truthy(&self.eval(c, &loop_env)?) {
                             break;
                         }
-                    }
                     match self.exec_stmt(body, &loop_env)? {
                         Flow::Break => break,
                         Flow::Continue => {}
@@ -549,7 +548,7 @@ impl Interpreter {
         if let Expr::Member(target, name) = callee {
             let recv = self.eval(target, env)?;
             let argv = self.eval_args(args, env)?;
-            return Ok(self.call_method(recv, name, &argv)?);
+            return self.call_method(recv, name, &argv);
         }
 
         let cv = self.eval(callee, env)?;
@@ -587,7 +586,7 @@ impl Interpreter {
     fn construct(&mut self, name: &str, args: &[Value]) -> Value {
         match name {
             "Array" => {
-                let arr = match args.get(0) {
+                let arr = match args.first() {
                     Some(Value::Number(n)) if args.len() == 1 => {
                         vec![Value::Undefined; *n as usize]
                     }
@@ -596,9 +595,9 @@ impl Interpreter {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "Object" => Value::Object(Rc::new(RefCell::new(ObjectData::new()))),
-            "String" => Value::Str(args.first().map_or(String::new(), |v| to_string(v))),
+            "String" => Value::Str(args.first().map_or(String::new(), to_string)),
             "Number" => Value::Number(args.first().map_or(f64::NAN, to_number)),
-            "Boolean" => Value::Bool(args.first().map_or(false, |v| truthy(v))),
+            "Boolean" => Value::Bool(args.first().is_some_and(truthy)),
             "Date" => Value::Object(Rc::new(RefCell::new(ObjectData::new()))),
             "RegExp" => Value::Object(Rc::new(RefCell::new(ObjectData::new()))),
             _ => Value::Object(Rc::new(RefCell::new(ObjectData::new()))),
@@ -622,14 +621,13 @@ impl Interpreter {
                     o.borrow_mut().props.insert(name.clone(), value);
                     return Ok(());
                 }
-                if let Value::Array(a) = ov {
-                    if name == "length" {
+                if let Value::Array(a) = ov
+                    && name == "length" {
                         if let Value::Number(n) = &value {
                             a.borrow_mut().resize(*n as usize, Value::Undefined);
                         }
                         return Ok(());
                     }
-                }
                 Ok(())
             }
             Expr::Index(obj, idx) => {
@@ -674,10 +672,10 @@ impl Interpreter {
             BinOp::Ne => Value::Bool(!loose_eq(a, b)),
             BinOp::StrictEq => Value::Bool(strict_eq(a, b)),
             BinOp::StrictNe => Value::Bool(!strict_eq(a, b)),
-            BinOp::Lt => Value::Bool(compare(a, b).map_or(false, |o| o == std::cmp::Ordering::Less)),
-            BinOp::Gt => Value::Bool(compare(a, b).map_or(false, |o| o == std::cmp::Ordering::Greater)),
-            BinOp::Le => Value::Bool(compare(a, b).map_or(false, |o| o != std::cmp::Ordering::Greater)),
-            BinOp::Ge => Value::Bool(compare(a, b).map_or(false, |o| o != std::cmp::Ordering::Less)),
+            BinOp::Lt => Value::Bool(compare(a, b) == Some(std::cmp::Ordering::Less)),
+            BinOp::Gt => Value::Bool(compare(a, b) == Some(std::cmp::Ordering::Greater)),
+            BinOp::Le => Value::Bool(compare(a, b).is_some_and(|o| o != std::cmp::Ordering::Greater)),
+            BinOp::Ge => Value::Bool(compare(a, b).is_some_and(|o| o != std::cmp::Ordering::Less)),
         })
     }
 }
@@ -709,11 +707,10 @@ impl Interpreter {
             Value::Str(s) => {
                 if let Value::Number(i) = idx {
                     let i = *i as i64;
-                    if i >= 0 {
-                        if let Some(c) = s.chars().nth(i as usize) {
+                    if i >= 0
+                        && let Some(c) = s.chars().nth(i as usize) {
                             return Value::Str(c.to_string());
                         }
-                    }
                 }
                 Value::Undefined
             }
@@ -721,11 +718,10 @@ impl Interpreter {
                 if let Value::Number(i) = idx {
                     return a.borrow().get(*i as usize).cloned().unwrap_or(Value::Undefined);
                 }
-                if let Value::Str(key) = idx {
-                    if key == "length" {
+                if let Value::Str(key) = idx
+                    && key == "length" {
                         return Value::Number(a.borrow().len() as f64);
                     }
-                }
                 Value::Undefined
             }
             Value::Object(o) => {
@@ -847,7 +843,7 @@ impl Interpreter {
         );
         g.vars.insert(
             "Boolean".into(),
-            Value::Native(Rc::new(|args| Ok(Value::Bool(args.first().map_or(false, |v| truthy(v)))))),
+            Value::Native(Rc::new(|args| Ok(Value::Bool(args.first().is_some_and(truthy))))),
         );
         g.vars.insert(
             "Array".into(),
@@ -1251,7 +1247,7 @@ fn number_method(n: f64, name: &str, args: &[Value]) -> Value {
     match name {
         "toString" => {
             let radix = to_number(args.first().unwrap_or(&Value::Number(10.0))) as u32;
-            if radix == 10 || args.first().is_none() {
+            if radix == 10 || args.is_empty() {
                 Value::Str(num_to_string(n))
             } else if (2..=36).contains(&radix) {
                 Value::Str(format_radix(n as i64, radix))

@@ -58,7 +58,7 @@ const KEYWORDS: &[&str] = &[
     "instanceof",
 ];
 
-const PUNCTUATORS: &[&'static str] = &[
+const PUNCTUATORS: &[&str] = &[
     ">>>=", ">>>", "...", "===", "!==", "=>", "**=", "**", "<<=", ">>=", "<<", ">>", "==", "!=",
     "<=", ">=", "&&", "||", "++", "--", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "?.", "?",
     "{", "}", "(", ")", "[", "]", ";", ",", ".", ":", "<", ">", "+", "-", "*", "/", "%", "=", "!",
@@ -141,7 +141,7 @@ impl<'a> Lexer<'a> {
         };
 
         // Numbers
-        if c.is_ascii_digit() || (c == b'.' && self.peek_at(1).map_or(false, |d| d.is_ascii_digit()))
+        if c.is_ascii_digit() || (c == b'.' && self.peek_at(1).is_some_and(|d| d.is_ascii_digit()))
         {
             return self.read_number();
         }
@@ -212,8 +212,8 @@ impl<'a> Lexer<'a> {
             }
         }
         // exponent
-        if let Some(e) = self.peek() {
-            if e == b'e' || e == b'E' {
+        if let Some(e) = self.peek()
+            && (e == b'e' || e == b'E') {
                 self.pos += 1;
                 if matches!(self.peek(), Some(b'+') | Some(b'-')) {
                     self.pos += 1;
@@ -226,7 +226,6 @@ impl<'a> Lexer<'a> {
                     }
                 }
             }
-        }
         let text = std::str::from_utf8(&self.src[start..self.pos]).unwrap_or("0");
         let n: f64 = text.parse().map_err(|e| LexError(format!("bad number: {e}")))?;
         Ok(Token::Num(n))
@@ -454,7 +453,7 @@ fn utf8_len(first: u8) -> usize {
         2
     } else if first >> 4 == 0b1110 {
         3
-    } else if first >> 3 == 0b1111_0 {
+    } else if first >> 3 == 0b1_1110 {
         4
     } else {
         1
