@@ -116,18 +116,19 @@
 - [x] New shared modules: `extract.rs` (links/images/product), `redact.rs` (PII redaction), `search.rs` (DDG web search), `docs.rs` (library doc fetcher)
 - [x] `--proxy`/`--auth` extended to `peek` and `batch` commands (consistency — all HTTP-making commands now support proxy/auth)
 - [x] Codebase audit: fixed regex-in-loop perf bug in `branding.rs` (OnceLock), collapsed dead if/else, resolved 96 clippy warnings → 0, added `--proxy`/`--auth` to `peek`/`batch`
+- [x] Use `readabilityrs` for full Mozilla Readability.js compatibility (`--readability` opt-in on `fetch`, 93.8% test pass rate, free)
+- [x] Local BM25 corpus index (`corpus index <dir>` / `corpus query <dir> <q>`) — query a directory of `.md` files offline, ≈ Context7 over any local corpus, no API key
+- [x] Opt-in headless browser backend (`--features headless`, `--headless` flag on `fetch`, `--chrome-path <path>`) — routes requests through a real Chrome / Chromium for SPAs and `/interact` parity with Firecrawl
 
 ## In Progress
 
-_None — v3 cycle is complete. See Brainstorming for next-wave ideas._
+_None — v4 cycle (readability, corpus index, headless browser) is complete. See Brainstorming v4 for next-wave ideas._
 
 ## Brainstorming
 
 _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:_
 
-- Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
 - PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
-- Headless browser backend (Playwright/Chromium) for full SPA rendering beyond inline-script subset
 - `--no-tables` / `--include-links` element toggles (Trafilatura parity)
 - Word/character count fields on `PageMetadata`
 
@@ -199,9 +200,26 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 
 **Later** (lower leverage, requires external services or large effort):
 - Web search — ✅ Done (DuckDuckGo HTML, `search` subcommand)
-- Headless browser backend (`headless_chrome` opt-in) for true SPA support and screenshot
+- Headless browser backend — ✅ Done (`--features headless` + `--headless` on `fetch`)
 - PDF/DOCX parsing from URLs (`lopdf`, `docx-rs`) — keep out unless demand warrants the binary-size cost
 - Local-web search backend: index CLI docs and serve them via Context7-compatible endpoints
 - Library doc fetcher — ✅ Done (`docs` subcommand, crates.io/docs.rs/npm/PyPI)
-- Use `readabilityrs` or `legible` crate for full Mozilla Readability.js compatibility (93.8% test pass rate)
+- Readability.js extraction — ✅ Done (`readabilityrs` + `--readability` flag on `fetch`)
 - `--no-tables` / `--include-links` explicit element toggles for Trafilatura parity — ✅ Already implemented
+- Local BM25 corpus index — ✅ Done (`corpus` subcommand)
+
+### Brainstorming v4 — beating Firecrawl on the remaining hard surface
+
+With v3 closing every deterministic Firecrawl gap we can ship without a headless
+browser, the remaining frontier is the browser-driven surface. v4 makes those
+optional + local:
+
+- `--readability` on `fetch` (Mozilla Readability.js via `readabilityrs`) — drops in the same 93.8% test pass rate as Firefox Reader View for any URL.
+- `corpus` subcommand (BM25 over `.md` files) — `corpus index <dir>` to persist `.web2md-index.json`, `corpus query <dir> <q>` for ranked hits with snippets. Replaces paid "ask a corpus" APIs over a directory of `web2md batch --output` outputs.
+- `--features headless` + `--headless` on `fetch` — opt-in `headless_chrome` backend for JS-heavy SPAs. Adds Chromium to the binary's required-runtime set when the feature is enabled.
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 27 | `--readability` Mozilla Readability.js extraction | Firecrawl default extraction on article URLs | ✅ Done |
+| 28 | `corpus index` / `corpus query` over local `.md` directory | Context7 / paid "corpus Q&A" | ✅ Done |
+| 29 | `--features headless` + `--headless` for true SPA render | Firecrawl `/interact` (paid) | ✅ Done |

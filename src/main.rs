@@ -191,6 +191,20 @@ enum Commands {
         /// Basic authentication credentials (format: "user:password")
         #[arg(long)]
         auth: Option<String>,
+        /// Apply Mozilla Readability.js (via readabilityrs) before conversion
+        /// to strip chrome and isolate the article body
+        #[arg(long)]
+        readability: bool,
+        /// Render the page with a real headless browser before conversion.
+        /// Requires building with `--features headless` and a Chrome/Chromium
+        /// binary at runtime. Use for JS-heavy SPAs the inline-script
+        /// interpreter cannot drive.
+        #[arg(long)]
+        headless: bool,
+        /// Path to a Chrome / Chromium binary (used with --headless;
+        /// defaults to the system install).
+        #[arg(long, requires = "headless")]
+        chrome_path: Option<String>,
     },
     /// Peek at a URL: return title + excerpt + key metadata only (cheaper than `fetch`)
     Peek {
@@ -506,6 +520,37 @@ enum Commands {
         #[arg(long)]
         auth: Option<String>,
     },
+    /// Build a BM25 index over a directory of Markdown files, or query one
+    /// (≈ poor-person's Context7 over any local corpus, no API key)
+    Corpus {
+        #[command(subcommand)]
+        action: CorpusAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum CorpusAction {
+    /// Build (or rebuild) the index for a directory of Markdown files
+    Index {
+        /// Directory containing .md / .markdown files (recurses into subdirs)
+        dir: String,
+        /// Custom output path for the JSON index (default: <dir>/.web2md-index.json)
+        #[arg(long)]
+        output: Option<String>,
+    },
+    /// Query the index for a directory and return top-N matching files
+    Query {
+        /// Directory whose .web2md-index.json should be queried
+        dir: String,
+        /// Free-form query (e.g. "rust cargo")
+        query: String,
+        /// Maximum number of matches to return
+        #[arg(short, long, default_value = "5")]
+        limit: usize,
+        /// Emit machine-readable JSON instead of Markdown
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn apply_blacklist_options(
@@ -734,6 +779,9 @@ async fn main() -> Result<()> {
             mobile,
             proxy,
             auth,
+            readability,
+            headless,
+            chrome_path,
         }) => {
             let options = build_browser_options(
                 timeout,
@@ -783,9 +831,22 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             } else {
-                let html = browser.fetch(&url).await?;
-                let html = browser.prepare_html(&html, &url).await?;
+                let html = if headless {
+                    let opts = web2md::HeadlessOptions {
+                        wait_ms: wait.unwrap_or(0),
+                        chrome_path: chrome_path.clone(),
+                    };
+                    web2md::render_url(&url, opts).await?
+                } else {
+                    let html = browser.fetch(&url).await?;
+                    browser.prepare_html(&html, &url).await?
+                };
                 let html = filter_by_include_selectors(&html, &include_selector);
+                let html = if readability {
+                    web2md::apply_readability(&html, Some(&url))?
+                } else {
+                    html
+                };
 
                 let format_label_value = format_label(&format);
                 let (mut result, frontmatter_meta) = match format {
@@ -1670,6 +1731,28 @@ async fn main() -> Result<()> {
             }
 
             eprintln!("\nDone: {}/{} succeeded, {} failed, {} skipped", succeeded, total, failed, skipped);
+        }
+        Some(Commands::Corpus { action }) => {
+            match action {
+                CorpusAction::Index { dir, output } => {
+                    let dir_path = std::path::PathBuf::from(&dir);
+                    let out_path = output.as_deref().map(std::path::Path::new);
+                    let n = web2md::build_index(&dir_path, out_path)?;
+                    let final_path = out_path
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| web2md::index_path_for(&dir_path));
+                    eprintln!("Indexed {} files → {}", n, final_path.display());
+                }
+                CorpusAction::Query { dir, query, limit, json } => {
+                    let dir_path = std::path::PathBuf::from(&dir);
+                    let hits = web2md::query_index(&dir_path, &query, limit)?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&hits)?);
+                    } else {
+                        println!("{}", web2md::corpus_results_to_markdown(&hits));
+                    }
+                }
+            }
         }
     }
 

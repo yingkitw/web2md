@@ -24,6 +24,8 @@ scraper = "0.23"
 sha2 = "0.10"
 regex = "1"
 urlencoding = "2.1"
+readabilityrs = "0.1"
+headless_chrome = { version = "1.0", optional = true }
 
 [dev-dependencies]
 mockito = "1.4"
@@ -41,3 +43,9 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+
+[features]
+default = []
+# Opt-in headless Chrome / Chromium rendering for JavaScript-heavy pages.
+# Compiles a heavier dependency stack; requires a Chrome / Chromium binary at runtime.
+headless = ["dep:headless_chrome"]

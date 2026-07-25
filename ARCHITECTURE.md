@@ -19,6 +19,8 @@ main.rs
   │                     ├── --pii-redact → redact::redact_pii → regex PII redaction on output
   │                     ├── --mobile → mobile User-Agent string for HTTP requests
   │                     ├── --type {recipe|faq|job|event} → structured.rs (JSON-LD → Markdown) → stdout
+  │                     ├── --readability → readability::apply_readability (Mozilla Readability.js via readabilityrs) → cleaned article HTML
+  │                     ├── --headless (--features headless) → headless::render_url (headless_chrome) → real-browser-rendered HTML
   │                     ├── --topic <query> → transform::extract_topic (LLM-free paragraphs) → stdout
   │                     ├── --summary <n>  → transform::extract_summary (TF-IDF) → stdout
   │                     ├── --max-tokens <N> → transform::truncate_by_tokens → stdout
@@ -36,6 +38,7 @@ main.rs
   ├── docs command    → Browser (registry API or docs.rs) → docs::parse_crates_io/parse_npm/parse_pypi → DocResult (Markdown or JSON)
   ├── feed command    → Browser → parse_feed → feed_to_markdown (or JSON) → stdout / file
   ├── batch command   → Browser (--proxy/--auth supported) → run_inline_scripts → PageToMarkdown → stdout or output directory
+  ├── corpus command  → corpus::build_index / corpus::query_index → BM25 ranking over local .md files → stdout (Markdown or JSON)
   └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
 
 lib.rs
@@ -60,6 +63,9 @@ lib.rs
   │     ├── parser.rs  : Recursive-descent parser → Vec<Stmt>
   │     ├── eval.rs    : Tree-walking evaluator with lexical scopes, closures, control flow, and builtins (document.write, strings, arrays, Math, JSON, console, global constructors)
   │     └── mod.rs     : run_inline_scripts(html, wait_ms) — extracts inline <script> blocks, runs them, flushes timer callbacks, returns document.write output; inject_before_body_close()
+  ├── readability.rs : **Mozilla Readability.js extraction** (opt-in via `--readability`) — wraps `readabilityrs`; cleans article HTML before the conversion pipeline; falls back to passthrough when Readability declines
+  ├── headless.rs    : **Opt-in headless Chrome / Chromium rendering** (gated behind `--features headless`) — wraps `headless_chrome::Browser`; `render_url(url, HeadlessOptions)` runs on `spawn_blocking`; returns clear "rebuild with `--features headless`" error when feature is off
+  ├── corpus.rs      : **Local BM25 corpus index** (`corpus` subcommand) — tokenizes `.md` files, persists inverted index to `.web2md-index.json`, ranks queries with `idf * (tf*(k1+1)) / (tf + k1*(1 - b + b*len/avgdl))` (k1=1.2, b=0.75)
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding, `strip_html_tags`)
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
@@ -77,7 +83,7 @@ main.rs (helpers)
 ## Data Flow
 
 ```
-URL ──► Browser.fetch() ──► raw HTML
+URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url when --headless and --features headless)
                                   │
                                   ▼
                           Browser.inline_iframes()
@@ -89,6 +95,12 @@ URL ──► Browser.fetch() ──► raw HTML
                                   ├── parses + evaluates each via the built-in interpreter
                                   ├── captures document.write / writeln output
                                   └── injects captured HTML before </body>
+                                  │
+                                  ▼
+                          apply_readability()  (only when --readability; strips nav / ads / footer)
+                                  │
+                                  ▼
+                          filter_by_include_selectors()  (only when --include-selector; scraper CSS)
                                   │
                                   ▼
                           PageToMarkdown.convert()
@@ -148,6 +160,8 @@ URL ──► Browser.fetch() ──► raw HTML
 | `reqwest` | HTTP client (slim features: `native-tls` + `http2` + `charset`) |
 | `tokio` | Async runtime |
 | `scraper` | HTML parsing (html5ever) for `html_to_md` |
+| `readabilityrs` | Mozilla Readability.js port (opt-in via `--readability`) |
+| `headless_chrome` | Headless Chrome / Chromium via DevTools Protocol (opt-in, `--features headless`) |
 | `pulldown-cmark` | Markdown → ANSI terminal rendering |
 | `clap` | CLI argument parsing |
 | `serde` / `serde_json` | JSON serialization (MCP, `--format json`, branding, webhook payload) |
@@ -157,12 +171,15 @@ URL ──► Browser.fetch() ──► raw HTML
 | `anyhow` | Error handling |
 | `mockito` | HTTP mocking in tests (dev) |
 
-No dedicated HTML-to-Markdown, headless-browser, language-detection, or PDF/DOCX-rendering crates are pulled in. All such capabilities are implemented in-house to keep the binary small (~5 MB release) and the audit surface manageable.
+No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates are pulled in. All such capabilities are implemented in-house to keep the default binary small (~5 MB release) and the audit surface manageable. The `readabilityrs` crate is now linked by default (small overhead) for the `--readability` opt-in flag. The `headless_chrome` crate is gated behind the `headless` cargo feature so the default build stays lean.
 
 ## Deployment Topology
 
 - Local interactive: `cargo run -- <URL>` (browse mode)
 - Local one-shot: `cargo run -- fetch <URL> [--render] [--format json]`
+- Article cleanup: `cargo run -- fetch <URL> --readability` (Mozilla Readability.js)
+- SPA render: `cargo run --features headless -- fetch <URL> --headless` (headless Chrome)
+- Local corpus search: `cargo run -- corpus index ./docs` then `cargo run -- corpus query ./docs <q>`
 - MCP Host: `cargo run -- mcp` (stdio transport)
 - Watch loop: `cargo run -- watch <URL> --every 60` (agent firehose)
 - Release binary: `cargo build --release` (LTO + stripped, ~5 MB)
@@ -170,7 +187,7 @@ No dedicated HTML-to-Markdown, headless-browser, language-detection, or PDF/DOCX
 
 ## Test Coverage
 
-- **401 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- **420 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
 - All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
-- New modules since the v0.1.x baseline (`transform`, `structured`, `persistent_cache`, `diff_markdown`, `youtube`, `branding`, `extract`, `redact`, `search`, `docs`) ship with their own unit suites
-- `cargo clippy` passes with **0 warnings**
+- New modules in the v4 cycle (`readability`, `corpus`, `headless`) ship with their own unit suites; the readability and corpus modules also have end-to-end integration tests
+- `cargo clippy` passes with **0 warnings** (default features and `--features headless`)

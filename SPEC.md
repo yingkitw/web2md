@@ -105,6 +105,9 @@ web2md fetch <URL> [FLAGS]
   --type TYPE          Domain extractor: recipe | faq | job | event (LLM-free JSON-LD rendering)
   --topic QUERY        Keep only paragraphs relevant to this query (LLM-free; ≈ Firecrawl `highlights`)
   --summary N          Return top-N sentences by TF-IDF + positional scoring (LLM-free; ≈ Firecrawl `summary`)
+  --readability        Apply Mozilla Readability.js (via readabilityrs) before conversion
+  --headless           Render the page with a real headless Chrome / Chromium (requires --features headless)
+  --chrome-path PATH   Path to a Chrome / Chromium binary (used with --headless)
   --lang CODE          Require page language to match ISO 639-1 or 639-3 (e.g. en, eng)
   --precision           Favor extraction precision (less noise, stricter main-content)
   --recall              Favor extraction recall (more text, looser main-content)
@@ -195,6 +198,12 @@ web2md batch <FILE> [FLAGS]
   --ignore-robots       Ignore robots.txt disallow rules and crawl-delay
   --proxy URL           Route requests through HTTP/SOCKS proxy
   --auth USER:PASS      Basic authentication credentials
+
+# Build (or rebuild) a BM25 index over a directory of Markdown files
+web2md corpus index <DIR> [--output PATH]
+
+# Query a corpus directory for a free-form query (returns top-N with snippets)
+web2md corpus query <DIR> <QUERY> [-l LIMIT] [--json]
 
 # MCP server (stdio JSON-RPC)
 web2md mcp
@@ -605,6 +614,45 @@ No API key, no subscription (≈ poor-person's Context7, free).
 
 Emits nothing while the page is unchanged — agents can `tail -f` it as a firehose.
 
+## Readability Extraction (`--readability`)
+
+When `--readability` is passed to `fetch`, the raw HTML is first scored and cleaned by [`readabilityrs`] — a Rust port of Mozilla's Readability library (the same algorithm behind Firefox Reader View). The article HTML it returns replaces the original body before our usual pipeline runs, so noise, nav, ads, and chrome are stripped deterministically by a battle-tested extractor. Readability's pre-flight check (`is_probably_readerable`) is also exposed via [`is_readerable`] for callers that want to short-circuit obvious non-articles. When Readability declines to score the page (returns `None` or fails to construct), the input HTML is passed through unchanged so the rest of the pipeline still has a chance.
+
+## Headless Browser (`--headless`, `--features headless`)
+
+When `web2md` is built with `--features headless`, the [`headless_chrome`] DevTools client is compiled in and `fetch --headless [--chrome-path PATH] [--wait MS]` routes the page through a real headless Chrome / Chromium. The launch helper:
+
+1. Sets `LaunchOptions::path` from `--chrome-path` when given, otherwise relies on `headless_chrome::default_executable()` (system install or `CHROME` env var).
+2. Disables the OS sandbox by default — most CI / container hosts lack the user-namespace setup Chrome's sandbox needs; users who want it can re-enable it via `CHROME_DEVEL_SANDBOX`.
+3. Calls `Browser::new`, opens a new tab, navigates, waits for navigation to settle, optionally sleeps `--wait` ms, and returns the rendered HTML.
+
+The work is run on a `tokio::task::spawn_blocking` thread because `headless_chrome` is a synchronous library. Without the feature compiled in, `render_url` returns a clear "rebuild with `--features headless`" error so the CLI fails fast with an actionable message.
+
+## Local BM25 Corpus Index (`corpus` subcommand)
+
+Two operations, both free of any external service:
+
+- `web2md corpus index <DIR> [--output PATH]` — walks `DIR` recursively, reads every `.md` / `.markdown` file (hidden files / dirs skipped), tokenizes the body, and persists an inverted index to `<DIR>/.web2md-index.json` (or `--output`). Index format:
+
+```json
+{
+  "version": 1,
+  "avg_doc_length": 42.0,
+  "docs": [{"path": "rust.md", "length": 12}],
+  "index": {"rust": [{"doc": 0, "tf": 3}]}
+}
+```
+
+- `web2md corpus query <DIR> <QUERY> [--limit N] [--json]` — loads the persisted index, ranks documents for the free-form query with the standard BM25 formula
+
+```
+score(D, Q) = Σ_tf_in_Q  IDF(tf) * (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * |D| / avgdl))
+```
+
+with `k1 = 1.2`, `b = 0.75`, and returns the top-N hits with a short snippet around the first matching token. Default output is Markdown (`## 1. path / Score / > snippet`); `--json` emits the structured `CorpusHit` array.
+
+Tokenization is the same as the existing in-pipeline extractor: lowercased alphanumeric tokens, stopwords dropped, single-character tokens dropped. There is no stemming — the goal is fast, deterministic, language-agnostic recall on natural-language queries.
+
 ## Webhook Delivery (`--webhook`)
 
 After each `fetch` completes, if `--webhook <URL>` is set, the result is POSTed as JSON:
@@ -622,6 +670,6 @@ Non-2xx responses are logged to stderr; the local fetch result is still printed 
 
 ## Quality Bar
 
-- All features have unit and integration tests (401 tests across lib, main, and integration suites at last count)
+- All features have unit and integration tests (420 tests across lib, main, and integration suites at last count)
 - `cargo build` and `cargo test` must pass before merge
 - `cargo clippy` passes with 0 warnings

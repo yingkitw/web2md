@@ -1,9 +1,10 @@
 use std::time::Duration;
 use url::Url;
 use web2md::{
-    extract_event, extract_faq, extract_feed_links, extract_job, extract_metadata,
-    extract_page_metadata, extract_recipe, extract_summary, extract_topic, feed_to_markdown,
-    normalize_crawl_url, parse_feed, parse_sitemap_urls, same_origin_links,
+    apply_readability, build_index, corpus_results_to_markdown, extract_event, extract_faq,
+    extract_feed_links, extract_job, extract_metadata, extract_page_metadata, extract_recipe,
+    extract_summary, extract_topic, feed_to_markdown, index_path_for, is_readerable,
+    normalize_crawl_url, parse_feed, parse_sitemap_urls, query_index, same_origin_links,
     truncate_by_tokens, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
     doc_result_to_markdown, parse_crates_io, parse_npm, parse_pypi, registry_url,
     DocResult, Registry,
@@ -1406,4 +1407,87 @@ async fn auth_sent_on_iframe_fetches() {
     assert!(inlined.contains("Widget"));
     iframe_mock.assert_async().await;
     main_mock.assert_async().await;
+}
+
+const NEWS_ARTICLE: &str = r#"<!doctype html>
+<html>
+<head><title>Real News</title><meta name="author" content="Jane Doe"></head>
+<body>
+  <nav><ul><li><a href="/">Home</a></li></ul></nav>
+  <aside class="ad">Buy stuff!</aside>
+  <article>
+    <h1>The Big Story</h1>
+    <p>By Jane Doe — this is a long enough paragraph about a meaningful topic that should pass the readability threshold. The story continues with more detail about the subject and provides enough text for the algorithm to recognize this as a genuine article rather than a navigation shell. We need to keep writing until we are well over the threshold so the extractor is comfortable scoring this block as the primary content.</p>
+    <p>A second paragraph adds context, quotes sources, and develops the narrative further. Readability uses paragraph count and text length together to decide which container holds the actual article body versus the surrounding chrome.</p>
+    <p>A third paragraph closes the piece with a summary takeaway and forward-looking statement. The article length is now well above the 300-character default threshold used by Readability.js.</p>
+  </article>
+  <footer>Copyright 2026 — Site Name</footer>
+</body>
+</html>"#;
+
+#[test]
+fn readability_strips_navigation_and_keeps_article_body() {
+    let cleaned = apply_readability(NEWS_ARTICLE, Some("https://example.com/story")).unwrap();
+    // Article body survives
+    assert!(cleaned.contains("The Big Story"));
+    assert!(cleaned.to_lowercase().contains("jane doe"));
+    // Chrome is dropped
+    assert!(!cleaned.contains("Buy stuff"));
+    assert!(!cleaned.contains("Copyright 2026"));
+    // Readability pre-flight agrees
+    assert!(is_readerable(NEWS_ARTICLE));
+}
+
+#[test]
+fn readability_then_markdown_pipeline_end_to_end() {
+    // Realistic chain: apply readability first, then convert through our
+    // usual pipeline. The article body should appear; the nav and footer
+    // should be gone.
+    let cleaned = apply_readability(NEWS_ARTICLE, Some("https://example.com/story")).unwrap();
+    let md = PageToMarkdown::convert(&cleaned, false, false, true, &[]).unwrap();
+    assert!(md.contains("The Big Story"));
+    assert!(!md.contains("Buy stuff"));
+    assert!(!md.contains("Copyright 2026"));
+}
+
+#[test]
+fn corpus_end_to_end_build_index_and_query() {
+    let dir = std::env::temp_dir().join(format!("web2md-it-corpus-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("rust.md"),
+        "Rust is a systems programming language focused on safety and speed. \
+         Cargo is the Rust package manager and build system.",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("python.md"),
+        "Python is a high-level dynamic language used for scripting, data \
+         science, and web development. pip is the default package manager.",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("node.md"),
+        "Node.js is a JavaScript runtime built on Chrome's V8 engine. \
+         npm is the default package manager for the Node ecosystem.",
+    )
+    .unwrap();
+
+    let n = build_index(&dir, None).unwrap();
+    assert_eq!(n, 3);
+    assert!(index_path_for(&dir).exists());
+
+    let hits = query_index(&dir, "rust cargo", 5).unwrap();
+    assert!(!hits.is_empty());
+    assert_eq!(hits[0].path, "rust.md");
+    assert!(hits[0].score > 0.0);
+    assert!(!hits[0].snippet.is_empty());
+    let markdown = corpus_results_to_markdown(&hits);
+    assert!(markdown.contains("rust.md"));
+
+    let py_hits = query_index(&dir, "data science", 5).unwrap();
+    assert!(!py_hits.is_empty());
+    assert_eq!(py_hits[0].path, "python.md");
+
+    let _ = std::fs::remove_dir_all(&dir);
 }

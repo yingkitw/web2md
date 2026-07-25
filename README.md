@@ -49,6 +49,17 @@ cargo run -- https://example.com
 # Fetch a page as Markdown (one-shot)
 cargo run -- fetch https://example.com
 
+# Apply Mozilla Readability.js (Firefox Reader View) to isolate the article body
+cargo run -- fetch https://example.com/article --readability
+
+# Render with a real headless browser for JS-heavy SPAs (build with --features headless)
+cargo run -- fetch --features headless -- build
+cargo run --features headless -- fetch https://my-spa.example.com --headless
+
+# Query a directory of Markdown files offline (BM25, no API key)
+cargo run -- corpus index ./docs
+cargo run -- corpus query ./docs "rust cargo" --limit 5
+
 # Limit output length
 cargo run -- fetch https://example.com --max-length 4000
 
@@ -209,6 +220,9 @@ Example Cursor MCP config:
 - **Table rendering**: Markdown tables drawn with box-drawing characters (`┌─┬─┐`)
 - **Iframe inlining**: Fetches `<iframe src="...">` content and embeds it into the parent page
 - **In-house HTML-to-Markdown converter** (`html_to_md.rs`): DOM walk via `scraper`/html5ever — tolerates malformed/unclosed tags; decodes HTML entities; escapes Markdown control characters in plain text
+- **Readability** (`readability.rs`): Mozilla Readability.js port for opt-in article extraction on `fetch --readability`
+- **Corpus index** (`corpus.rs`): BM25 inverted index over a directory of `.md` files; persisted as JSON; ranks with `idf * (tf*(k1+1)) / (tf + k1*(1 - b + b*len/avgdl))`
+- **Headless browser** (`headless.rs`): `headless_chrome` DevTools client, opt-in via the `headless` feature; used by `fetch --headless` for SPA rendering
 - **Noise reduction**: Strips `<script>`, `<style>`, `<iframe>`, `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>`, HTML comments, and excessive whitespace (use `--keep-header` to preserve `<header>`)
 - **URL blacklist**: Skips known ad/tracking/analytics URLs on iframe inlining, batch jobs, and sitemap output (use `--no-blacklist` to disable); extend via `~/.web2md/blacklist.txt` or `--blacklist-file`
 - **Recursive crawl** (`--depth N`): BFS crawl of same-origin links from a start URL; writes one Markdown file per page to `--output` directory or prints separated sections to stdout
@@ -243,6 +257,9 @@ Example Cursor MCP config:
 - **URL discovery** (`map` subcommand): Extract all `<a href>` URLs from a page, with optional `--same-origin` filtering and `--json` output (≈ Firecrawl `/map` endpoint)
 - **Web search** (`search` subcommand): Search the web via DuckDuckGo's HTML endpoint — no API key required. Returns titles, URLs, and snippets as Markdown or JSON. Use `--fetch` to also fetch and convert each result page to Markdown (≈ Firecrawl `/search`, free)
 - **Library docs** (`docs` subcommand): Fetch README and metadata from any package registry — crates.io, docs.rs, npm, or PyPI. No API key, no curated index. Returns version, description, repository, license, and full README as Markdown or JSON (≈ poor-person's Context7, free)
+- **Readability extraction** (`--readability`): Apply Mozilla Readability.js (via the `readabilityrs` port — same 93.8% test pass rate as Firefox Reader View) before the conversion pipeline to isolate the article body and strip nav / ads / chrome. Falls back to the original HTML when Readability declines to score the page
+- **Local BM25 corpus index** (`corpus` subcommand): `corpus index <dir>` walks a directory of `.md` files and persists a BM25 index to `.web2md-index.json`. `corpus query <dir> <query>` ranks files by relevance and returns top-N with snippets. No API key, no LLM, no network (≈ "ask a corpus" over any local Markdown directory, free)
+- **Opt-in headless browser** (`--features headless` + `--headless` flag): Pulls in `headless_chrome` to render a real Chrome / Chromium before conversion. Use for SPAs the inline-script interpreter can't drive. `--chrome-path <path>` overrides the system install. Falls back to a clear "rebuild with `--features headless`" error when the feature is off
 - **MCP server**: stdio JSON-RPC transport for LLM tool integration
 - **Metadata extraction**: Title, description, author (meta tag, JSON-LD, or Dublin Core), publication date, image (og:image or JSON-LD), headline (JSON-LD), site name (og:site_name), keywords/tags (article:tag, meta keywords, or JSON-LD), categories/sections (article:section or JSON-LD articleSection), excerpt (first substantive paragraph), canonical URL (og:url or link rel=canonical), language (html lang, og:locale, JSON-LD inLanguage, or stopword-heuristic ISO 639-3 fallback on extracted text), extraction quality (0.0–1.0 confidence), page type (`article` / `forum` / `product` / `page`), and content fingerprint (64-bit simhash) in MCP response and `--format json` output
 - **JSON output** (`--format json`): Emit structured JSON (markdown + metadata) from CLI for scripting and piping
@@ -290,7 +307,7 @@ Example Cursor MCP config:
 | Change detection (polling) | ✅ `changeTracking` | ❌ | ✅ `watch` subcommand |
 | Webhook delivery | ✅ `webhooks` (paid) | ❌ | ✅ `--webhook <url>` flag |
 | Web search | ✅ (paid proxy) | ❌ | ✅ `search` subcommand (DDG, free) |
-| Browser automation | ✅ `actions`/`interact` (paid) | ❌ | ❌ |
+| Browser automation | ✅ `actions`/`interact` (paid) | ❌ | ✅ `--features headless` + `--headless` (opt-in, free) |
 | Screenshot | ✅ (paid) | ❌ | ❌ |
 | Cost | Subscription | Free tier + paid | Free, local, no API key |
 | Offline / CI | ❌ requires API | ❌ requires API | ✅ |
@@ -329,6 +346,8 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 |---|---|
 | HTTP | `reqwest`, `tokio` |
 | HTML parsing | `scraper` (html5ever) via `html_to_md.rs` |
+| Readability (opt-in) | `readabilityrs` (Mozilla Readability.js port) |
+| Headless browser (opt-in) | `headless_chrome` (gated behind the `headless` cargo feature) |
 | Markdown rendering | `pulldown-cmark` (ANSI terminal output) |
 | Hashing (cache keys) | `sha2` (SHA-256 of URL) |
 | Optional regex | `regex` (YouTube caption scrape, PII redaction) |
@@ -339,4 +358,4 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ## Project Status
 
-Feature-complete for the current scope — see [TODO.md](TODO.md) for the prioritized backlog and brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **401 tests** pass across unit and integration suites.
+Feature-complete for the current scope — see [TODO.md](TODO.md) for the prioritized backlog and brainstorming ideas. [SPEC.md](SPEC.md) defines protocol contracts. **420 tests** pass across unit and integration suites.
