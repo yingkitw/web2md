@@ -53,19 +53,20 @@ When URL filtering is enabled, Web2MD also loads `~/.web2md/blacklist.txt` if it
 
 - **Depth 0** (default): single-page fetch (existing behavior)
 - **Depth N > 0**: fetch the start page, extract `<a href>` links on the same host, convert each to Markdown, and repeat up to N link hops
+- Pages at each BFS level are fetched **in parallel** (up to 10 concurrent requests)
 - External links, `mailto:`, fragments, and blacklisted URLs are not followed
 - Output: `--output <dir>` writes one `.md` file per page; without `--output`, pages are printed separated by `---` headers
 - Requires markdown output format (`--format json` / `--format html` are incompatible with `--depth`)
 
 ## robots.txt
 
-By default, Web2MD fetches `/robots.txt` once per origin and:
+robots.txt is **off by default**. When enabled via `BrowserOptions { respect_robots_txt: true, .. }`, Web2MD fetches `/robots.txt` once per origin and:
 
 - **Blocks** fetches to paths matched by a `Disallow` rule for `*` or the Web2MD user-agent
 - **Waits** the greater of `--delay` and `Crawl-delay` (seconds) between requests to that host
 - Missing or unreadable robots.txt → all paths allowed
 - `/robots.txt` itself is always fetchable (no circular check)
-- Use `--ignore-robots` on `fetch`, `browse`, or `batch` to disable
+- The `--ignore-robots` flag is a no-op (kept for backward compatibility)
 
 ## CLI
 
@@ -125,8 +126,8 @@ web2md fetch <URL> [FLAGS]
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
-  --depth N             Recursively crawl same-origin links up to N levels (markdown only)
-  --ignore-robots       Ignore robots.txt disallow rules and crawl-delay
+  --depth N             Recursively crawl same-origin links up to N levels (markdown only, parallel BFS)
+  --ignore-robots       No-op (robots.txt is off by default; kept for backward compatibility)
 
 # Sitemap discovery
 web2md sitemap <URL> [FLAGS]
@@ -141,7 +142,7 @@ web2md map <URL> [FLAGS]
   --header "Name: Val" Send custom header (repeatable)
   --same-origin        Only list URLs on the same origin as the target
   --json               Output as JSON array instead of one URL per line
-  --ignore-robots      Ignore robots.txt disallow rules and crawl-delay
+  --ignore-robots      No-op (robots.txt is off by default; kept for backward compatibility)
 
 # Web search via DuckDuckGo (no API key required; ≈ Firecrawl /search, free)
 web2md search <QUERY> [FLAGS]
@@ -168,7 +169,7 @@ web2md batch <FILE> [FLAGS]
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
-  --ignore-robots       Ignore robots.txt disallow rules and crawl-delay
+  --ignore-robots       No-op (robots.txt is off by default; kept for backward compatibility)
   --proxy URL           Route requests through HTTP/SOCKS proxy
   --auth USER:PASS      Basic authentication credentials
 
@@ -188,7 +189,7 @@ web2md peek <URL> [FLAGS]
   --cookie NAME=VAL          Send cookie (repeatable)
   --header "Name: Val"       Send custom header (repeatable)
   --delay MS                 Polite delay between requests
-  --ignore-robots            Ignore robots.txt
+  --ignore-robots            No-op (robots.txt is off by default)
   --no-blacklist             Disable URL blacklist filtering
   --proxy URL                Route requests through HTTP/SOCKS proxy
   --auth USER:PASS           Basic authentication credentials
@@ -208,11 +209,10 @@ web2md watch <URL> [FLAGS]
   --timeout SECONDS          Request timeout
   --cookie NAME=VAL          Send cookie (repeatable)
   --header "Name: Val"       Send custom header (repeatable)
-  --ignore-robots            Ignore robots.txt
+  --ignore-robots            No-op (robots.txt is off by default)
 ```
 
 ### MCP JSON-RPC Request
-
 ```json
 {
   "url": "https://example.com/article",
@@ -515,7 +515,7 @@ When `--auth user:password` is set, HTTP Basic Auth credentials are sent with ev
 - URLs are resolved to absolute and deduplicated.
 - `--same-origin` filters to only URLs on the same scheme + host as the target.
 - `--json` outputs a JSON array of URL strings; default is one URL per line.
-- `--ignore-robots` skips robots.txt checks.
+- `--ignore-robots` is a no-op (robots.txt is off by default).
 
 No LLM, fully deterministic (≈ Firecrawl `/map` endpoint, free).
 

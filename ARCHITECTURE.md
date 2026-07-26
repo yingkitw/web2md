@@ -7,7 +7,7 @@ main.rs
   ├── CLI parsing (clap)
   ├── <URL> (default) → browse_loop → Browser → PageToMarkdown → ANSI renderer → terminal
   ├── fetch command   → Browser → inline_iframes → PageToMarkdown → stdout
-  │                     ├── --depth N → BFS crawl via crawl.rs (same-origin links) → multiple Markdown outputs
+  │                     ├── --depth N → parallel BFS crawl via crawl.rs (same-origin links, 10 concurrent) → multiple Markdown outputs
   │                     ├── --format json → extract_page_metadata → structured JSON output
   │                     ├── --format csv → extract_page_metadata → Trafilatura-style CSV row
   │                     ├── --format tei → extract_page_metadata → TEI XML document
@@ -44,7 +44,7 @@ lib.rs
   ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `prune()`, `invalidate()`
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
-  ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser
+  ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser (off by default)
   ├── transform.rs   : **Output shaping layer** — `extract_topic` (query-focused paragraphs), `extract_summary` (extractive TF-IDF), `truncate_by_tokens`, `split_paragraphs`. All LLM-free.
   ├── structured.rs  : **Domain-specific extractors** — `extract_recipe`, `extract_faq`, `extract_job`, `extract_event`. Walk JSON-LD blocks directly; render deterministic Markdown with YAML frontmatter.
   ├── diff_markdown.rs : **Page diffing** — LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).

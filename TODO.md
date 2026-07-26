@@ -54,8 +54,8 @@
 - [x] YAML frontmatter output: `--frontmatter` flag prepends metadata (title, description, author, date, etc.) as a YAML block at the top of Markdown output
 - [x] CSS selector targeting: `--exclude-selector` flag strips HTML elements matching `.class` or `#id` selectors before conversion
 - [x] URL blacklist filtering: skip known non-content URLs (ads, tracking pixels, analytics hosts) on iframe inlining, batch processing, and sitemap output; `--no-blacklist` to disable
-- [x] Recursive crawl: `--depth N` on `fetch` discovers and converts same-origin linked pages (BFS); `--output` writes to a directory
-- [x] robots.txt respect: parse and honor Disallow rules and Crawl-delay before fetching; `--ignore-robots` to disable
+- [x] Recursive crawl: `--depth N` on `fetch` discovers and converts same-origin linked pages (parallel BFS, 10 concurrent); `--output` writes to a directory
+- [x] robots.txt parser: parse and honor Disallow rules and Crawl-delay; off by default, opt-in via `BrowserOptions { respect_robots_txt: true }`
 - [x] Custom user blacklist file: load additional URL patterns from `~/.web2md/blacklist.txt` and `--blacklist-file`; `--no-user-blacklist` to skip the default file
 - [x] Shared `html_util` module: extracted `find_ci` and HTML entity decoding for the in-house converter
 - [x] Markdown control-character escaping in `html_to_md` (list/heading markers in raw text)

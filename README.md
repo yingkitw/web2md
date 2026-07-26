@@ -133,8 +133,8 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 - **Main-content extraction**, noise stripping, content deduplication
 - **Query-focused extraction** (`--topic`), extractive summarization (`--summary`), token-budget truncation (`--max-tokens`)
 - **Recipe/FAQ/Job/Event** JSON-LD extractors (`--type`)
-- **Persistent file cache**, per-host rate limiting, `robots.txt` respect
-- **Recursive crawl**, sitemap discovery
+- **Persistent file cache**, per-host rate limiting, optional `robots.txt` respect
+- **Recursive crawl** (parallel BFS, up to 10 concurrent), sitemap discovery
 - **Links**, **images**, **product**, and **branding** extraction (`--format`)
 - Page **diff**, **watch** mode, **webhook** delivery
 - **PII redaction**, proxy support, basic auth, mobile User-Agent
