@@ -7,12 +7,10 @@ mod crawl;
 mod diff_markdown;
 mod docs;
 mod extract;
-mod feed;
 mod headless;
 mod html_meta;
 mod html_to_md;
 mod html_util;
-mod js;
 mod markdown;
 mod mcp;
 mod persistent_cache;
@@ -23,21 +21,15 @@ mod search;
 mod structured;
 mod transform;
 mod url_blacklist;
-mod youtube;
 
 pub use branding::{extract_branding, BrandingProfile, ColorStat, HeadingSize};
-pub use browser::{extract_feed_links, parse_sitemap_urls, Browser, BrowserOptions};
+pub use browser::{parse_sitemap_urls, Browser, BrowserOptions};
 pub use corpus::{build_index, index_path_for, query_index, results_to_markdown as corpus_results_to_markdown, CorpusHit};
 pub use diff_markdown::{diff_markdown, summarize};
 pub use docs::{doc_result_to_markdown, parse_crates_io, parse_npm, parse_pypi, registry_url, DocResult, Registry};
 pub use persistent_cache::PersistentCache;
-pub use youtube::{
-    extract_caption_track_url, extract_video_id, is_youtube_url, parse_timed_text,
-    render_transcript_markdown, transcript_from_watch_html, TranscriptCue,
-};
 pub use crawl::{normalize_crawl_url, same_origin_links};
 pub use extract::{extract_images, extract_links, extract_product, ImageEntry, LinkEntry, ProductEntry, ProductVariant};
-pub use feed::{feed_to_markdown, parse_feed, Feed};
 pub use headless::{is_headless_available, render_url, HeadlessOptions};
 pub use markdown::{ConvertOptions, PageToMarkdown};
 pub use mcp::{

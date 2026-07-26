@@ -30,13 +30,10 @@ main.rs
   │                     └── --format xml → extract_page_metadata → plain `<doc>` XML
   ├── peek command   → Browser (--proxy/--auth supported) → extract_page_metadata (no body conversion) → key fields only
   ├── diff command   → Browser ×2 (or cached file) → diff_markdown::diff_markdown → unified-diff output
-  ├── transcript cmd → Browser.fetch() (watch page) → youtube::extract_caption_track_url → Browser.fetch_ignore_robots() (caption track URL) → youtube::parse_timed_text → MD with timestamps
   ├── watch command  → Browser (poll loop) → main::poll_once → content_fingerprint → emit on change; persists last-seen fingerprint under --cache-dir
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
   ├── map command     → Browser → extract::extract_links → URL list (optional --same-origin, --json)
   ├── search command  → Browser (DDG HTML) → search::parse_ddg_results → results (Markdown or JSON, optional --fetch)
-  ├── docs command    → Browser (registry API or docs.rs) → docs::parse_crates_io/parse_npm/parse_pypi → DocResult (Markdown or JSON)
-  ├── feed command    → Browser → parse_feed → feed_to_markdown (or JSON) → stdout / file
   ├── batch command   → Browser (--proxy/--auth supported) → run_inline_scripts → PageToMarkdown → stdout or output directory
   ├── corpus command  → corpus::build_index / corpus::query_index → BM25 ranking over local .md files → stdout (Markdown or JSON)
   └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
@@ -44,19 +41,16 @@ main.rs
 lib.rs
   ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **per-host rate-limit clock**; sitemap XML parsing; RSS/Atom feed link extraction; run_inline_scripts() (gated by enable_javascript); URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
   ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `prune()`, `invalidate()`
-  ├── feed.rs      : RSS 2.0 / Atom / JSON Feed parser (`parse_feed`) and Markdown converter (`feed_to_markdown`)
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
   ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser
   ├── transform.rs   : **Output shaping layer** — `extract_topic` (query-focused paragraphs), `extract_summary` (extractive TF-IDF), `truncate_by_tokens`, `split_paragraphs`. All LLM-free.
   ├── structured.rs  : **Domain-specific extractors** — `extract_recipe`, `extract_faq`, `extract_job`, `extract_event`. Walk JSON-LD blocks directly; render deterministic Markdown with YAML frontmatter.
   ├── diff_markdown.rs : **Page diffing** — LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
-  ├── youtube.rs     : **YouTube transcripts** — detect watch/shorts/embed/shortlink URLs; locate `captionTracks`; parse timed-text XML; render Markdown with `HH:MM:SS` timestamps. No video download.
   ├── branding.rs    : **Brand/design profile** — deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
   ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product` from HTML/JSON-LD; output via `--format links`/`images`/`product`.
   ├── redact.rs      : **PII redaction** — regex-based redaction of emails, phones, SSNs, credit cards; invoked by `--pii-redact`.
   ├── search.rs      : **Web search** — DuckDuckGo HTML endpoint scraping; `parse_ddg_results` extracts titles/URLs/snippets; `decode_ddg_redirect` resolves DDG redirect links; `results_to_markdown` renders numbered links with blockquote snippets.
-  ├── docs.rs        : **Library docs** — fetches README + metadata from crates.io, docs.rs, npm, PyPI; `parse_crates_io`/`parse_npm`/`parse_pypi` parse JSON APIs; `doc_result_to_markdown` renders metadata header + README body.
   ├── js/          : Built-in dependency-free JavaScript subset interpreter
   │     ├── ast.rs     : AST node types (expressions, statements, operators)
   │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)
@@ -167,7 +161,7 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
 | `serde` / `serde_json` | JSON serialization (MCP, `--format json`, branding, webhook payload) |
 | `url` | URL parsing, resolution, absolutization |
 | `sha2` | SHA-256 for persistent-cache file names and watch-state identifiers |
-| `regex` | YouTube caption-track URL extraction |
+| `regex` | PII redaction, brand/design extraction |
 | `anyhow` | Error handling |
 | `mockito` | HTTP mocking in tests (dev) |
 

@@ -99,19 +99,6 @@ web2md fetch https://en.wikipedia.org/wiki/Rust --summary 5
 web2md fetch https://example.com/article --max-tokens 800
 ```
 
-### Work with feeds, docs, and video
-
-```bash
-# RSS/Atom/JSON Feed entries to Markdown
-web2md feed https://example.com/rss.xml
-
-# YouTube transcript as Markdown
-web2md transcript https://www.youtube.com/watch?v=dQw4w9WgXcQ
-
-# Library docs from crates.io / npm / pypi / docs.rs
-web2md docs serde --registry crates
-```
-
 ### Search and batch
 
 ```bash
@@ -142,9 +129,9 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 - **Query-focused extraction** (`--topic`), extractive summarization (`--summary`), token-budget truncation (`--max-tokens`)
 - **Recipe/FAQ/Job/Event** JSON-LD extractors (`--type`)
 - **Persistent file cache**, per-host rate limiting, `robots.txt` respect
-- **Recursive crawl**, sitemap/feed discovery, RSS/Atom/JSON Feed parsing
+- **Recursive crawl**, sitemap discovery
 - **Links**, **images**, **product**, and **branding** extraction (`--format`)
-- **YouTube transcript**, page **diff**, **watch** mode, **webhook** delivery
+- Page **diff**, **watch** mode, **webhook** delivery
 - **PII redaction**, proxy support, basic auth, mobile User-Agent
 - **Local BM25 corpus** index over Markdown directories
 - **MCP server** with structured metadata
@@ -160,7 +147,6 @@ See [SPEC.md](SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for full protocol 
 | Markdown extraction | ✅ | ✅ | ❌ |
 | Query highlights | ✅ LLM-free | ✅ LLM | ✅ LLM |
 | Summary | ✅ LLM-free | ✅ LLM | ❌ |
-| Library docs | ✅ live registries | ❌ | ✅ curated |
 | Offline / CI | ✅ | ❌ | ❌ |
 
 ## Tech stack

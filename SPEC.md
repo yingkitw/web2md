@@ -21,13 +21,12 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 | Language detection | Built-in stopword heuristic (ISO 639-3 fallback when HTML metadata lacks language) |
 | HTML utilities | `html_util.rs` — case-insensitive search, entity decoding |
 | Persistent cache keys | `sha2` (SHA-256 of URL → JSON file) |
-| Optional regex | `regex` (used by YouTube caption-track URL extraction) |
+| Optional regex | `regex` (PII redaction, brand/design extraction) |
 | Conversion pipeline | `markdown.rs` (`PageToMarkdown`) wraps `html_to_md::parse_html` |
 | Output transforms | `transform.rs` — `--topic`, `--summary`, `--max-tokens`, paragraph splitter |
 | Domain-specific extractors | `structured.rs` — Recipe, FAQPage, JobPosting, Event JSON-LD → Markdown |
 | Page diffing | `diff_markdown.rs` — LCS-based unified diff for the `diff` subcommand |
 | Persistent cache | `persistent_cache.rs` — JSON files keyed by URL hash; `--cache-dir` |
-| YouTube transcripts | `youtube.rs` — watch-page captionTrack URL extraction + timed-text parser |
 | Brand/design extraction | `branding.rs` — top-N colors / fonts / heading sizes from inline `<style>` blocks |
 | CLI | `clap` 4.x |
 | Test HTTP mocking | `mockito` (dev) |
@@ -160,23 +159,6 @@ web2md search <QUERY> [FLAGS]
   --cookie NAME=VAL      Send cookie (repeatable)
   -H, --header "Name: Val"  Send custom header (repeatable)
 
-# Fetch library docs from any registry (≈ poor-person's Context7, free)
-web2md docs <NAME> [FLAGS]
-  -r, --registry REG     Package registry: crates | docsrs | npm | pypi (default: crates)
-  -T, --timeout SECONDS  Request timeout
-  --json                 Output as JSON instead of Markdown
-  --cookie NAME=VAL      Send cookie (repeatable)
-  -H, --header "Name: Val"  Send custom header (repeatable)
-
-# Fetch RSS/Atom/JSON Feed and convert entries to Markdown
-web2md feed <URL> [FLAGS]
-  --timeout SECONDS    Request timeout (default: 30)
-  --cookie NAME=VAL    Send cookie (repeatable)
-  --header "Name: Val" Send custom header (repeatable)
-  --max-entries N      Limit number of entries included
-  --json               Emit structured JSON instead of Markdown
-  -o, --output FILE    Write output to file instead of stdout
-
 # Batch convert multiple URLs
 web2md batch <FILE> [FLAGS]
   --timeout SECONDS    Request timeout (default: 30)
@@ -227,14 +209,6 @@ web2md diff <URL_A> <URL_B> [FLAGS]
   --timeout SECONDS          Request timeout
   --cookie NAME=VAL          Send cookie (repeatable)
   --header "Name: Val"       Send custom header (repeatable)
-
-# Extract a YouTube video transcript as Markdown (no video download)
-web2md transcript <URL> [FLAGS]
-  --lang CODE                Preferred caption language code (e.g. en, fr, de)
-  --timeout SECONDS          Request timeout
-  --cookie NAME=VAL          Send cookie (repeatable)
-  --header "Name: Val"       Send custom header (repeatable)
-  --ignore-robots            Ignore robots.txt
 
 # Poll a URL on an interval and emit whenever the content fingerprint (simhash) changes
 web2md watch <URL> [FLAGS]
@@ -449,18 +423,6 @@ When `--cache-dir <dir>` is set alongside `--cache-ttl`, fetched pages persist a
 
 `--rate <req/s>` enforces an independent token-bucket per host. The heavier of the global `--delay` (or robots.txt `Crawl-delay`) and the per-host clock applies on every request. Per-host clocks are keyed by host name only, so two different hosts queried in parallel will not block each other.
 
-## YouTube Transcript Extraction
-
-`transcript <URL>`:
-
-1. Detect `youtube.com/watch?v=…`, `youtube.com/shorts/…`, `youtu.be/…`, or `youtube.com/embed/…`.
-2. Fetch the watch page; locate `captionTracks` JSON in the inline JS payload.
-3. Pick the first track (or the one matching `--lang`).
-4. Fetch the caption file (timed text XML); parse `<text start dur>` cues.
-5. Emit Markdown with `HH:MM:SS` timestamps per cue.
-
-No video or audio is downloaded. Cost is purely two HTTP requests.
-
 ## Brand/Design Profile (`--format branding`)
 
 `extract_branding` walks inline `<style>` blocks (no external stylesheet fetches) and emits a JSON profile:
@@ -579,19 +541,6 @@ No LLM, fully deterministic (≈ Firecrawl `/map` endpoint, free).
 7. `--fetch` additionally fetches each result URL and converts it to Markdown, emitting `{index, title, url, snippet, markdown}` JSON or `---\n## N. [Title](URL)\n\n<markdown>` sections.
 
 No API key, no subscription, fully local HTTP (≈ Firecrawl `/search`, free).
-
-## Library Docs (`docs` subcommand)
-
-`docs <NAME> [--registry crates|docsrs|npm|pypi]` fetches README and metadata from any package registry — no API key, no curated index:
-
-1. **crates.io** (`--registry crates`, default): Fetches `https://crates.io/api/v1/crates/<name>` JSON for metadata (version, description, repository, license), then fetches README from `https://docs.rs/crate/<name>/latest/source/README.md`.
-2. **docs.rs** (`--registry docsrs`): Fetches README directly from `https://docs.rs/crate/<name>/latest/source/README.md`.
-3. **npm** (`--registry npm`): Fetches `https://registry.npmjs.org/<name>` JSON — extracts `dist-tags.latest` version, `readme` field (HTML converted to Markdown), description, repository, homepage, license.
-4. **PyPI** (`--registry pypi`): Fetches `https://pypi.org/pypi/<name>/json` — extracts version, summary, `info.description` (HTML or Markdown based on `description_content_type`), project URLs, license.
-
-Output is Markdown with metadata header + README body, or `--json` for structured `{registry, name, version, description, repository, homepage, documentation, license, readme}`.
-
-No API key, no subscription (≈ poor-person's Context7, free).
 
 ## Page Diffing (`diff` subcommand)
 

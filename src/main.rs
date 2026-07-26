@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use url::Url;
 use web2md::{
-    content_fingerprint, extract_event, extract_faq, extract_feed_links, extract_job,
-    extract_page_metadata, extract_recipe, extract_summary, extract_topic, feed_to_markdown,
-    language_matches, normalize_crawl_url, parse_feed, parse_sitemap_urls,
-    truncate_by_tokens, truncate_with_marker, Browser, BrowserOptions, ConvertOptions,
-    DocResult, McpRequest, McpServer, PageMetadata, PageToMarkdown,
+    content_fingerprint, extract_event, extract_faq, extract_job, extract_page_metadata,
+    extract_recipe, extract_summary, extract_topic, language_matches, normalize_crawl_url,
+    parse_sitemap_urls, truncate_by_tokens, truncate_with_marker, Browser, BrowserOptions,
+    ConvertOptions, DocResult, McpRequest, McpServer, PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -134,12 +133,6 @@ enum Commands {
         /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
         #[arg(long)]
         exclude_selector: Vec<String>,
-        /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
-        #[arg(long)]
-        javascript: bool,
-        /// Post-load wait in milliseconds before processing (also caps timer callback delay)
-        #[arg(long)]
-        wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
@@ -266,12 +259,6 @@ enum Commands {
         /// Extract only main content from <article>, <main>, or [role=main] elements
         #[arg(long)]
         main_content: bool,
-        /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
-        #[arg(long)]
-        javascript: bool,
-        /// Post-load wait in milliseconds before processing (also caps timer callback delay)
-        #[arg(long)]
-        wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
@@ -309,26 +296,6 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
-    /// Extract a YouTube video transcript as Markdown (no video download)
-    Transcript {
-        /// YouTube watch or share URL
-        url: String,
-        /// Request timeout in seconds
-        #[arg(short, long)]
-        timeout: Option<u64>,
-        /// Preferred caption language code (e.g. en, fr, de)
-        #[arg(long)]
-        lang: Option<String>,
-        /// Cookie to send with the request (format: name=value); can be given multiple times
-        #[arg(short, long)]
-        cookie: Vec<String>,
-        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
-        #[arg(short = 'H', long)]
-        header: Vec<String>,
-        /// Ignore robots.txt for this fetch
-        #[arg(long)]
-        ignore_robots: bool,
-    },
     /// Poll a URL on an interval and emit whenever the content fingerprint (simhash) changes
     Watch {
         /// Target URL
@@ -352,7 +319,7 @@ enum Commands {
         #[arg(long)]
         ignore_robots: bool,
     },
-    /// Discover URLs from a website's sitemap.xml and RSS/Atom feeds
+    /// Discover URLs from a website's sitemap.xml
     Sitemap {
         /// Target URL (sitemap.xml will be fetched from the same origin)
         url: String,
@@ -365,9 +332,6 @@ enum Commands {
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
-        /// Also check the HTML page for RSS/Atom feed links
-        #[arg(long)]
-        feeds: bool,
     },
     /// Discover all URLs on a page by extracting <a href> links (≈ Firecrawl /map)
     Map {
@@ -428,35 +392,15 @@ enum Commands {
         /// Output as JSON instead of Markdown
         #[arg(long)]
         json: bool,
+        /// Render Markdown with ANSI colors and formatting in the terminal
+        #[arg(long)]
+        render: bool,
         /// Cookie to send with the request (format: name=value); can be given multiple times
         #[arg(short, long)]
         cookie: Vec<String>,
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
-    },
-    /// Fetch an RSS, Atom, or JSON Feed and convert entries to Markdown
-    Feed {
-        /// Feed URL (RSS 2.0, Atom, or JSON Feed)
-        url: String,
-        /// Request timeout in seconds
-        #[arg(short, long)]
-        timeout: Option<u64>,
-        /// Cookie to send with the request (format: name=value); can be given multiple times
-        #[arg(short, long)]
-        cookie: Vec<String>,
-        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
-        #[arg(short = 'H', long)]
-        header: Vec<String>,
-        /// Maximum number of entries to include (default: all)
-        #[arg(long)]
-        max_entries: Option<usize>,
-        /// Emit structured JSON instead of Markdown
-        #[arg(long)]
-        json: bool,
-        /// Output file path (default: stdout)
-        #[arg(short, long)]
-        output: Option<String>,
     },
     /// Batch convert multiple URLs to Markdown from a file
     Batch {
@@ -495,12 +439,6 @@ enum Commands {
         /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
         #[arg(long)]
         exclude_selector: Vec<String>,
-        /// Execute inline <script> blocks via the built-in JS interpreter and fold document.write output into the page
-        #[arg(long)]
-        javascript: bool,
-        /// Post-load wait in milliseconds before processing (also caps timer callback delay)
-        #[arg(long)]
-        wait: Option<u64>,
         /// Disable URL blacklist filtering for ads/tracking pixels
         #[arg(long)]
         no_blacklist: bool,
@@ -693,11 +631,9 @@ fn filter_by_include_selectors(html: &str, selectors: &[String]) -> String {
 fn build_browser_options(
     timeout: Option<u64>,
     delay: Option<u64>,
-    wait: Option<u64>,
     cache_ttl: Option<u64>,
     cookies: Vec<String>,
     headers: Vec<String>,
-    javascript: bool,
     no_blacklist: bool,
     no_user_blacklist: bool,
     blacklist_file: Vec<String>,
@@ -710,15 +646,11 @@ fn build_browser_options(
     if let Some(ms) = delay {
         options.request_delay = Duration::from_millis(ms);
     }
-    if let Some(ms) = wait {
-        options.post_load_wait = Duration::from_millis(ms);
-    }
     if let Some(secs) = cache_ttl {
         options.cache_ttl = Duration::from_secs(secs);
     }
     options.cookies = cookies;
     options.headers = headers;
-    options.enable_javascript = javascript;
     apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
     options.respect_robots_txt = !ignore_robots;
     options
@@ -760,8 +692,6 @@ async fn main() -> Result<()> {
             output: output_file,
             frontmatter,
             exclude_selector,
-            javascript,
-            wait,
             no_blacklist,
             depth,
             ignore_robots,
@@ -786,11 +716,9 @@ async fn main() -> Result<()> {
             let options = build_browser_options(
                 timeout,
                 delay,
-                wait,
                 cache_ttl,
                 cookie,
                 header,
-                javascript,
                 no_blacklist,
                 no_user_blacklist,
                 blacklist_file,
@@ -833,7 +761,7 @@ async fn main() -> Result<()> {
             } else {
                 let html = if headless {
                     let opts = web2md::HeadlessOptions {
-                        wait_ms: wait.unwrap_or(0),
+                        wait_ms: 0,
                         chrome_path: chrome_path.clone(),
                     };
                     web2md::render_url(&url, opts).await?
@@ -1067,8 +995,6 @@ async fn main() -> Result<()> {
             keep_header,
             cache_ttl,
             main_content,
-            javascript,
-            wait,
             no_blacklist,
             ignore_robots,
             blacklist_file,
@@ -1077,11 +1003,9 @@ async fn main() -> Result<()> {
             let options = build_browser_options(
                 timeout,
                 delay,
-                wait,
                 cache_ttl,
                 cookie,
                 header,
-                javascript,
                 no_blacklist,
                 no_user_blacklist,
                 blacklist_file,
@@ -1139,45 +1063,6 @@ async fn main() -> Result<()> {
                 eprintln!("+{} -{}\n", added, removed);
                 println!("{}", diff);
             }
-        }
-        Some(Commands::Transcript {
-            url,
-            timeout,
-            lang,
-            cookie,
-            header,
-            ignore_robots,
-        }) => {
-            use web2md::{
-                extract_caption_track_url, is_youtube_url, parse_timed_text,
-                render_transcript_markdown,
-            };
-            if !is_youtube_url(&url) {
-                anyhow::bail!(
-                    "{} is not a recognized YouTube URL (expected youtube.com/watch or youtu.be)",
-                    url
-                );
-            }
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
-            options.respect_robots_txt = !ignore_robots;
-            let browser = Browser::new(options)?;
-            let watch_html = browser.fetch(&url).await?;
-            let track_url = match extract_caption_track_url(&watch_html, lang.as_deref()) {
-                Some(u) => u,
-                None => anyhow::bail!(
-                    "no caption track found in watch HTML for {} (page may not have captions)",
-                    url
-                ),
-            };
-            let caption_xml = browser.fetch_ignore_robots(&track_url).await?;
-            let cues = parse_timed_text(&caption_xml)?;
-            let md = render_transcript_markdown(&cues);
-            print!("{}", md);
         }
         Some(Commands::Watch {
             url,
@@ -1302,7 +1187,6 @@ async fn main() -> Result<()> {
             timeout,
             cookie,
             header,
-            feeds,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -1315,9 +1199,6 @@ async fn main() -> Result<()> {
             let parsed = Url::parse(&url).context("Invalid URL")?;
             let sitemap_url = format!("{}://{}/sitemap.xml", parsed.scheme(), parsed.host_str().unwrap_or(""));
 
-            let mut found_urls: Vec<String> = Vec::new();
-
-            // Try fetching sitemap.xml
             match browser.fetch(&sitemap_url).await {
                 Ok(xml) => {
                     let sitemap_urls: Vec<String> = parse_sitemap_urls(&xml)
@@ -1329,35 +1210,11 @@ async fn main() -> Result<()> {
                         for u in &sitemap_urls {
                             println!("{}", u);
                         }
-                        found_urls.extend(sitemap_urls);
                     }
                 }
                 Err(e) => {
                     eprintln!("No sitemap.xml found: {}", e);
                 }
-            }
-
-            // Optionally check the HTML page for feed links
-            if feeds {
-                match browser.fetch(&url).await {
-                    Ok(html) => {
-                        let feed_urls = extract_feed_links(&html);
-                        if !feed_urls.is_empty() {
-                            println!("\n# Feed links from {}\n", url);
-                            for f in &feed_urls {
-                                println!("{}", f);
-                            }
-                            found_urls.extend(feed_urls);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Could not fetch page for feed discovery: {}", e);
-                    }
-                }
-            }
-
-            if found_urls.is_empty() {
-                eprintln!("No sitemap or feed URLs found.");
             }
         }
         Some(Commands::Map {
@@ -1459,6 +1316,7 @@ async fn main() -> Result<()> {
             registry,
             timeout,
             json,
+            render,
             cookie,
             header,
         }) => {
@@ -1533,76 +1391,11 @@ async fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             } else {
                 let md = web2md::doc_result_to_markdown(&result);
-                println!("{}", md);
-            }
-        }
-        Some(Commands::Feed {
-            url,
-            timeout,
-            cookie,
-            header,
-            max_entries,
-            json,
-            output: output_file,
-        }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
-            let browser = Browser::new(options)?;
-
-            let xml = browser.fetch(&url).await.context("Failed to fetch feed")?;
-            let mut feed = parse_feed(&xml).context("URL did not contain a valid RSS, Atom, or JSON Feed")?;
-            if let Some(max) = max_entries {
-                feed.entries.truncate(max);
-            }
-
-            let result = if json {
-                #[derive(Serialize)]
-                struct FeedJsonEntry {
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    title: Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    link: Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    published: Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    summary: Option<String>,
+                if render {
+                    println!("{}", render_markdown_ansi(&md, false).0);
+                } else {
+                    println!("{}", md);
                 }
-                #[derive(Serialize)]
-                struct FeedJson {
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    title: Option<String>,
-                    #[serde(skip_serializing_if = "Option::is_none")]
-                    link: Option<String>,
-                    entries: Vec<FeedJsonEntry>,
-                }
-                let output = FeedJson {
-                    title: feed.title,
-                    link: feed.link,
-                    entries: feed
-                        .entries
-                        .into_iter()
-                        .map(|e| FeedJsonEntry {
-                            title: e.title,
-                            link: e.link,
-                            published: e.published,
-                            summary: e.summary,
-                        })
-                        .collect(),
-                };
-                serde_json::to_string_pretty(&output)?
-            } else {
-                feed_to_markdown(&feed)
-            };
-
-            if let Some(path) = output_file {
-                std::fs::write(&path, &result)
-                    .with_context(|| format!("Failed to write output to {}", path))?;
-            } else {
-                println!("{}", result);
             }
         }
         Some(Commands::Batch {
@@ -1618,8 +1411,6 @@ async fn main() -> Result<()> {
             output: output_dir,
             frontmatter,
             exclude_selector,
-            javascript,
-            wait,
             no_blacklist,
             ignore_robots,
             blacklist_file,
@@ -1644,11 +1435,9 @@ async fn main() -> Result<()> {
             let options = build_browser_options(
                 timeout,
                 delay,
-                wait,
                 cache_ttl,
                 cookie,
                 header,
-                javascript,
                 no_blacklist,
                 no_user_blacklist,
                 blacklist_file,

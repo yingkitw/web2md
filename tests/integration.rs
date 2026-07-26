@@ -2,12 +2,11 @@ use std::time::Duration;
 use url::Url;
 use web2md::{
     apply_readability, build_index, corpus_results_to_markdown, extract_event, extract_faq,
-    extract_feed_links, extract_job, extract_metadata, extract_page_metadata, extract_recipe,
-    extract_summary, extract_topic, feed_to_markdown, index_path_for, is_readerable,
-    normalize_crawl_url, parse_feed, parse_sitemap_urls, query_index, same_origin_links,
-    truncate_by_tokens, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
-    doc_result_to_markdown, parse_crates_io, parse_npm, parse_pypi, registry_url,
-    DocResult, Registry,
+    extract_job, extract_metadata, extract_page_metadata, extract_recipe, extract_summary,
+    extract_topic, index_path_for, is_readerable, normalize_crawl_url, parse_sitemap_urls,
+    query_index, same_origin_links, truncate_by_tokens, Browser, BrowserOptions, DocResult,
+    McpRequest, McpServer, PageToMarkdown, Registry, doc_result_to_markdown, parse_crates_io,
+    parse_npm, parse_pypi, registry_url,
 };
 
 #[tokio::test]
@@ -458,255 +457,13 @@ async fn sitemap_discovery_fetches_and_parses() {
     mock.assert_async().await;
 }
 
-#[tokio::test]
-async fn feed_discovery_from_html_page() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/blog")
-        .with_status(200)
-        .with_header("content-type", "text/html")
-        .with_body(r#"<html><head>
-            <link rel="alternate" type="application/rss+xml" href="/blog/rss.xml">
-            <link rel="alternate" type="application/atom+xml" href="/blog/atom.xml">
-            <link rel="alternate" type="application/feed+json" href="/blog/feed.json">
-        </head><body><h1>Blog</h1></body></html>"#)
-        .create_async()
-        .await;
 
-    let browser = Browser::new(BrowserOptions::default()).unwrap();
-    let html = browser.fetch(&format!("{}/blog", server.url())).await.unwrap();
-    let feeds = extract_feed_links(&html);
 
-    assert_eq!(feeds.len(), 3);
-    assert!(feeds.contains(&"/blog/rss.xml".to_string()));
-    assert!(feeds.contains(&"/blog/atom.xml".to_string()));
-    assert!(feeds.contains(&"/blog/feed.json".to_string()));
-    mock.assert_async().await;
-}
 
-#[tokio::test]
-async fn feed_command_parses_rss_to_markdown() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/rss.xml")
-        .with_status(200)
-        .with_header("content-type", "application/rss+xml")
-        .with_body(r#"<?xml version="1.0"?>
-<rss version="2.0"><channel>
-  <title>Test Feed</title>
-  <link>https://example.com</link>
-  <item>
-    <title>Hello RSS</title>
-    <link>https://example.com/hello</link>
-    <pubDate>Sat, 11 Jul 2026 12:00:00 GMT</pubDate>
-    <description>A short summary</description>
-  </item>
-</channel></rss>"#)
-        .create_async()
-        .await;
 
-    let browser = Browser::new(BrowserOptions::default()).unwrap();
-    let xml = browser.fetch(&format!("{}/rss.xml", server.url())).await.unwrap();
-    let feed = parse_feed(&xml).expect("should parse RSS");
-    let md = feed_to_markdown(&feed);
 
-    assert_eq!(feed.title.as_deref(), Some("Test Feed"));
-    assert_eq!(feed.entries.len(), 1);
-    assert!(md.contains("# Test Feed"));
-    assert!(md.contains("## [Hello RSS](https://example.com/hello)"));
-    assert!(md.contains("A short summary"));
-    mock.assert_async().await;
-}
 
-#[tokio::test]
-async fn feed_command_parses_atom() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/atom.xml")
-        .with_status(200)
-        .with_header("content-type", "application/atom+xml")
-        .with_body(r#"<?xml version="1.0"?>
-<feed xmlns="http://www.w3.org/2005/Atom">
-  <title>Atom Test</title>
-  <link href="https://example.com/" rel="alternate"/>
-  <entry>
-    <title>Atom Entry</title>
-    <link href="https://example.com/atom-entry"/>
-    <updated>2026-07-11T10:00:00Z</updated>
-    <summary>Atom summary text</summary>
-  </entry>
-</feed>"#)
-        .create_async()
-        .await;
 
-    let browser = Browser::new(BrowserOptions::default()).unwrap();
-    let xml = browser.fetch(&format!("{}/atom.xml", server.url())).await.unwrap();
-    let feed = parse_feed(&xml).expect("should parse Atom");
-
-    assert_eq!(feed.title.as_deref(), Some("Atom Test"));
-    assert_eq!(feed.link.as_deref(), Some("https://example.com/"));
-    assert_eq!(feed.entries[0].title.as_deref(), Some("Atom Entry"));
-    assert_eq!(
-        feed.entries[0].link.as_deref(),
-        Some("https://example.com/atom-entry")
-    );
-    mock.assert_async().await;
-}
-
-#[tokio::test]
-async fn feed_command_parses_json_feed() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/feed.json")
-        .with_status(200)
-        .with_header("content-type", "application/feed+json")
-        .with_body(r#"{
-            "version": "https://jsonfeed.org/version/1.1",
-            "title": "JSON Feed Test",
-            "home_page_url": "https://example.com/",
-            "items": [
-                {
-                    "id": "1",
-                    "url": "https://example.com/post",
-                    "title": "Hello JSON Feed",
-                    "content_text": "Body from JSON Feed",
-                    "date_published": "2026-07-11T12:00:00Z"
-                }
-            ]
-        }"#)
-        .create_async()
-        .await;
-
-    let browser = Browser::new(BrowserOptions::default()).unwrap();
-    let body = browser.fetch(&format!("{}/feed.json", server.url())).await.unwrap();
-    let feed = parse_feed(&body).expect("should parse JSON Feed");
-    let md = feed_to_markdown(&feed);
-
-    assert_eq!(feed.title.as_deref(), Some("JSON Feed Test"));
-    assert_eq!(feed.entries.len(), 1);
-    assert!(md.contains("# JSON Feed Test"));
-    assert!(md.contains("## [Hello JSON Feed](https://example.com/post)"));
-    assert!(md.contains("Body from JSON Feed"));
-    mock.assert_async().await;
-}
-
-#[tokio::test]
-async fn js_disabled_ignores_document_write() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/page")
-        .with_status(200)
-        .with_header("content-type", "text/html")
-        .with_body(
-            "<html><body><p>Static</p>\
-             <script>document.write(\"<p>Dynamic</p>\");</script>\
-             </body></html>",
-        )
-        .create_async()
-        .await;
-
-    let browser = Browser::new(BrowserOptions::default()).unwrap();
-    let url = format!("{}/page", server.url());
-    let html = browser.fetch(&url).await.unwrap();
-    let html = browser.run_inline_scripts(&html);
-    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
-
-    assert!(md.contains("Static"));
-    assert!(!md.contains("Dynamic"));
-    mock.assert_async().await;
-}
-
-#[tokio::test]
-async fn js_enabled_captures_document_write() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/page")
-        .with_status(200)
-        .with_header("content-type", "text/html")
-        .with_body(
-            "<html><body><p>Static</p>\
-             <script>var items=[\"a\",\"b\"]; for (var i of items){document.write(\"<p>\"+i+\"</p>\");}</script>\
-             <script type=\"application/ld+json\">{\"x\":1}</script>\
-             <script src=\"external.js\"></script>\
-             </body></html>",
-        )
-        .create_async()
-        .await;
-
-    let mut opts = BrowserOptions::default();
-    opts.enable_javascript = true;
-    let browser = Browser::new(opts).unwrap();
-    let url = format!("{}/page", server.url());
-    let html = browser.fetch(&url).await.unwrap();
-    let html = browser.run_inline_scripts(&html);
-
-    // Captured HTML is injected before </body>.
-    assert!(html.contains("<p>a</p>"));
-    assert!(html.contains("<p>b</p>"));
-    assert!(html.contains("Static"));
-
-    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
-    assert!(md.contains("Static"));
-    assert!(md.contains("a"));
-    assert!(md.contains("b"));
-    mock.assert_async().await;
-}
-
-#[tokio::test]
-async fn settimeout_captures_delayed_content_with_wait() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/page")
-        .with_status(200)
-        .with_header("content-type", "text/html")
-        .with_body(
-            "<html><body><p>Static</p>\
-             <script>setTimeout(function(){document.write(\"<p>Delayed</p>\");}, 50);</script>\
-             </body></html>",
-        )
-        .create_async()
-        .await;
-
-    let mut opts = BrowserOptions::default();
-    opts.enable_javascript = true;
-    opts.post_load_wait = Duration::from_millis(100);
-    let browser = Browser::new(opts).unwrap();
-    let url = format!("{}/page", server.url());
-    let html = browser.fetch(&url).await.unwrap();
-    let html = browser.prepare_html(&html, &url).await.unwrap();
-
-    assert!(html.contains("Delayed"));
-    let md = PageToMarkdown::convert(&html, false, false, false, &[]).unwrap();
-    assert!(md.contains("Delayed"));
-    mock.assert_async().await;
-}
-
-#[tokio::test]
-async fn setinterval_captures_repeated_content_with_wait() {
-    let mut server = mockito::Server::new_async().await;
-    let mock = server
-        .mock("GET", "/page")
-        .with_status(200)
-        .with_header("content-type", "text/html")
-        .with_body(
-            "<html><body>\
-             <script>setInterval(function(){document.write(\"x\");}, 40);</script>\
-             </body></html>",
-        )
-        .create_async()
-        .await;
-
-    let mut opts = BrowserOptions::default();
-    opts.enable_javascript = true;
-    opts.post_load_wait = Duration::from_millis(120);
-    let browser = Browser::new(opts).unwrap();
-    let url = format!("{}/page", server.url());
-    let html = browser.fetch(&url).await.unwrap();
-    let html = browser.prepare_html(&html, &url).await.unwrap();
-
-    assert!(html.contains("xxx"));
-    mock.assert_async().await;
-}
 
 #[tokio::test]
 async fn blacklisted_iframe_not_inlined_in_pipeline() {
@@ -1067,16 +824,6 @@ fn diff_markdown_reports_changes() {
     );
     let (added, removed) = web2md::summarize(&diff);
     assert_eq!(added + removed, 2);
-}
-
-#[test]
-fn youtube_extracts_video_id_from_common_urls() {
-    assert_eq!(
-        web2md::extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
-        Some("dQw4w9WgXcQ".to_string())
-    );
-    assert!(web2md::is_youtube_url("https://youtu.be/dQw4w9WgXcQ"));
-    assert!(!web2md::is_youtube_url("https://example.com/"));
 }
 
 #[test]

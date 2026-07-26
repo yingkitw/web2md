@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use url::Url;
 
-use crate::html_meta::extract_attr;
 use crate::url_blacklist::BlacklistPatterns;
 use crate::{DEFAULT_TIMEOUT, DEFAULT_USER_AGENT};
 use crate::robots::{is_robots_txt_url, robots_origin, RobotsTxt};
@@ -34,36 +33,6 @@ pub fn parse_sitemap_urls(xml: &str) -> Vec<String> {
     urls
 }
 
-/// Extract feed URLs (RSS/Atom/JSON Feed) from HTML <link> tags.
-/// Looks for <link rel="alternate" type="application/rss+xml" href="...">,
-/// <link rel="alternate" type="application/atom+xml" href="...">,
-/// and <link rel="alternate" type="application/feed+json" href="...">.
-pub fn extract_feed_links(html: &str) -> Vec<String> {
-    let mut feeds = Vec::new();
-    let mut pos = 0;
-    while pos < html.len() {
-        if let Some(start) = html[pos..].find("<link") {
-            let start = pos + start;
-            if let Some(end) = html[start..].find('>') {
-                let tag = &html[start..=start + end];
-                if (tag.contains("application/rss+xml")
-                    || tag.contains("application/atom+xml")
-                    || tag.contains("application/feed+json"))
-                    && tag.contains("alternate")
-                    && let Some(href) = extract_attr(tag, "href") {
-                        feeds.push(href);
-                    }
-                pos = start + end + 1;
-            } else {
-                break;
-            }
-        } else {
-            break;
-        }
-    }
-    feeds
-}
-
 /// Configuration for the HTTP client
 #[derive(Debug, Clone)]
 pub struct BrowserOptions {
@@ -71,9 +40,6 @@ pub struct BrowserOptions {
     pub timeout: Duration,
     /// User-Agent string
     pub user_agent: String,
-    /// Execute inline `<script>` blocks via the built-in JS interpreter,
-    /// capturing `document.write` output into the page.
-    pub enable_javascript: bool,
     /// Initial cookies to send with every request (format: "name=value")
     pub cookies: Vec<String>,
     /// Custom HTTP headers to send with every request (format: "Name: Value")
@@ -98,8 +64,6 @@ pub struct BrowserOptions {
     pub load_user_blacklist: bool,
     /// Additional blacklist pattern files (one pattern per line)
     pub extra_blacklist_files: Vec<String>,
-    /// Post-load wait after fetch (milliseconds) for JS-heavy pages; also caps setTimeout flush
-    pub post_load_wait: Duration,
     /// Optional HTTP/SOCKS proxy URL (e.g. "http://proxy:8080", "socks5://proxy:1080")
     pub proxy: Option<String>,
     /// Optional basic auth credentials (format: "user:password")
@@ -111,7 +75,6 @@ impl Default for BrowserOptions {
         Self {
             timeout: DEFAULT_TIMEOUT,
             user_agent: DEFAULT_USER_AGENT.to_string(),
-            enable_javascript: false,
             cookies: Vec::new(),
             headers: Vec::new(),
             request_delay: Duration::from_millis(0),
@@ -122,7 +85,6 @@ impl Default for BrowserOptions {
             respect_robots_txt: true,
             load_user_blacklist: true,
             extra_blacklist_files: Vec::new(),
-            post_load_wait: Duration::from_millis(0),
             proxy: None,
             basic_auth: None,
         }
@@ -477,38 +439,9 @@ impl Browser {
         &self.options
     }
 
-    /// Execute inline `<script>` blocks and inject any HTML captured via
-    /// `document.write` back into the page, when `enable_javascript` is set.
-    ///
-    /// Scripts are evaluated with the built-in dependency-free JS subset
-    /// interpreter (`crate::js`); external scripts, modules, and unsupported
-    /// features are silently skipped. When JavaScript is disabled the input is
-    /// returned unchanged. Call this after [`inline_iframes`](Self::inline_iframes)
-    /// and before Markdown conversion.
-    pub fn run_inline_scripts(&self, html: &str) -> String {
-        if !self.options.enable_javascript {
-            return html.to_string();
-        }
-        let wait_ms = self.options.post_load_wait.as_millis() as u64;
-        let captured = crate::js::run_inline_scripts(html, wait_ms);
-        if captured.is_empty() {
-            return html.to_string();
-        }
-        crate::js::inject_before_body_close(html, &captured)
-    }
-
-    /// Sleep for [`BrowserOptions::post_load_wait`] after a page fetch.
-    pub async fn post_load_wait(&self) {
-        if !self.options.post_load_wait.is_zero() {
-            tokio::time::sleep(self.options.post_load_wait).await;
-        }
-    }
-
-    /// Apply post-load wait, inline iframes, and run inline scripts.
+    /// Inline `<iframe>` content into the fetched HTML before conversion.
     pub async fn prepare_html(&self, html: &str, url: &str) -> Result<String> {
-        self.post_load_wait().await;
-        let html = self.inline_iframes(html, url).await?;
-        Ok(self.run_inline_scripts(&html))
+        self.inline_iframes(html, url).await
     }
 }
 
