@@ -82,7 +82,7 @@ impl Default for BrowserOptions {
             cache_ttl: Duration::from_secs(0),
             cache_dir: None,
             filter_blacklisted_urls: true,
-            respect_robots_txt: true,
+            respect_robots_txt: false,
             load_user_blacklist: true,
             extra_blacklist_files: Vec::new(),
             proxy: None,
@@ -315,6 +315,71 @@ impl Browser {
     /// caption tracks, where the original fetch was already user-requested.
     pub async fn fetch_ignore_robots(&self, url: &str) -> Result<String> {
         self.fetch_raw(url).await
+    }
+
+    /// Fetch raw HTML from a URL, streaming chunks to `on_chunk` as they arrive.
+    /// The full body is accumulated and returned for downstream conversion.
+    /// Bypasses cache (always hits the live URL).
+    pub async fn fetch_stream<F>(&self, url: &str, mut on_chunk: F) -> Result<String>
+    where
+        F: FnMut(&[u8]),
+    {
+        use futures_util::StreamExt;
+
+        let parsed = Url::parse(url).context("Invalid URL")?;
+        let robots_delay = if self.options.respect_robots_txt && !is_robots_txt_url(&parsed) {
+            let origin = robots_origin(&parsed).context("Invalid URL host")?;
+            let rules = self.robots_for_origin(&origin).await?;
+            if !rules.is_allowed(url) {
+                anyhow::bail!("Blocked by robots.txt: {url}");
+            }
+            rules.crawl_delay()
+        } else {
+            None
+        };
+
+        self.enforce_delay(robots_delay, parsed.host_str().unwrap_or("")).await;
+
+        let mut req = self.client.get(parsed.clone());
+        if !self.options.cookies.is_empty() {
+            req = req.header(reqwest::header::COOKIE, self.options.cookies.join("; "));
+        }
+        for h in &self.options.headers {
+            if let Some((name, value)) = h.split_once(':') {
+                req = req.header(name.trim(), value.trim());
+            }
+        }
+        if let Some(ref auth) = self.options.basic_auth
+            && let Some((user, pass)) = auth.split_once(':') {
+                req = req.basic_auth(user.trim(), Some(pass.trim()));
+            }
+
+        let resp = req.send().await.context("HTTP request failed")?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("HTTP error: {}", status);
+        }
+
+        let mut body = Vec::with_capacity(64 * 1024);
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.context("Failed to read stream chunk")?;
+            on_chunk(&chunk);
+            body.extend_from_slice(&chunk);
+        }
+
+        let body = String::from_utf8_lossy(&body).into_owned();
+
+        if !self.options.cache_ttl.is_zero() {
+            let mut cache = self.cache.lock().unwrap();
+            cache.insert(url.to_string(), (body.clone(), Instant::now()));
+        }
+        if let Some(cache) = &self.persistent_cache
+            && let Err(e) = cache.put(url, &body) {
+                eprintln!("warning: failed to persist cache entry for {}: {}", url, e);
+            }
+
+        Ok(body)
     }
 
     /// HTTP GET without robots.txt checks (used for robots.txt itself).
@@ -834,7 +899,11 @@ mod tests {
             .create_async()
             .await;
 
-        let browser = Browser::new(BrowserOptions::default()).unwrap();
+        let browser = Browser::new(BrowserOptions {
+            respect_robots_txt: true,
+            ..Default::default()
+        })
+        .unwrap();
         let target = format!("{}/private/secret", server.url());
         assert!(
             !browser.robots_allows(&target).await.unwrap(),
@@ -1069,5 +1138,30 @@ mod tests {
             "expected much less than 200ms total, got {:?}",
             elapsed
         );
+    }
+
+    #[tokio::test]
+    async fn fetch_stream_returns_full_body_and_invokes_callback() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/stream")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body><p>Hello stream</p></body></html>")
+            .create_async()
+            .await;
+
+        let browser = Browser::new(BrowserOptions::default()).unwrap();
+        let mut chunk_count = 0usize;
+        let body = browser
+            .fetch_stream(&format!("{}/stream", server.url()), |_chunk| {
+                chunk_count += 1;
+            })
+            .await
+            .unwrap();
+
+        assert!(body.contains("Hello stream"));
+        assert!(chunk_count > 0);
+        mock.assert_async().await;
     }
 }

@@ -554,6 +554,12 @@ No API key, no subscription, fully local HTTP (≈ Firecrawl `/search`, free).
 
 Emits nothing while the page is unchanged — agents can `tail -f` it as a firehose.
 
+## Streaming Output
+
+By default, `fetch` streams in real time: download progress (byte count) is printed to stderr as chunks arrive, and once the full body is received, Markdown blocks are emitted to stdout incrementally as they are converted from the parsed DOM. This gives immediate feedback that the fetch is in progress and produces visible Markdown output as soon as the first content block is ready.
+
+Streaming is active for plain Markdown output (`--format markdown`, the default). When any of the following flags are set, the normal batch path runs instead: `--format` (non-markdown), `--type`, `--topic`, `--summary`, `--max-tokens`, `--max-length`, `--frontmatter`, `--pii-redact`, `--output`, `--webhook`, `--headless`.
+
 ## Readability Extraction (`--readability`, `--features readability`)
 
 When `--readability` is passed to `fetch` (and the crate is built with `--features readability`), the raw HTML is first scored and cleaned by [`readabilityrs`] — a Rust port of Mozilla's Readability library (the same algorithm behind Firefox Reader View). The article HTML it returns replaces the original body before our usual pipeline runs, so noise, nav, ads, and chrome are stripped deterministically by a battle-tested extractor. Readability's pre-flight check (`is_probably_readerable`) is also exposed via [`is_readerable`] for callers that want to short-circuit obvious non-articles. When Readability declines to score the page (returns `None` or fails to construct), the input HTML is passed through unchanged so the rest of the pipeline still has a chance.

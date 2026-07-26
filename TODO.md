@@ -113,6 +113,7 @@
 - [x] Local BM25 corpus index (`corpus index <dir>` / `corpus query <dir> <q>`) — query a directory of `.md` files offline, ≈ Context7 over any local corpus, no API key
 - [x] Opt-in headless browser backend (`--features headless`, `--headless` flag on `fetch`, `--chrome-path <path>`) — routes requests through a real Chrome / Chromium for SPAs and `/interact` parity with Firecrawl
 - [x] **Lean refactoring**: removed YouTube transcript, feed, JS interpreter modules; made `readability` an optional Cargo feature
+- [x] **Streaming output**: `fetch` streams HTTP chunks (stderr progress) and emits Markdown blocks to stdout incrementally via `convert_progressive_with` (default for plain Markdown)
 
 ## In Progress
 

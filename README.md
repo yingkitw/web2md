@@ -127,6 +127,7 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 ## Features at a glance
 
 - **In-house HTML-to-Markdown** converter via `scraper`/html5ever
+- **Real-time streaming** — download progress on stderr + incremental Markdown blocks to stdout as they are converted
 - **Optional Mozilla Readability.js** article isolation (`--features readability --readability`)
 - **Optional headless Chrome** for SPAs (`--features headless`)
 - **Main-content extraction**, noise stripping, content deduplication

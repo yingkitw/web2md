@@ -27,6 +27,7 @@ main.rs
   │                     ├── --cache-dir <path> → persistent_cache.rs (sha256 → JSON file) → reused on next fetch
   │                     ├── --rate <rps> → Browser::enforce_delay per-host clock
   │                     ├── --webhook <url> → main::post_webhook → POST `{event,url,format,result}`
+  │                     ├── (default) → Browser::fetch_stream (chunked HTTP, stderr progress) → PageToMarkdown::convert_progressive_with → incremental Markdown blocks to stdout
   │                     └── --format xml → extract_page_metadata → plain `<doc>` XML
   ├── peek command   → Browser (--proxy/--auth supported) → extract_page_metadata (no body conversion) → key fields only
   ├── diff command   → Browser ×2 (or cached file) → diff_markdown::diff_markdown → unified-diff output
@@ -149,6 +150,7 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
 | `sha2` | SHA-256 for persistent-cache file names and watch-state identifiers |
 | `regex` | PII redaction, brand/design extraction |
 | `anyhow` | Error handling |
+| `futures-util` | Stream utilities for chunked HTTP response (`--stream`) |
 | `mockito` | HTTP mocking in tests (dev) |
 
 No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates are pulled in. All such capabilities are implemented in-house to keep the default binary small (~5 MB release) and the audit surface manageable. The `readabilityrs` crate is gated behind the `readability` cargo feature so the default build stays lean. The `headless_chrome` crate is gated behind the `headless` cargo feature for the same reason.
@@ -167,7 +169,7 @@ No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates 
 
 ## Test Coverage
 
-- **327 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- **328 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
 - All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
 - New modules in the v4 cycle (`readability`, `corpus`, `headless`) ship with their own unit suites; the readability and corpus modules also have end-to-end integration tests
 - `cargo clippy` passes with **0 warnings** (default features and `--features headless`)

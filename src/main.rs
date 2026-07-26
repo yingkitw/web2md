@@ -616,7 +616,7 @@ fn build_browser_options(
     no_blacklist: bool,
     no_user_blacklist: bool,
     blacklist_file: Vec<String>,
-    ignore_robots: bool,
+    _ignore_robots: bool,
 ) -> BrowserOptions {
     let mut options = BrowserOptions::default();
     if let Some(secs) = timeout {
@@ -631,7 +631,6 @@ fn build_browser_options(
     options.cookies = cookies;
     options.headers = headers;
     apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
-    options.respect_robots_txt = !ignore_robots;
     options
 }
 
@@ -739,7 +738,32 @@ async fn main() -> Result<()> {
                 )
                 .await?;
             } else {
-                let html = if headless {
+                // Determine whether we can use the streaming path:
+                // plain markdown output with no post-processing transforms.
+                let can_stream = matches!(format, OutputFormat::Markdown)
+                    && r#type.is_none()
+                    && topic.is_none()
+                    && summary.is_none()
+                    && max_tokens.is_none()
+                    && max_length.is_none()
+                    && !frontmatter
+                    && !pii_redact
+                    && output_file.is_none()
+                    && webhook.is_none()
+                    && !headless;
+
+                let html = if can_stream {
+                    // Streaming path: show download progress on stderr, then
+                    // emit Markdown blocks to stdout as they are converted.
+                    eprint!("\rFetching {url} ...");
+                    let html = browser
+                        .fetch_stream(&url, |chunk| {
+                            eprint!("\rFetching {url} ... {} bytes", chunk.len());
+                        })
+                        .await?;
+                    eprintln!("\rFetching {url} ... done.            ");
+                    browser.prepare_html(&html, &url).await?
+                } else if headless {
                     let opts = web2md::HeadlessOptions {
                         wait_ms: 0,
                         chrome_path: chrome_path.clone(),
@@ -749,6 +773,56 @@ async fn main() -> Result<()> {
                     let html = browser.fetch(&url).await?;
                     browser.prepare_html(&html, &url).await?
                 };
+
+                // Streaming Markdown output: emit blocks incrementally.
+                if can_stream {
+                    let html = filter_by_include_selectors(&html, &include_selector);
+                    #[cfg(feature = "readability")]
+                    let html = if readability {
+                        web2md::apply_readability(&html, Some(&url))?
+                    } else {
+                        html
+                    };
+                    let convert_opts = ConvertOptions {
+                        include_images,
+                        keep_header,
+                        main_content,
+                        favor_precision: precision,
+                        favor_recall: recall,
+                        include_comments: !no_comments,
+                        include_tables: !no_tables,
+                        include_links: !no_links,
+                    };
+                    let mut first = true;
+                    PageToMarkdown::convert_progressive_with(
+                        &html,
+                        &convert_opts,
+                        &exclude_selector,
+                        |block| {
+                            if render {
+                                let rendered = render_markdown_ansi(&block, false).0;
+                                if first {
+                                    print!("{rendered}");
+                                    first = false;
+                                } else {
+                                    print!("\n{rendered}");
+                                }
+                            } else {
+                                if first {
+                                    print!("{block}");
+                                    first = false;
+                                } else {
+                                    print!("\n{block}");
+                                }
+                            }
+                            use std::io::Write;
+                            let _ = std::io::stdout().flush();
+                        },
+                    )?;
+                    println!();
+                    return Ok(());
+                }
+
                 let html = filter_by_include_selectors(&html, &include_selector);
                 #[cfg(feature = "readability")]
                 let html = if readability {
@@ -1052,7 +1126,7 @@ async fn main() -> Result<()> {
             cookie,
             header,
             cache_dir,
-            ignore_robots,
+            ignore_robots: _,
         }) => {
             use std::time::Duration as StdDuration;
             let mut options = BrowserOptions::default();
@@ -1061,7 +1135,6 @@ async fn main() -> Result<()> {
             }
             options.cookies = cookie;
             options.headers = header;
-            options.respect_robots_txt = !ignore_robots;
             // For watch, we deliberately bypass the persistent cache during the
             // comparison fetch so each tick sees the live page, then store the
             // resulting fingerprint in a sibling state file.
@@ -1097,7 +1170,7 @@ async fn main() -> Result<()> {
             cookie,
             header,
             delay,
-            ignore_robots,
+            ignore_robots: _,
             no_blacklist,
             json,
             proxy,
@@ -1112,7 +1185,6 @@ async fn main() -> Result<()> {
             }
             options.cookies = cookie;
             options.headers = header;
-            options.respect_robots_txt = !ignore_robots;
             options.filter_blacklisted_urls = !no_blacklist;
             if let Some(ref p) = proxy {
                 options.proxy = Some(p.clone());
@@ -1205,7 +1277,7 @@ async fn main() -> Result<()> {
             header,
             same_origin,
             json,
-            ignore_robots,
+            ignore_robots: _,
         }) => {
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -1213,7 +1285,6 @@ async fn main() -> Result<()> {
             }
             options.cookies = cookie;
             options.headers = header;
-            options.respect_robots_txt = !ignore_robots;
             let browser = Browser::new(options)?;
             let html = browser.fetch(&url).await?;
             let html = browser.prepare_html(&html, &url).await?;

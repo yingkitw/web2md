@@ -623,7 +623,11 @@ async fn robots_txt_blocks_disallowed_paths() {
         .create_async()
         .await;
 
-    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let browser = Browser::new(BrowserOptions {
+        respect_robots_txt: true,
+        ..Default::default()
+    })
+    .unwrap();
     let visible = browser
         .fetch(&format!("{}/visible", server.url()))
         .await
@@ -1078,7 +1082,11 @@ async fn fetch_ignore_robots_bypasses_robots_txt() {
         .create_async()
         .await;
 
-    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let browser = Browser::new(BrowserOptions {
+        respect_robots_txt: true,
+        ..Default::default()
+    })
+    .unwrap();
     let url = format!("{}/private", server.url());
 
     let normal = browser.fetch(&url).await;
