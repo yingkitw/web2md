@@ -5,7 +5,6 @@ mod browser;
 mod corpus;
 mod crawl;
 mod diff_markdown;
-mod docs;
 mod extract;
 mod headless;
 mod html_meta;
@@ -14,6 +13,7 @@ mod html_util;
 mod markdown;
 mod mcp;
 mod persistent_cache;
+#[cfg(feature = "readability")]
 mod readability;
 mod redact;
 mod robots;
@@ -26,7 +26,6 @@ pub use branding::{extract_branding, BrandingProfile, ColorStat, HeadingSize};
 pub use browser::{parse_sitemap_urls, Browser, BrowserOptions};
 pub use corpus::{build_index, index_path_for, query_index, results_to_markdown as corpus_results_to_markdown, CorpusHit};
 pub use diff_markdown::{diff_markdown, summarize};
-pub use docs::{doc_result_to_markdown, parse_crates_io, parse_npm, parse_pypi, registry_url, DocResult, Registry};
 pub use persistent_cache::PersistentCache;
 pub use crawl::{normalize_crawl_url, same_origin_links};
 pub use extract::{extract_images, extract_links, extract_product, ImageEntry, LinkEntry, ProductEntry, ProductVariant};
@@ -36,6 +35,7 @@ pub use mcp::{
     content_fingerprint, detect_content_language, extract_metadata, extract_page_metadata,
     language_matches, truncate_with_marker, McpRequest, McpServer, PageMetadata,
 };
+#[cfg(feature = "readability")]
 pub use readability::{apply_readability, is_readerable};
 pub use structured::{
     extract_event, extract_faq, extract_job, extract_recipe, StructuredError,

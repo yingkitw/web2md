@@ -33,10 +33,6 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 
 No dedicated HTML-to-Markdown crate — conversion is implemented in-house with pre/post-processing in `PageToMarkdown`.
 
-## Optional JS Execution
-
-When enabled (`--javascript` / `enable_javascript`), inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or other external engine. A pragmatic JS subset is supported (variables, closures, control flow, template literals, `document.write`, `setTimeout`, `setInterval`, `clearTimeout`, `clearInterval`, `requestAnimationFrame`, strings, arrays, `Math`, `JSON`). Timer callbacks run when their scheduled time ≤ `--wait` (milliseconds). Unsupported features fail fast and are skipped, so a script can never break conversion. External (`src=`) and module scripts are not executed.
-
 ## URL Blacklist
 
 By default (`filter_blacklisted_urls: true`), Web2MD skips known non-content URLs:
@@ -104,7 +100,7 @@ web2md fetch <URL> [FLAGS]
   --type TYPE          Domain extractor: recipe | faq | job | event (LLM-free JSON-LD rendering)
   --topic QUERY        Keep only paragraphs relevant to this query (LLM-free; ≈ Firecrawl `highlights`)
   --summary N          Return top-N sentences by TF-IDF + positional scoring (LLM-free; ≈ Firecrawl `summary`)
-  --readability        Apply Mozilla Readability.js (via readabilityrs) before conversion
+  --readability        Apply Mozilla Readability.js (requires --features readability) before conversion
   --headless           Render the page with a real headless Chrome / Chromium (requires --features headless)
   --chrome-path PATH   Path to a Chrome / Chromium binary (used with --headless)
   --lang CODE          Require page language to match ISO 639-1 or 639-3 (e.g. en, eng)
@@ -126,20 +122,17 @@ web2md fetch <URL> [FLAGS]
   -o, --output FILE    Write output to file instead of stdout
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
-  --javascript          Execute inline <script> blocks via the built-in JS interpreter
-  --wait MS             Post-load wait in milliseconds (also caps setTimeout callback delay)
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
   --depth N             Recursively crawl same-origin links up to N levels (markdown only)
   --ignore-robots       Ignore robots.txt disallow rules and crawl-delay
 
-# Sitemap/feed discovery
+# Sitemap discovery
 web2md sitemap <URL> [FLAGS]
   --timeout SECONDS    Request timeout (default: 30)
   --cookie NAME=VAL    Send cookie (repeatable)
   --header "Name: Val" Send custom header (repeatable)
-  --feeds              Also check HTML page for RSS/Atom/JSON Feed links
 
 # Discover all URLs on a page by extracting <a href> links (≈ Firecrawl /map)
 web2md map <URL> [FLAGS]
@@ -172,8 +165,6 @@ web2md batch <FILE> [FLAGS]
   -o, --output DIR     Write Markdown files to directory (default: stdout)
   --frontmatter         Prepend YAML frontmatter (metadata) to each Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
-  --javascript          Execute inline <script> blocks via the built-in JS interpreter
-  --wait MS             Post-load wait in milliseconds (also caps setTimeout callback delay)
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
@@ -357,8 +348,8 @@ Trafilatura-style plain XML:
 
 1. **Browser.fetch()** → raw HTML
 2. **Browser.inline_iframes()** → replace `<iframe src="...">` with fetched content (blacklisted URLs skipped)
-3. **Browser.post_load_wait()** → sleep `--wait` milliseconds after fetch (optional)
-4. **Browser.run_inline_scripts()** → evaluate inline `<script>` blocks when `--javascript` / `enable_javascript` (optional); flush `setTimeout`, `setInterval`, and `requestAnimationFrame` callbacks up to `--wait`
+3. **apply_readability()** → (optional, `--features readability --readability`) Mozilla Readability.js article isolation
+4. **filter_by_include_selectors()** → (optional, `--include-selector`) keep only matching elements
 5. **PageToMarkdown.convert()** → Markdown
    - Apply `ConvertOptions`: `--precision` / `--recall` adjust main-content score thresholds and boilerplate stripping; `--no-comments` skips forum comment append
    - Detect page type (`article` / `forum` / `product` / `page`) and apply extraction profile: article/product prefer main-content; product prefers keeping images

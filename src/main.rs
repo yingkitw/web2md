@@ -4,7 +4,7 @@ use web2md::{
     content_fingerprint, extract_event, extract_faq, extract_job, extract_page_metadata,
     extract_recipe, extract_summary, extract_topic, language_matches, normalize_crawl_url,
     parse_sitemap_urls, truncate_by_tokens, truncate_with_marker, Browser, BrowserOptions,
-    ConvertOptions, DocResult, McpRequest, McpServer, PageMetadata, PageToMarkdown,
+    ConvertOptions, McpRequest, McpServer, PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -185,8 +185,10 @@ enum Commands {
         #[arg(long)]
         auth: Option<String>,
         /// Apply Mozilla Readability.js (via readabilityrs) before conversion
-        /// to strip chrome and isolate the article body
+        /// to strip chrome and isolate the article body.
+        /// Requires building with --features readability.
         #[arg(long)]
+        #[cfg(feature = "readability")]
         readability: bool,
         /// Render the page with a real headless browser before conversion.
         /// Requires building with `--features headless` and a Chrome/Chromium
@@ -372,29 +374,6 @@ enum Commands {
         /// Fetch and convert each result URL to Markdown (uses --limit to cap fetches)
         #[arg(long)]
         fetch: bool,
-        /// Cookie to send with the request (format: name=value); can be given multiple times
-        #[arg(short, long)]
-        cookie: Vec<String>,
-        /// Custom HTTP header (format: "Name: Value"); can be given multiple times
-        #[arg(short = 'H', long)]
-        header: Vec<String>,
-    },
-    /// Fetch library documentation from any registry (≈ poor-person's Context7, free)
-    Docs {
-        /// Package name (e.g. serde, express, requests)
-        name: String,
-        /// Package registry
-        #[arg(short, long, value_enum, default_value = "crates")]
-        registry: web2md::Registry,
-        /// Request timeout in seconds
-        #[arg(short = 'T', long)]
-        timeout: Option<u64>,
-        /// Output as JSON instead of Markdown
-        #[arg(long)]
-        json: bool,
-        /// Render Markdown with ANSI colors and formatting in the terminal
-        #[arg(long)]
-        render: bool,
         /// Cookie to send with the request (format: name=value); can be given multiple times
         #[arg(short, long)]
         cookie: Vec<String>,
@@ -709,6 +688,7 @@ async fn main() -> Result<()> {
             mobile,
             proxy,
             auth,
+            #[cfg(feature = "readability")]
             readability,
             headless,
             chrome_path,
@@ -770,6 +750,7 @@ async fn main() -> Result<()> {
                     browser.prepare_html(&html, &url).await?
                 };
                 let html = filter_by_include_selectors(&html, &include_selector);
+                #[cfg(feature = "readability")]
                 let html = if readability {
                     web2md::apply_readability(&html, Some(&url))?
                 } else {
@@ -1309,93 +1290,6 @@ async fn main() -> Result<()> {
             } else {
                 let md = web2md::results_to_markdown(&results);
                 println!("{}", md);
-            }
-        }
-        Some(Commands::Docs {
-            name,
-            registry,
-            timeout,
-            json,
-            render,
-            cookie,
-            header,
-        }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
-            let browser = Browser::new(options)?;
-
-            let (url, is_json) = web2md::registry_url(registry, &name);
-            let body = browser.fetch(&url).await.context("Failed to fetch docs")?;
-
-            let mut result = if is_json {
-                match registry {
-                    web2md::Registry::Crates => {
-                        let mut dr = web2md::parse_crates_io(&body, &name)
-                            .map_err(|e| anyhow::anyhow!(e))?;
-                        // For crates.io, also fetch README from docs.rs
-                        let docsrs_url = format!(
-                            "https://docs.rs/crate/{}/latest/source/README.md",
-                            name
-                        );
-                        if let Ok(readme) = browser.fetch(&docsrs_url).await
-                            && !readme.is_empty() && !readme.contains("<!DOCTYPE") {
-                                dr.readme = readme;
-                            }
-                        dr
-                    }
-                    web2md::Registry::Npm => {
-                        web2md::parse_npm(&body, &name).map_err(|e| anyhow::anyhow!(e))?
-                    }
-                    web2md::Registry::Pypi => {
-                        web2md::parse_pypi(&body, &name).map_err(|e| anyhow::anyhow!(e))?
-                    }
-                    web2md::Registry::Docsrs => {
-                        // docs.rs URL is not JSON, but if we got here it's the README text
-                        DocResult {
-                            registry: "docs.rs",
-                            name: name.clone(),
-                            version: None,
-                            description: None,
-                            repository: None,
-                            homepage: None,
-                            documentation: Some(format!("https://docs.rs/{}", name)),
-                            license: None,
-                            readme: body,
-                        }
-                    }
-                }
-            } else {
-                // docs.rs README — raw text
-                DocResult {
-                    registry: "docs.rs",
-                    name: name.clone(),
-                    version: None,
-                    description: None,
-                    repository: None,
-                    homepage: None,
-                    documentation: Some(format!("https://docs.rs/{}", name)),
-                    license: None,
-                    readme: body,
-                }
-            };
-
-            if result.readme.is_empty() {
-                result.readme = "(No README found.)".to_string();
-            }
-
-            if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
-            } else {
-                let md = web2md::doc_result_to_markdown(&result);
-                if render {
-                    println!("{}", render_markdown_ansi(&md, false).0);
-                } else {
-                    println!("{}", md);
-                }
             }
         }
         Some(Commands::Batch {

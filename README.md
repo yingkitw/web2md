@@ -36,9 +36,13 @@ cd web2md
 cargo build --release
 ```
 
-Optional headless Chrome support for JavaScript-heavy SPAs (heavier build, requires Chrome at runtime):
+Optional heavier features (build separately):
 
 ```bash
+# Mozilla Readability.js article isolation
+cargo install web2md --features readability
+
+# Headless Chrome for JavaScript-heavy SPAs (requires Chrome at runtime)
 cargo install web2md --features headless
 ```
 
@@ -51,7 +55,7 @@ web2md fetch https://example.com
 # Terminal browser with numbered links (Lynx-like)
 web2md https://example.com
 
-# Isolate the article body (Firefox Reader View style)
+# Isolate the article body (requires the readability feature)
 web2md fetch https://example.com/article --readability
 
 # JSON output for scripts and agents
@@ -123,7 +127,7 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 ## Features at a glance
 
 - **In-house HTML-to-Markdown** converter via `scraper`/html5ever
-- **Mozilla Readability.js** article isolation (`--readability`)
+- **Optional Mozilla Readability.js** article isolation (`--features readability --readability`)
 - **Optional headless Chrome** for SPAs (`--features headless`)
 - **Main-content extraction**, noise stripping, content deduplication
 - **Query-focused extraction** (`--topic`), extractive summarization (`--summary`), token-budget truncation (`--max-tokens`)

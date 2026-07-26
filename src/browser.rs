@@ -552,8 +552,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.cookies = vec!["session=abc123".to_string(), "auth=xyz".to_string()];
+        let opts = BrowserOptions {
+            cookies: vec!["session=abc123".to_string(), "auth=xyz".to_string()],
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let html = browser
             .fetch(&format!("{}/private", server.url()))
@@ -577,11 +579,13 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.headers = vec![
-            "X-API-Key: secret123".to_string(),
-            "Authorization: Bearer token".to_string(),
-        ];
+        let opts = BrowserOptions {
+            headers: vec![
+                "X-API-Key: secret123".to_string(),
+                "Authorization: Bearer token".to_string(),
+            ],
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let html = browser
             .fetch(&format!("{}/api", server.url()))
@@ -604,8 +608,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.basic_auth = Some("user:pass".to_string());
+        let opts = BrowserOptions {
+            basic_auth: Some("user:pass".to_string()),
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let html = browser
             .fetch(&format!("{}/protected", server.url()))
@@ -628,8 +634,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.basic_auth = Some("  user :  pass  ".to_string());
+        let opts = BrowserOptions {
+            basic_auth: Some("  user :  pass  ".to_string()),
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let html = browser
             .fetch(&format!("{}/protected", server.url()))
@@ -652,8 +660,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.basic_auth = Some("nopassword".to_string());
+        let opts = BrowserOptions {
+            basic_auth: Some("nopassword".to_string()),
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let html = browser
             .fetch(&format!("{}/page", server.url()))
@@ -673,15 +683,19 @@ mod tests {
 
     #[test]
     fn browser_proxy_option_can_be_set() {
-        let mut opts = BrowserOptions::default();
-        opts.proxy = Some("http://proxy:8080".to_string());
+        let opts = BrowserOptions {
+            proxy: Some("http://proxy:8080".to_string()),
+            ..Default::default()
+        };
         assert_eq!(opts.proxy.as_deref(), Some("http://proxy:8080"));
     }
 
     #[tokio::test]
     async fn browser_invalid_proxy_url_returns_error() {
-        let mut opts = BrowserOptions::default();
-        opts.proxy = Some("%%not-a-valid-url%%".to_string());
+        let opts = BrowserOptions {
+            proxy: Some("%%not-a-valid-url%%".to_string()),
+            ..Default::default()
+        };
         let result = Browser::new(opts);
         assert!(result.is_err());
     }
@@ -785,8 +799,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.filter_blacklisted_urls = false;
+        let opts = BrowserOptions {
+            filter_blacklisted_urls: false,
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let html = r#"<html><body><iframe src="/pixel.gif"></iframe></body></html>"#;
         let inlined = browser
@@ -849,8 +865,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.respect_robots_txt = false;
+        let opts = BrowserOptions {
+            respect_robots_txt: false,
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let html = browser
             .fetch(&format!("{}/private/page", server.url()))
@@ -867,9 +885,11 @@ mod tests {
         let file = dir.join("extra.txt");
         std::fs::write(&file, "evil-tracker.test\n/blocked-path/\n").unwrap();
 
-        let mut opts = BrowserOptions::default();
-        opts.load_user_blacklist = false;
-        opts.extra_blacklist_files = vec![file.to_string_lossy().into_owned()];
+        let opts = BrowserOptions {
+            load_user_blacklist: false,
+            extra_blacklist_files: vec![file.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
 
         assert!(browser.is_url_blocked("https://cdn.evil-tracker.test/pixel"));
@@ -891,8 +911,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.request_delay = Duration::from_millis(200);
+        let opts = BrowserOptions {
+            request_delay: Duration::from_millis(200),
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
 
         let start = Instant::now();
@@ -920,8 +942,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.cache_ttl = Duration::from_secs(60);
+        let opts = BrowserOptions {
+            cache_ttl: Duration::from_secs(60),
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
 
         let url = format!("{}/cached", server.url());
@@ -966,8 +990,10 @@ mod tests {
             .create_async()
             .await;
 
-        let mut opts = BrowserOptions::default();
-        opts.cache_ttl = Duration::from_millis(50);
+        let opts = BrowserOptions {
+            cache_ttl: Duration::from_millis(50),
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
 
         let url = format!("{}/expiry", server.url());
@@ -1023,8 +1049,10 @@ mod tests {
 
     #[tokio::test]
     async fn enforce_delay_throttles_per_host() {
-        let mut opts = BrowserOptions::default();
-        opts.host_rate_limit = Some(20.0); // 20 rps → 50ms floor per host
+        let opts = BrowserOptions {
+            host_rate_limit: Some(20.0), // 20 rps → 50ms floor per host
+            ..Default::default()
+        };
         let browser = Browser::new(opts).unwrap();
         let start = std::time::Instant::now();
         browser.enforce_delay(None, "a.example").await;

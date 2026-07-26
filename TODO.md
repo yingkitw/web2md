@@ -119,6 +119,10 @@
 - [x] Use `readabilityrs` for full Mozilla Readability.js compatibility (`--readability` opt-in on `fetch`, 93.8% test pass rate, free)
 - [x] Local BM25 corpus index (`corpus index <dir>` / `corpus query <dir> <q>`) — query a directory of `.md` files offline, ≈ Context7 over any local corpus, no API key
 - [x] Opt-in headless browser backend (`--features headless`, `--headless` flag on `fetch`, `--chrome-path <path>`) — routes requests through a real Chrome / Chromium for SPAs and `/interact` parity with Firecrawl
+- [x] **Lean refactoring**: removed broken YouTube transcript module and `transcript` CLI command
+- [x] **Lean refactoring**: removed RSS/Atom/JSON Feed module and `feed` CLI command; removed `--feeds` from `sitemap`
+- [x] **Lean refactoring**: removed built-in JS interpreter (`src/js/`), `--javascript` and `--wait` CLI flags
+- [x] **Lean refactoring**: made `readabilityrs` an optional Cargo feature (`--features readability`)
 
 ## In Progress
 

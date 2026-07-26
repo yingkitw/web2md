@@ -6,7 +6,7 @@
 main.rs
   ├── CLI parsing (clap)
   ├── <URL> (default) → browse_loop → Browser → PageToMarkdown → ANSI renderer → terminal
-  ├── fetch command   → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → stdout
+  ├── fetch command   → Browser → inline_iframes → PageToMarkdown → stdout
   │                     ├── --depth N → BFS crawl via crawl.rs (same-origin links) → multiple Markdown outputs
   │                     ├── --format json → extract_page_metadata → structured JSON output
   │                     ├── --format csv → extract_page_metadata → Trafilatura-style CSV row
@@ -19,7 +19,7 @@ main.rs
   │                     ├── --pii-redact → redact::redact_pii → regex PII redaction on output
   │                     ├── --mobile → mobile User-Agent string for HTTP requests
   │                     ├── --type {recipe|faq|job|event} → structured.rs (JSON-LD → Markdown) → stdout
-  │                     ├── --readability → readability::apply_readability (Mozilla Readability.js via readabilityrs) → cleaned article HTML
+  │                     ├── --readability (--features readability) → readability::apply_readability (Mozilla Readability.js via readabilityrs) → cleaned article HTML
   │                     ├── --headless (--features headless) → headless::render_url (headless_chrome) → real-browser-rendered HTML
   │                     ├── --topic <query> → transform::extract_topic (LLM-free paragraphs) → stdout
   │                     ├── --summary <n>  → transform::extract_summary (TF-IDF) → stdout
@@ -31,15 +31,15 @@ main.rs
   ├── peek command   → Browser (--proxy/--auth supported) → extract_page_metadata (no body conversion) → key fields only
   ├── diff command   → Browser ×2 (or cached file) → diff_markdown::diff_markdown → unified-diff output
   ├── watch command  → Browser (poll loop) → main::poll_once → content_fingerprint → emit on change; persists last-seen fingerprint under --cache-dir
-  ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
+  ├── sitemap command → Browser → parse_sitemap_urls → URL list
   ├── map command     → Browser → extract::extract_links → URL list (optional --same-origin, --json)
   ├── search command  → Browser (DDG HTML) → search::parse_ddg_results → results (Markdown or JSON, optional --fetch)
-  ├── batch command   → Browser (--proxy/--auth supported) → run_inline_scripts → PageToMarkdown → stdout or output directory
+  ├── batch command   → Browser (--proxy/--auth supported) → PageToMarkdown → stdout or output directory
   ├── corpus command  → corpus::build_index / corpus::query_index → BM25 ranking over local .md files → stdout (Markdown or JSON)
-  └── mcp command     → McpServer → Browser → inline_iframes → run_inline_scripts → PageToMarkdown → JSON-RPC
+  └── mcp command     → McpServer → Browser → inline_iframes → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **per-host rate-limit clock**; sitemap XML parsing; RSS/Atom feed link extraction; run_inline_scripts() (gated by enable_javascript); URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
+  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **per-host rate-limit clock**; sitemap XML parsing; URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
   ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `prune()`, `invalidate()`
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
@@ -51,13 +51,7 @@ lib.rs
   ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product` from HTML/JSON-LD; output via `--format links`/`images`/`product`.
   ├── redact.rs      : **PII redaction** — regex-based redaction of emails, phones, SSNs, credit cards; invoked by `--pii-redact`.
   ├── search.rs      : **Web search** — DuckDuckGo HTML endpoint scraping; `parse_ddg_results` extracts titles/URLs/snippets; `decode_ddg_redirect` resolves DDG redirect links; `results_to_markdown` renders numbered links with blockquote snippets.
-  ├── js/          : Built-in dependency-free JavaScript subset interpreter
-  │     ├── ast.rs     : AST node types (expressions, statements, operators)
-  │     ├── lexer.rs   : Tokenizer (numbers, strings, templates, keywords, punctuators)
-  │     ├── parser.rs  : Recursive-descent parser → Vec<Stmt>
-  │     ├── eval.rs    : Tree-walking evaluator with lexical scopes, closures, control flow, and builtins (document.write, strings, arrays, Math, JSON, console, global constructors)
-  │     └── mod.rs     : run_inline_scripts(html, wait_ms) — extracts inline <script> blocks, runs them, flushes timer callbacks, returns document.write output; inject_before_body_close()
-  ├── readability.rs : **Mozilla Readability.js extraction** (opt-in via `--readability`) — wraps `readabilityrs`; cleans article HTML before the conversion pipeline; falls back to passthrough when Readability declines
+  ├── readability.rs : **Mozilla Readability.js extraction** (gated behind `--features readability`, opt-in via `--readability`) — wraps `readabilityrs`; cleans article HTML before the conversion pipeline; falls back to passthrough when Readability declines
   ├── headless.rs    : **Opt-in headless Chrome / Chromium rendering** (gated behind `--features headless`) — wraps `headless_chrome::Browser`; `render_url(url, HeadlessOptions)` runs on `spawn_blocking`; returns clear "rebuild with `--features headless`" error when feature is off
   ├── corpus.rs      : **Local BM25 corpus index** (`corpus` subcommand) — tokenizes `.md` files, persists inverted index to `.web2md-index.json`, ranks queries with `idf * (tf*(k1+1)) / (tf + k1*(1 - b + b*len/avgdl))` (k1=1.2, b=0.75)
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding, `strip_html_tags`)
@@ -83,15 +77,7 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
                           Browser.inline_iframes()
                                   │
                                   ▼
-                          Browser.run_inline_scripts()   (only when --javascript / enable_javascript)
-                                  │
-                                  ├── extracts inline <script> blocks (no src; classic JS type)
-                                  ├── parses + evaluates each via the built-in interpreter
-                                  ├── captures document.write / writeln output
-                                  └── injects captured HTML before </body>
-                                  │
-                                  ▼
-                          apply_readability()  (only when --readability; strips nav / ads / footer)
+                          apply_readability()  (only when --features readability --readability; strips nav / ads / footer)
                                   │
                                   ▼
                           filter_by_include_selectors()  (only when --include-selector; scraper CSS)
@@ -181,7 +167,7 @@ No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates 
 
 ## Test Coverage
 
-- **421 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- **412 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
 - All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
 - New modules in the v4 cycle (`readability`, `corpus`, `headless`) ship with their own unit suites; the readability and corpus modules also have end-to-end integration tests
 - `cargo clippy` passes with **0 warnings** (default features and `--features headless`)
