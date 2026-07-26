@@ -1,13 +1,14 @@
 [package]
 name = "web2md"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 authors = ["Ying Kit WONG"]
-description = "A tool that fetches web pages and returns them as Markdown for MCP token efficiency"
+description = "Turn web pages into clean Markdown — local, deterministic, API-key-free"
 license = "Apache-2.0"
 repository = "https://github.com/yingkitw/web2md"
 documentation = "https://docs.rs/web2md"
 homepage = "https://github.com/yingkitw/web2md"
+readme = "README.md"
 categories = ["web-programming::http-client", "development-tools::build-utils"]
 keywords = ["mcp", "markdown", "web-scraping", "html", "converter"]
 

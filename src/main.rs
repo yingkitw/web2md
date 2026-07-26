@@ -1174,7 +1174,7 @@ async fn main() -> Result<()> {
                     url
                 ),
             };
-            let caption_xml = browser.fetch(&track_url).await?;
+            let caption_xml = browser.fetch_ignore_robots(&track_url).await?;
             let cues = parse_timed_text(&caption_xml)?;
             let md = render_transcript_markdown(&cues);
             print!("{}", md);

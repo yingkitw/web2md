@@ -348,6 +348,13 @@ impl Browser {
         Ok(body)
     }
 
+    /// Fetch a URL while bypassing robots.txt checks.
+    /// Used for URLs derived from already-fetched page content, e.g. YouTube
+    /// caption tracks, where the original fetch was already user-requested.
+    pub async fn fetch_ignore_robots(&self, url: &str) -> Result<String> {
+        self.fetch_raw(url).await
+    }
+
     /// HTTP GET without robots.txt checks (used for robots.txt itself).
     async fn fetch_raw(&self, url: &str) -> Result<String> {
         let parsed = Url::parse(url).context("Invalid URL")?;

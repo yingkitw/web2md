@@ -30,7 +30,7 @@ main.rs
   │                     └── --format xml → extract_page_metadata → plain `<doc>` XML
   ├── peek command   → Browser (--proxy/--auth supported) → extract_page_metadata (no body conversion) → key fields only
   ├── diff command   → Browser ×2 (or cached file) → diff_markdown::diff_markdown → unified-diff output
-  ├── transcript cmd → Browser (watch page) → youtube::extract_caption_track_url → Browser (track file) → youtube::parse_timed_text → MD with timestamps
+  ├── transcript cmd → Browser.fetch() (watch page) → youtube::extract_caption_track_url → Browser.fetch_ignore_robots() (caption track URL) → youtube::parse_timed_text → MD with timestamps
   ├── watch command  → Browser (poll loop) → main::poll_once → content_fingerprint → emit on change; persists last-seen fingerprint under --cache-dir
   ├── sitemap command → Browser → parse_sitemap_urls / extract_feed_links → URL list
   ├── map command     → Browser → extract::extract_links → URL list (optional --same-origin, --json)
@@ -187,7 +187,7 @@ No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates 
 
 ## Test Coverage
 
-- **420 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- **421 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
 - All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
 - New modules in the v4 cycle (`readability`, `corpus`, `headless`) ship with their own unit suites; the readability and corpus modules also have end-to-end integration tests
 - `cargo clippy` passes with **0 warnings** (default features and `--features headless`)

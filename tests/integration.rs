@@ -1491,3 +1491,36 @@ fn corpus_end_to_end_build_index_and_query() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn fetch_ignore_robots_bypasses_robots_txt() {
+    let mut server = mockito::Server::new_async().await;
+
+    let robots_mock = server
+        .mock("GET", "/robots.txt")
+        .with_status(200)
+        .with_body("User-agent: *\nDisallow: /private\n")
+        .create_async()
+        .await;
+
+    let private_mock = server
+        .mock("GET", "/private")
+        .with_status(200)
+        .with_header("content-type", "text/plain")
+        .with_body("private content")
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/private", server.url());
+
+    let normal = browser.fetch(&url).await;
+    assert!(normal.is_err());
+    assert!(normal.unwrap_err().to_string().contains("Blocked by robots.txt"));
+
+    let bypassed = browser.fetch_ignore_robots(&url).await.unwrap();
+    assert!(bypassed.contains("private content"));
+
+    robots_mock.assert_async().await;
+    private_mock.assert_async().await;
+}
