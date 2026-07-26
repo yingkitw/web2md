@@ -48,12 +48,11 @@
 - [x] Site name extraction: `og:site_name` meta tag in MCP response and `--format json` output
 - [x] Keywords/tags extraction: `article:tag` meta tags (multiple), `meta name="keywords"` fallback, JSON-LD `keywords` (string or array) fallback
 - [x] Link URL absolutization: convert relative URLs to absolute in Markdown output using the page URL as base
-- [x] Sitemap/feed discovery: `sitemap` subcommand fetches sitemap.xml and discovers RSS/Atom feed links from HTML pages
+- [x] Sitemap discovery: `sitemap` subcommand fetches sitemap.xml and lists URLs
 - [x] Batch processing: `batch` subcommand reads URLs from a file (one per line, # comments supported) and converts each to Markdown
 - [x] Output to file: `--output` flag on `fetch` writes result to a file instead of stdout; `--output` on `batch` writes to a directory
 - [x] YAML frontmatter output: `--frontmatter` flag prepends metadata (title, description, author, date, etc.) as a YAML block at the top of Markdown output
 - [x] CSS selector targeting: `--exclude-selector` flag strips HTML elements matching `.class` or `#id` selectors before conversion
-- [x] Built-in JavaScript interpreter (`src/js/`): dependency-free lexer/parser/evaluator for a JS subset, executes inline `<script>` blocks when `--javascript` is set and folds `document.write` output into the page (replaces any need for boa/v8)
 - [x] URL blacklist filtering: skip known non-content URLs (ads, tracking pixels, analytics hosts) on iframe inlining, batch processing, and sitemap output; `--no-blacklist` to disable
 - [x] Recursive crawl: `--depth N` on `fetch` discovers and converts same-origin linked pages (BFS); `--output` writes to a directory
 - [x] robots.txt respect: parse and honor Disallow rules and Crawl-delay before fetching; `--ignore-robots` to disable
@@ -63,17 +62,12 @@
 - [x] Robust HTML parsing with `scraper` crate (html5ever-based) for malformed/unclosed tags in `html_to_md`
 - [x] Plain-text output format (`--format text`) for archival and NLP pipelines
 - [x] Trafilatura-style fallback chain: multi-candidate scoring (semantic tags with bonus, block readability, paragraph clustering), best-candidate selection, jusText-style boilerplate paragraph stripping
-- [x] Post-load wait (`--wait` MS): delay after fetch before processing; `setTimeout` callbacks fire when delay ≤ wait budget (with `--javascript`)
-- [x] JS timer scheduling: `setInterval` (repeating within `--wait`) and `requestAnimationFrame` (~16ms) in the built-in interpreter
-- [x] `clearTimeout` / `clearInterval` for cancelling scheduled JS callbacks
 - [x] Structured content fallback: JSON-LD `articleBody` / `description`, `og:description`, and meta description when main-content heuristics fail
 - [x] Shared `html_meta` module: deduplicated JSON-LD and `<meta>` parsing used by `mcp.rs` and structured content fallback in `markdown.rs`
 - [x] Extended metadata: excerpt (first substantive paragraph), canonical URL (`og:url` / `<link rel="canonical">`), and language (`html lang`, `og:locale`, JSON-LD `inLanguage`)
 - [x] Article categories/sections: `article:section` meta tags and JSON-LD `articleSection` (string or array) in MCP response, `--format json`, and YAML frontmatter
-- [x] RSS/Atom feed parsing: `feed` subcommand fetches RSS 2.0 or Atom feeds and converts entries to Markdown (or `--json`); supports `--max-entries` and `--output`
 - [x] Codebase audit: unified `PageMetadata` via serde flatten (MCP + CLI JSON), shared meta-property collector / tag stripper / truncate helper, shared `build_browser_options` CLI wiring, removed dead `follow_redirects`
 - [x] Dublin Core metadata fallbacks: `DC.title` / `dcterms.title`, `DC.creator` / `dcterms.creator`, `DC.date` / `dcterms.date`, `DC.description` / `dcterms.description`
-- [x] JSON Feed parsing: `parse_feed` accepts JSON Feed 1/1.1; `feed` subcommand and `sitemap --feeds` discover `application/feed+json` links
 - [x] Extraction quality score (0.0–1.0) and page-type classification (`article` / `forum` / `product` / `page`) in MCP, `--format json`, and YAML frontmatter
 - [x] Dependency trim: remove `whatlang` (stopword heuristic instead); slim `reqwest` to `native-tls`/`http2`/`charset` only
 - [x] CSV export (`--format csv`): Trafilatura-style header + row (url, title, author, date, language, page_type, quality, text)
@@ -95,9 +89,8 @@
 - [x] Persistent file cache (`--cache-dir <path>`) — JSON files keyed by URL SHA-256; survives runs; better than in-memory TTL
 - [x] Per-host token-bucket rate limiting (`--rate <req/s>`) — independent rate clock per host
 - [x] `diff` subcommand — diff two URLs (or current vs cached file via `--cached-b`) at the Markdown line level
-- [x] YouTube transcript extraction (watch page → captionTracks → timed text → MD with timestamps)
-- [x] New shared modules: `transform.rs`, `structured.rs`, `persistent_cache.rs`, `diff_markdown.rs`, `youtube.rs`, `branding.rs`
-- [x] New direct deps: `sha2` (cache key hashing), `regex` (already transitive; promoted to direct for YouTube captions)
+- [x] New shared modules: `transform.rs`, `structured.rs`, `persistent_cache.rs`, `diff_markdown.rs`, `branding.rs`
+- [x] Direct deps: `sha2` (cache key hashing), `regex` (PII redaction, brand/design extraction)
 - [x] `watch` subcommand (`src/main.rs::poll_once`): poll a URL on `--every` interval, emit a tab-separated line (timestamp, url, simhash, snippet) whenever the fingerprint changes; persists last-seen fingerprint under `--cache-dir` so restarts don't re-fire
 - [x] `--webhook <url>` flag: POST `{event,url,format,result}` JSON to a webhook URL after each `fetch` completes (Firecrawl webhook parity for n8n/Make/Zapier integrations)
 - [x] `branding` output format (`--format branding`, `src/branding.rs`): deterministic color/font/heading extraction from inline `<style>` blocks (≈ Firecrawl `branding` format, no LLM)
@@ -119,10 +112,7 @@
 - [x] Use `readabilityrs` for full Mozilla Readability.js compatibility (`--readability` opt-in on `fetch`, 93.8% test pass rate, free)
 - [x] Local BM25 corpus index (`corpus index <dir>` / `corpus query <dir> <q>`) — query a directory of `.md` files offline, ≈ Context7 over any local corpus, no API key
 - [x] Opt-in headless browser backend (`--features headless`, `--headless` flag on `fetch`, `--chrome-path <path>`) — routes requests through a real Chrome / Chromium for SPAs and `/interact` parity with Firecrawl
-- [x] **Lean refactoring**: removed broken YouTube transcript module and `transcript` CLI command
-- [x] **Lean refactoring**: removed RSS/Atom/JSON Feed module and `feed` CLI command; removed `--feeds` from `sitemap`
-- [x] **Lean refactoring**: removed built-in JS interpreter (`src/js/`), `--javascript` and `--wait` CLI flags
-- [x] **Lean refactoring**: made `readabilityrs` an optional Cargo feature (`--features readability`)
+- [x] **Lean refactoring**: removed YouTube transcript, feed, JS interpreter modules; made `readability` an optional Cargo feature
 
 ## In Progress
 
@@ -164,7 +154,6 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 | 9 | Persistent file cache (`--cache-dir`) survives runs | Firecrawl cloud cache (paid) | ✅ Done |
 | 10 | Per-host token-bucket rate limiting (`--rate`) | Firecrawl flat 60s/page + paid enhanced proxy | ✅ Done |
 | 11 | `diff` subcommand — URL vs URL or vs cached | Firecrawl `changeTracking` (paywalled) | ✅ Done |
-| 12 | YouTube transcript extraction (text-only) | Firecrawl `video`/`audio` extraction (5 cr) | ✅ Done |
 | 13 | `watch` subcommand — poll URL, emit on simhash change | Firecrawl `changeTracking` (polling) | ✅ Done |
 | 14 | `--webhook <url>` delivery (n8n/Make/Zapier) | Firecrawl webhooks (paid tier) | ✅ Done |
 | 15 | `branding` output format (top-N CSS colors + fonts) | Firecrawl `branding` (paid format) | ✅ Done |

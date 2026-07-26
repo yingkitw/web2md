@@ -155,7 +155,7 @@ See [SPEC.md](SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for full protocol 
 
 ## Tech stack
 
-Rust, `reqwest`, `tokio`, `scraper` (html5ever), `clap`, `serde`, `pulldown-cmark`. Optional `headless_chrome` and `readabilityrs`.
+Rust, `reqwest`, `tokio`, `scraper` (html5ever), `clap`, `serde`, `pulldown-cmark`. Optional: `headless_chrome` (`--features headless`), `readabilityrs` (`--features readability`).
 
 ## License
 

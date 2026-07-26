@@ -119,7 +119,7 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
 
 ## Key Decisions
 
-1. **Optional JS execution, in-house**: By default the crate does not execute JavaScript (keeping it lightweight and deterministic). With `--javascript` / `enable_javascript`, inline `<script>` blocks are evaluated by the project's own dependency-free interpreter (`src/js/`) — no `boa`, `v8`, or external engine. The interpreter supports a pragmatic subset (variables, closures, control flow, template literals, `document.write`, timer APIs including `clearTimeout`/`clearInterval`, strings, arrays, `Math`, `JSON`); timer callbacks flush when scheduled time ≤ `--wait`. Scripts using unsupported features fail fast and are silently skipped, so they never break conversion. External and module scripts are not executed.
+1. **No built-in JS execution**: The crate does not execute JavaScript. This keeps it lightweight, deterministic, and free of external engine dependencies. For JS-heavy SPAs, use the optional `--features headless` backend with a real Chrome / Chromium.
 
 2. **In-house HTML-to-Markdown converter**: HTML-to-Markdown conversion uses `html_to_md.rs` — a DOM walker built on `scraper` (html5ever) for malformed-HTML tolerance. No dedicated HTML-to-Markdown crate (`html2md`, `htmd`, etc.). The converter handles headings, links, images, lists, tables, code blocks, entity decoding, and Markdown control-character escaping. Pre/post-processing in `PageToMarkdown` (noise stripping, main-content extraction, dedup, code language injection, forum comments, link absolutization) wraps `html_to_md::parse_html`.
 
@@ -140,7 +140,7 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
 | `reqwest` | HTTP client (slim features: `native-tls` + `http2` + `charset`) |
 | `tokio` | Async runtime |
 | `scraper` | HTML parsing (html5ever) for `html_to_md` |
-| `readabilityrs` | Mozilla Readability.js port (opt-in via `--readability`) |
+| `readabilityrs` | Mozilla Readability.js port (opt-in, `--features readability`) |
 | `headless_chrome` | Headless Chrome / Chromium via DevTools Protocol (opt-in, `--features headless`) |
 | `pulldown-cmark` | Markdown → ANSI terminal rendering |
 | `clap` | CLI argument parsing |
@@ -151,13 +151,13 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
 | `anyhow` | Error handling |
 | `mockito` | HTTP mocking in tests (dev) |
 
-No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates are pulled in. All such capabilities are implemented in-house to keep the default binary small (~5 MB release) and the audit surface manageable. The `readabilityrs` crate is now linked by default (small overhead) for the `--readability` opt-in flag. The `headless_chrome` crate is gated behind the `headless` cargo feature so the default build stays lean.
+No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates are pulled in. All such capabilities are implemented in-house to keep the default binary small (~5 MB release) and the audit surface manageable. The `readabilityrs` crate is gated behind the `readability` cargo feature so the default build stays lean. The `headless_chrome` crate is gated behind the `headless` cargo feature for the same reason.
 
 ## Deployment Topology
 
 - Local interactive: `cargo run -- <URL>` (browse mode)
 - Local one-shot: `cargo run -- fetch <URL> [--render] [--format json]`
-- Article cleanup: `cargo run -- fetch <URL> --readability` (Mozilla Readability.js)
+- Article cleanup: `cargo run --features readability -- fetch <URL> --readability` (Mozilla Readability.js)
 - SPA render: `cargo run --features headless -- fetch <URL> --headless` (headless Chrome)
 - Local corpus search: `cargo run -- corpus index ./docs` then `cargo run -- corpus query ./docs <q>`
 - MCP Host: `cargo run -- mcp` (stdio transport)
@@ -167,7 +167,7 @@ No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates 
 
 ## Test Coverage
 
-- **412 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- **327 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
 - All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
 - New modules in the v4 cycle (`readability`, `corpus`, `headless`) ship with their own unit suites; the readability and corpus modules also have end-to-end integration tests
 - `cargo clippy` passes with **0 warnings** (default features and `--features headless`)

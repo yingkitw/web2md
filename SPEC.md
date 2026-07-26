@@ -554,17 +554,17 @@ No API key, no subscription, fully local HTTP (≈ Firecrawl `/search`, free).
 
 Emits nothing while the page is unchanged — agents can `tail -f` it as a firehose.
 
-## Readability Extraction (`--readability`)
+## Readability Extraction (`--readability`, `--features readability`)
 
-When `--readability` is passed to `fetch`, the raw HTML is first scored and cleaned by [`readabilityrs`] — a Rust port of Mozilla's Readability library (the same algorithm behind Firefox Reader View). The article HTML it returns replaces the original body before our usual pipeline runs, so noise, nav, ads, and chrome are stripped deterministically by a battle-tested extractor. Readability's pre-flight check (`is_probably_readerable`) is also exposed via [`is_readerable`] for callers that want to short-circuit obvious non-articles. When Readability declines to score the page (returns `None` or fails to construct), the input HTML is passed through unchanged so the rest of the pipeline still has a chance.
+When `--readability` is passed to `fetch` (and the crate is built with `--features readability`), the raw HTML is first scored and cleaned by [`readabilityrs`] — a Rust port of Mozilla's Readability library (the same algorithm behind Firefox Reader View). The article HTML it returns replaces the original body before our usual pipeline runs, so noise, nav, ads, and chrome are stripped deterministically by a battle-tested extractor. Readability's pre-flight check (`is_probably_readerable`) is also exposed via [`is_readerable`] for callers that want to short-circuit obvious non-articles. When Readability declines to score the page (returns `None` or fails to construct), the input HTML is passed through unchanged so the rest of the pipeline still has a chance.
 
 ## Headless Browser (`--headless`, `--features headless`)
 
-When `web2md` is built with `--features headless`, the [`headless_chrome`] DevTools client is compiled in and `fetch --headless [--chrome-path PATH] [--wait MS]` routes the page through a real headless Chrome / Chromium. The launch helper:
+When `web2md` is built with `--features headless`, the [`headless_chrome`] DevTools client is compiled in and `fetch --headless [--chrome-path PATH]` routes the page through a real headless Chrome / Chromium. The launch helper:
 
 1. Sets `LaunchOptions::path` from `--chrome-path` when given, otherwise relies on `headless_chrome::default_executable()` (system install or `CHROME` env var).
 2. Disables the OS sandbox by default — most CI / container hosts lack the user-namespace setup Chrome's sandbox needs; users who want it can re-enable it via `CHROME_DEVEL_SANDBOX`.
-3. Calls `Browser::new`, opens a new tab, navigates, waits for navigation to settle, optionally sleeps `--wait` ms, and returns the rendered HTML.
+3. Calls `Browser::new`, opens a new tab, navigates, waits for navigation to settle, and returns the rendered HTML.
 
 The work is run on a `tokio::task::spawn_blocking` thread because `headless_chrome` is a synchronous library. Without the feature compiled in, `render_url` returns a clear "rebuild with `--features headless`" error so the CLI fails fast with an actionable message.
 
