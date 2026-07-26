@@ -106,6 +106,21 @@ pub struct Browser {
     persistent_cache: Option<crate::PersistentCache>,
 }
 
+impl Clone for Browser {
+    fn clone(&self) -> Self {
+        Self {
+            client: self.client.clone(),
+            options: self.options.clone(),
+            blacklist: self.blacklist.clone(),
+            last_request: Mutex::new(self.last_request.lock().unwrap().clone()),
+            per_host_last: Mutex::new(self.per_host_last.lock().unwrap().clone()),
+            cache: Mutex::new(self.cache.lock().unwrap().clone()),
+            robots_cache: Mutex::new(self.robots_cache.lock().unwrap().clone()),
+            persistent_cache: self.persistent_cache.clone(),
+        }
+    }
+}
+
 impl Browser {
     /// Build a new Browser with the given options
     pub fn new(options: BrowserOptions) -> Result<Self> {

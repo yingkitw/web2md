@@ -8,7 +8,7 @@ use web2md::{
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
@@ -1514,6 +1514,7 @@ async fn main() -> Result<()> {
 }
 
 /// Recursively fetch and convert same-origin pages up to `depth` link hops.
+/// Pages at each BFS level are fetched in parallel (up to 10 concurrent).
 #[allow(clippy::too_many_arguments)]
 async fn crawl_fetch(
     browser: &Browser,
@@ -1528,6 +1529,12 @@ async fn crawl_fetch(
     output_dir: Option<&str>,
     render: bool,
 ) -> Result<()> {
+    use std::sync::Arc;
+    use tokio::sync::Semaphore;
+    use tokio::task::JoinSet;
+
+    const CONCURRENCY: usize = 10;
+
     let root = Url::parse(start_url).context("Invalid URL")?;
     let start = normalize_crawl_url(start_url, start_url)
         .unwrap_or_else(|| start_url.to_string());
@@ -1536,92 +1543,118 @@ async fn crawl_fetch(
         std::fs::create_dir_all(dir)?;
     }
 
+    let sem = Arc::new(Semaphore::new(CONCURRENCY));
     let mut visited = HashSet::new();
-    let mut queue = VecDeque::from([(start.clone(), 0u32)]);
+    let mut current_level: Vec<String> = vec![start];
     let mut succeeded = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
 
-    while let Some((url, level)) = queue.pop_front() {
-        let key = normalize_crawl_url(&url, &url).unwrap_or_else(|| url.clone());
-        if !visited.insert(key) {
-            continue;
+    for level in 0..=depth {
+        // Filter out visited and blacklisted URLs.
+        let mut to_fetch = Vec::new();
+        for url in current_level.drain(..) {
+            let key = normalize_crawl_url(&url, &url).unwrap_or_else(|| url.clone());
+            if !visited.insert(key) {
+                continue;
+            }
+            if browser.is_url_blocked(&url) {
+                eprintln!("Skipped (blacklisted): {}", url);
+                skipped += 1;
+                continue;
+            }
+            to_fetch.push(url);
         }
 
-        if browser.is_url_blocked(&url) {
-            eprintln!("Skipped (blacklisted): {}", url);
-            skipped += 1;
-            continue;
+        if to_fetch.is_empty() {
+            break;
         }
 
-        if !browser.robots_allows(&url).await? {
-            eprintln!("Skipped (robots.txt): {}", url);
-            skipped += 1;
-            continue;
-        }
+        eprintln!("[depth {}] {} URL(s)", level, to_fetch.len());
 
-        eprintln!("[depth {}] {}", level, url);
-
-        match browser.fetch(&url).await {
-            Ok(html) => {
-                let html = match browser.prepare_html(&html, &url).await {
-                    Ok(prepared) => prepared,
-                    Err(_) => html,
-                };
-
-                if level < depth {
-                    for link in browser.same_origin_links(&html, &url, &root) {
-                        let link_key =
-                            normalize_crawl_url(&link, &link).unwrap_or(link.clone());
-                        if !visited.contains(&link_key) {
-                            queue.push_back((link, level + 1));
-                        }
-                    }
+        // Spawn parallel fetch tasks for this level.
+        let mut tasks: JoinSet<(String, anyhow::Result<(String, String)>)> = JoinSet::new();
+        for url in to_fetch {
+            let browser = browser.clone();
+            let sem = sem.clone();
+            tasks.spawn(async move {
+                let _permit = sem.acquire().await.unwrap();
+                eprintln!("  Fetching {}", url);
+                let result = async {
+                    let html = browser.fetch(&url).await?;
+                    let html = match browser.prepare_html(&html, &url).await {
+                        Ok(prepared) => prepared,
+                        Err(_) => html,
+                    };
+                    Ok::<_, anyhow::Error>((html, url.clone()))
                 }
+                .await;
+                (url, result)
+            });
+        }
 
-                match PageToMarkdown::convert(
-                    &html,
-                    include_images,
-                    keep_header,
-                    main_content,
-                    exclude_selector,
-                ) {
-                    Ok(md) => {
-                        let mut md = PageToMarkdown::absolutize_links(&md, &url);
-                        if frontmatter {
-                            let meta = extract_page_metadata(&html, &md);
-                            if let Some(fm) = meta.to_frontmatter(Some(&url)) {
-                                md = format!("{}{}", fm, md);
+        // Collect results and discover links for the next level.
+        let mut next_level = Vec::new();
+        while let Some(res) = tasks.join_next().await {
+            let (url, outcome) = res.unwrap();
+            match outcome {
+                Ok((html, _)) => {
+                    if level < depth {
+                        for link in browser.same_origin_links(&html, &url, &root) {
+                            let link_key =
+                                normalize_crawl_url(&link, &link).unwrap_or_else(|| link.clone());
+                            if !visited.contains(&link_key) {
+                                next_level.push(link);
                             }
                         }
-                        if let Some(max) = max_length {
-                            md = truncate_with_marker(&md, max);
-                        }
-                        if render {
-                            md = render_markdown_ansi(&md, false).0;
-                        }
-
-                        if let Some(dir) = output_dir {
-                            let filename = url_to_filename(&url);
-                            let path = format!("{}/{}", dir, filename);
-                            std::fs::write(&path, &md)?;
-                            eprintln!("  → {}", path);
-                        } else {
-                            println!("---\n# {}\n\n{}", url, md);
-                        }
-                        succeeded += 1;
                     }
-                    Err(e) => {
-                        eprintln!("  Error converting: {}", e);
-                        failed += 1;
+
+                    match PageToMarkdown::convert(
+                        &html,
+                        include_images,
+                        keep_header,
+                        main_content,
+                        exclude_selector,
+                    ) {
+                        Ok(md) => {
+                            let mut md = PageToMarkdown::absolutize_links(&md, &url);
+                            if frontmatter {
+                                let meta = extract_page_metadata(&html, &md);
+                                if let Some(fm) = meta.to_frontmatter(Some(&url)) {
+                                    md = format!("{}{}", fm, md);
+                                }
+                            }
+                            if let Some(max) = max_length {
+                                md = truncate_with_marker(&md, max);
+                            }
+                            if render {
+                                md = render_markdown_ansi(&md, false).0;
+                            }
+
+                            if let Some(dir) = output_dir {
+                                let filename = url_to_filename(&url);
+                                let path = format!("{}/{}", dir, filename);
+                                std::fs::write(&path, &md)?;
+                                eprintln!("  → {}", path);
+                            } else {
+                                println!("---\n# {}\n\n{}", url, md);
+                            }
+                            succeeded += 1;
+                        }
+                        Err(e) => {
+                            eprintln!("  Error converting {}: {}", url, e);
+                            failed += 1;
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                eprintln!("  Error fetching: {}", e);
-                failed += 1;
+                Err(e) => {
+                    eprintln!("  Error fetching {}: {}", url, e);
+                    failed += 1;
+                }
             }
         }
+
+        current_level = next_level;
     }
 
     eprintln!(

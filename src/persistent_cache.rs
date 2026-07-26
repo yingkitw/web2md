@@ -21,6 +21,7 @@ struct CacheEntry {
     body: String,
 }
 
+#[derive(Clone)]
 pub struct PersistentCache {
     dir: PathBuf,
     ttl: Duration,
