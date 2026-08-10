@@ -103,7 +103,7 @@
 - [x] `--mobile` flag — mobile User-Agent for responsive sites (Firecrawl `mobile: true` parity)
 - [x] `map` subcommand — discover all URLs from HTML `<a href>` links (Firecrawl `/map` endpoint parity)
 - [x] `search` subcommand — DuckDuckGo HTML web search, no API key, with `--fetch` to convert results to Markdown (Firecrawl `/search` parity, free)
-- [x] `docs` subcommand — fetch README + metadata from crates.io, docs.rs, npm, or PyPI (poor-person's Context7, no API key, free)
+- [x] `docs` subcommand — fetch README + metadata from crates.io, npm, or PyPI (poor-person's Context7, no API key, free)
 - [x] `--proxy <url>` flag — route requests through HTTP/SOCKS proxy (Firecrawl proxy parity)
 - [x] `--auth user:pass` flag — basic authentication for protected pages
 - [x] New shared modules: `extract.rs` (links/images/product), `redact.rs` (PII redaction), `search.rs` (DDG web search), `docs.rs` (library doc fetcher)
@@ -117,14 +117,14 @@
 
 ## In Progress
 
-_None — v4 cycle (readability, corpus index, headless browser) is complete. See Brainstorming v4 for next-wave ideas._
+_None — v5 cycle (links-summary, images-summary, video format, domain filters, chunk, sup/sub) is complete._
 
 ## Brainstorming
 
 _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:_
 
 - PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
-- `--no-tables` / `--include-links` element toggles (Trafilatura parity)
+- `--include-links` element toggle (Trafilatura parity) — `--no-tables` and `--no-links` already implemented
 - Word/character count fields on `PageMetadata`
 
 ### Brainstorming v2 — beating Firecrawl and Context7
@@ -197,9 +197,9 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 - Headless browser backend — ✅ Done (`--features headless` + `--headless` on `fetch`)
 - PDF/DOCX parsing from URLs (`lopdf`, `docx-rs`) — keep out unless demand warrants the binary-size cost
 - Local-web search backend: index CLI docs and serve them via Context7-compatible endpoints
-- Library doc fetcher — ✅ Done (`docs` subcommand, crates.io/docs.rs/npm/PyPI)
+- Library doc fetcher — ✅ Done (`docs` subcommand, crates.io/npm/PyPI)
 - Readability.js extraction — ✅ Done (`readabilityrs` + `--readability` flag on `fetch`)
-- `--no-tables` / `--include-links` explicit element toggles for Trafilatura parity — ✅ Already implemented
+- `--no-tables` / `--no-links` explicit element toggles for Trafilatura parity — ✅ Already implemented
 - Local BM25 corpus index — ✅ Done (`corpus` subcommand)
 
 ### Brainstorming v4 — beating Firecrawl on the remaining hard surface
@@ -217,3 +217,27 @@ optional + local:
 | 27 | `--readability` Mozilla Readability.js extraction | Firecrawl default extraction on article URLs | ✅ Done |
 | 28 | `corpus index` / `corpus query` over local `.md` directory | Context7 / paid "corpus Q&A" | ✅ Done |
 | 29 | `--features headless` + `--headless` for true SPA render | Firecrawl `/interact` (paid) | ✅ Done |
+
+### Brainstorming v5 — competitive intelligence (Aug 2026)
+
+Researched Firecrawl v2.9–v2.11, Jina Reader (2026-04), and Trafilatura v2.2.
+
+**New gaps identified (deterministic, no LLM, no SaaS — all feasible locally):**
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 30 | `--links-summary` — append deduplicated link list at end of Markdown | Jina `X-With-Links-Summary` | ✅ Done |
+| 31 | `--images-summary` — append deduplicated image list at end of Markdown | Jina `X-With-Images-Summary` | ✅ Done |
+| 32 | `--format video` — extract `<video>`, `<source>`, embedded video URLs as JSON | Firecrawl `video` format (paid) | ✅ Done |
+| 33 | `--include-domains` / `--exclude-domains` on `search` | Firecrawl `/search` domain filters | ✅ Done |
+| 34 | `--chunk` — split Markdown by headings for RAG pipelines | Jina `X-Markdown-Chunking` | ✅ Done |
+| 35 | `<sup>`/`<sub>` tag handling in HTML-to-Markdown | Trafilatura v2.2 sup/sub support | ✅ Done |
+
+**Skipped (requires LLM, SaaS, or heavy deps — violates our constraint):**
+- Firecrawl `query`/`question` format (LLM)
+- Firecrawl `deterministicJson` (SaaS extractor caching)
+- Firecrawl `/interact` browser automation (SaaS infrastructure)
+- Firecrawl `/parse` endpoint (requires PDF/DOCX parsers — deferred)
+- Firecrawl Research Index (SaaS, arXiv corpus)
+- Jina `X-With-Generated-Alt` (VLM for alt text)
+- Jina PDF/Office uploads (requires file format parsers)

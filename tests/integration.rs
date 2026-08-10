@@ -1099,3 +1099,96 @@ async fn fetch_ignore_robots_bypasses_robots_txt() {
     robots_mock.assert_async().await;
     private_mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn docs_subcommand_fetches_and_parses_crates_io() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/api/v1/crates/test-pkg")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r##"{
+            "crate": {
+                "name": "test-pkg",
+                "max_stable_version": "1.2.3",
+                "description": "A test package",
+                "homepage": "https://example.com",
+                "repository": "https://github.com/test/pkg",
+                "license": "MIT",
+                "keywords": ["test"],
+                "categories": ["dev-tools"]
+            }
+        }"##)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let api_url = format!("{}/api/v1/crates/test-pkg", server.url());
+    let body = browser.fetch_ignore_robots(&api_url).await.unwrap();
+    let info = web2md::parse_registry_response(web2md::Registry::CratesIo, &body).unwrap();
+
+    assert_eq!(info.name, "test-pkg");
+    assert_eq!(info.version, "1.2.3");
+    assert_eq!(info.description.as_deref(), Some("A test package"));
+    assert_eq!(info.license.as_deref(), Some("MIT"));
+
+    let md = web2md::package_info_to_markdown(&info);
+    assert!(md.contains("# test-pkg (crates.io)"));
+    assert!(md.contains("| Version | 1.2.3 |"));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn video_format_extracts_video_and_embed_urls() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/page")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(r#"<html><body>
+            <video src="/clip.mp4" poster="/poster.jpg"></video>
+            <iframe src="https://www.youtube.com/embed/abc123"></iframe>
+            <iframe src="/ads.html"></iframe>
+            </body></html>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/page", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let videos = web2md::extract_videos(&html, &url);
+
+    assert_eq!(videos.len(), 2);
+    assert!(videos[0].url.ends_with("/clip.mp4"));
+    assert_eq!(videos[0].source.as_deref(), Some("video"));
+    assert_eq!(videos[1].source.as_deref(), Some("youtube"));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn links_summary_appends_link_list() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/page")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(r#"<html><body>
+            <h1>Test Page</h1>
+            <p>Some content <a href="/about">About</a> and <a href="/contact">Contact</a></p>
+            </body></html>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/page", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let links = web2md::extract_links(&html, &url);
+
+    assert_eq!(links.len(), 2);
+    assert!(links.iter().any(|l| l.url.ends_with("/about")));
+    assert!(links.iter().any(|l| l.url.ends_with("/contact")));
+
+    mock.assert_async().await;
+}

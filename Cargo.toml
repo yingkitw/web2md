@@ -1,6 +1,6 @@
 [package]
 name = "web2md"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2024"
 authors = ["Ying Kit WONG"]
 description = "Turn web pages into clean Markdown — local, deterministic, API-key-free"

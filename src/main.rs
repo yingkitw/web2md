@@ -42,6 +42,8 @@ enum OutputFormat {
     Images,
     /// Emit structured product from JSON-LD (≈ Firecrawl `product` format, deterministic)
     Product,
+    /// Emit all videos as JSON (≈ Firecrawl `video` format, deterministic)
+    Video,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -200,6 +202,15 @@ enum Commands {
         /// defaults to the system install).
         #[arg(long, requires = "headless")]
         chrome_path: Option<String>,
+        /// Append a deduplicated list of all links at the end of Markdown output
+        #[arg(long)]
+        links_summary: bool,
+        /// Append a deduplicated list of all images at the end of Markdown output
+        #[arg(long)]
+        images_summary: bool,
+        /// Split Markdown by headings for RAG pipelines (sections separated by `\n\n---\n\n`)
+        #[arg(long)]
+        chunk: bool,
     },
     /// Peek at a URL: return title + excerpt + key metadata only (cheaper than `fetch`)
     Peek {
@@ -374,6 +385,12 @@ enum Commands {
         /// Fetch and convert each result URL to Markdown (uses --limit to cap fetches)
         #[arg(long)]
         fetch: bool,
+        /// Only include results from these domains (e.g. "github.com" "rust-lang.org")
+        #[arg(long)]
+        include_domains: Vec<String>,
+        /// Exclude results from these domains
+        #[arg(long)]
+        exclude_domains: Vec<String>,
         /// Cookie to send with the request (format: name=value); can be given multiple times
         #[arg(short, long)]
         cookie: Vec<String>,
@@ -442,6 +459,20 @@ enum Commands {
     Corpus {
         #[command(subcommand)]
         action: CorpusAction,
+    },
+    /// Fetch README + metadata from crates.io, npm, or PyPI (≈ Context7, no API key)
+    Docs {
+        /// Package name to look up
+        name: String,
+        /// Registry: crates, npm, or pypi (default: crates)
+        #[arg(short, long, default_value = "crates")]
+        registry: String,
+        /// Request timeout in seconds
+        #[arg(short, long)]
+        timeout: Option<u64>,
+        /// Output as structured JSON instead of Markdown
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -551,6 +582,7 @@ fn format_label(format: &OutputFormat) -> &'static str {
         OutputFormat::Links => "links",
         OutputFormat::Images => "images",
         OutputFormat::Product => "product",
+        OutputFormat::Video => "video",
     }
 }
 
@@ -691,6 +723,9 @@ async fn main() -> Result<()> {
             readability,
             headless,
             chrome_path,
+            links_summary,
+            images_summary,
+            chunk,
         }) => {
             let options = build_browser_options(
                 timeout,
@@ -750,7 +785,10 @@ async fn main() -> Result<()> {
                     && !pii_redact
                     && output_file.is_none()
                     && webhook.is_none()
-                    && !headless;
+                    && !headless
+                    && !links_summary
+                    && !images_summary
+                    && !chunk;
 
                 let html = if can_stream {
                     // Streaming path: show download progress on stderr, then
@@ -851,6 +889,10 @@ async fn main() -> Result<()> {
                             None => anyhow::bail!("no JSON-LD Product found on this page"),
                         }
                     }
+                    OutputFormat::Video => {
+                        let videos = web2md::extract_videos(&html, &url);
+                        (serde_json::to_string_pretty(&videos)?, None)
+                    }
                     OutputFormat::Html => {
                         if lang.is_some() {
                             anyhow::bail!("--lang requires a converted output format (not html)");
@@ -865,7 +907,7 @@ async fn main() -> Result<()> {
                         }
                         (html.clone(), None)
                     }
-                    format => {
+                    ref format => {
                         let struct_result: Option<String> = match r#type.as_deref() {
                             Some("recipe") => match extract_recipe(&html) {
                                 Ok(Some(md)) => Some(md),
@@ -999,6 +1041,7 @@ async fn main() -> Result<()> {
                             OutputFormat::Links => unreachable!(),
                             OutputFormat::Images => unreachable!(),
                             OutputFormat::Product => unreachable!(),
+                            OutputFormat::Video => unreachable!(),
                         };
                         (out, fm_meta)
                     }
@@ -1009,6 +1052,34 @@ async fn main() -> Result<()> {
                         && let Some(fm) = meta.to_frontmatter(Some(&url)) {
                             result = format!("{}{}", fm, result);
                         }
+
+                if links_summary && matches!(format, OutputFormat::Markdown) {
+                    let links = web2md::extract_links(&html, &url);
+                    if !links.is_empty() {
+                        let mut summary = String::from("\n\n---\n\n## Links\n\n");
+                        for link in &links {
+                            let label = if link.text.is_empty() { &link.url } else { &link.text };
+                            summary.push_str(&format!("- [{}]({})\n", label, link.url));
+                        }
+                        result.push_str(&summary);
+                    }
+                }
+
+                if images_summary && matches!(format, OutputFormat::Markdown) {
+                    let images = web2md::extract_images(&html, &url);
+                    if !images.is_empty() {
+                        let mut summary = String::from("\n\n---\n\n## Images\n\n");
+                        for img in &images {
+                            let alt = img.alt.as_deref().unwrap_or("");
+                            summary.push_str(&format!("- ![{}]({})\n", alt, img.src));
+                        }
+                        result.push_str(&summary);
+                    }
+                }
+
+                if chunk && matches!(format, OutputFormat::Markdown) {
+                    result = chunk_markdown_by_headings(&result);
+                }
 
                 if let Some(max) = max_tokens {
                     result = truncate_by_tokens(&result, max);
@@ -1317,6 +1388,8 @@ async fn main() -> Result<()> {
             limit,
             json,
             fetch,
+            include_domains,
+            exclude_domains,
             cookie,
             header,
         }) => {
@@ -1331,6 +1404,12 @@ async fn main() -> Result<()> {
             let search_url = web2md::ddg_search_url(&query, limit);
             let html = browser.fetch(&search_url).await.context("Failed to fetch search results")?;
             let mut results = web2md::parse_ddg_results(&html);
+            if !include_domains.is_empty() {
+                results.retain(|r| domain_matches_any(&r.url, &include_domains));
+            }
+            if !exclude_domains.is_empty() {
+                results.retain(|r| !domain_matches_any(&r.url, &exclude_domains));
+            }
             if let Some(max) = limit {
                 results.truncate(max);
             }
@@ -1506,6 +1585,33 @@ async fn main() -> Result<()> {
                         println!("{}", web2md::corpus_results_to_markdown(&hits));
                     }
                 }
+            }
+        }
+        Some(Commands::Docs {
+            name,
+            registry,
+            timeout,
+            json,
+        }) => {
+            let reg = web2md::Registry::from_str(&registry)
+                .with_context(|| format!("Unknown registry '{}'. Use: crates, npm, or pypi", registry))?;
+            let mut options = BrowserOptions::default();
+            if let Some(secs) = timeout {
+                options.timeout = Duration::from_secs(secs);
+            }
+            let browser = Browser::new(options)?;
+
+            let api_url = web2md::registry_api_url(reg, &name);
+            let body = browser.fetch_ignore_robots(&api_url)
+                .await
+                .with_context(|| format!("Failed to fetch {} API response for '{}'", reg.label(), name))?;
+            let info = web2md::parse_registry_response(reg, &body)
+                .with_context(|| format!("Failed to parse {} response for '{}'", reg.label(), name))?;
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&info)?);
+            } else {
+                println!("{}", web2md::package_info_to_markdown(&info));
             }
         }
     }
@@ -2253,6 +2359,40 @@ async fn run_stdio_mcp(server: &McpServer) -> Result<()> {
     Ok(())
 }
 
+/// Check if a URL's domain matches any of the provided domain filters.
+fn domain_matches_any(url: &str, domains: &[String]) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    domains.iter().any(|d| {
+        let d = d.trim_start_matches("www.");
+        host == d || host.ends_with(&format!(".{d}"))
+    })
+}
+
+/// Split Markdown by heading lines, inserting a separator between sections.
+/// Each section starts with its heading. Sections are separated by `\n\n---\n\n`.
+fn chunk_markdown_by_headings(md: &str) -> String {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+
+    for line in md.lines() {
+        if line.starts_with('#') && !current.is_empty() {
+            chunks.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    chunks.join("\n---\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2390,5 +2530,43 @@ mod tests {
         let name = url_to_filename("https://example.com/search?q=rust&page=2");
         assert!(name.starts_with("example.com_search"));
         assert!(name.ends_with(".md"));
+    }
+
+    #[test]
+    fn domain_matches_exact_and_subdomain() {
+        assert!(domain_matches_any("https://github.com/repo", &["github.com".to_string()]));
+        assert!(domain_matches_any("https://docs.github.com/page", &["github.com".to_string()]));
+        assert!(!domain_matches_any("https://example.com", &["github.com".to_string()]));
+    }
+
+    #[test]
+    fn domain_matches_strips_www_prefix() {
+        assert!(domain_matches_any("https://www.rust-lang.org", &["rust-lang.org".to_string()]));
+        assert!(domain_matches_any("https://rust-lang.org", &["www.rust-lang.org".to_string()]));
+    }
+
+    #[test]
+    fn chunk_markdown_splits_by_headings() {
+        let md = "# Title\n\nIntro text\n\n## Section A\n\nContent A\n\n## Section B\n\nContent B";
+        let chunked = chunk_markdown_by_headings(md);
+        assert!(chunked.contains("---"));
+        assert!(chunked.contains("# Title"));
+        assert!(chunked.contains("## Section A"));
+        assert!(chunked.contains("## Section B"));
+    }
+
+    #[test]
+    fn chunk_markdown_single_heading_no_separator() {
+        let md = "# Only Heading\n\nContent here";
+        let chunked = chunk_markdown_by_headings(md);
+        assert!(!chunked.contains("---"));
+    }
+
+    #[test]
+    fn sup_sub_converted_to_markdown() {
+        let html = "<p>H<sub>2</sub>O and E=mc<sup>2</sup></p>";
+        let md = web2md::PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
+        assert!(md.contains("~(2)"), "sub should be ~(2), got: {md}");
+        assert!(md.contains("^(2)"), "sup should be ^(2), got: {md}");
     }
 }

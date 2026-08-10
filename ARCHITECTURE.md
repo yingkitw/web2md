@@ -49,9 +49,10 @@ lib.rs
   ├── structured.rs  : **Domain-specific extractors** — `extract_recipe`, `extract_faq`, `extract_job`, `extract_event`. Walk JSON-LD blocks directly; render deterministic Markdown with YAML frontmatter.
   ├── diff_markdown.rs : **Page diffing** — LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
   ├── branding.rs    : **Brand/design profile** — deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
-  ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product` from HTML/JSON-LD; output via `--format links`/`images`/`product`.
+  ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product`, `extract_videos` from HTML/JSON-LD; output via `--format links`/`images`/`product`/`video`.
   ├── redact.rs      : **PII redaction** — regex-based redaction of emails, phones, SSNs, credit cards; invoked by `--pii-redact`.
   ├── search.rs      : **Web search** — DuckDuckGo HTML endpoint scraping; `parse_ddg_results` extracts titles/URLs/snippets; `decode_ddg_redirect` resolves DDG redirect links; `results_to_markdown` renders numbered links with blockquote snippets.
+  ├── docs.rs        : **Library doc fetcher** — fetches README + metadata from crates.io, npm, or PyPI public APIs (no API key); `parse_registry_response` extracts PackageInfo from each registry's JSON format; `package_info_to_markdown` renders Markdown with metadata table + README.
   ├── readability.rs : **Mozilla Readability.js extraction** (gated behind `--features readability`, opt-in via `--readability`) — wraps `readabilityrs`; cleans article HTML before the conversion pipeline; falls back to passthrough when Readability declines
   ├── headless.rs    : **Opt-in headless Chrome / Chromium rendering** (gated behind `--features headless`) — wraps `headless_chrome::Browser`; `render_url(url, HeadlessOptions)` runs on `spawn_blocking`; returns clear "rebuild with `--features headless`" error when feature is off
   ├── corpus.rs      : **Local BM25 corpus index** (`corpus` subcommand) — tokenizes `.md` files, persists inverted index to `.web2md-index.json`, ranks queries with `idf * (tf*(k1+1)) / (tf + k1*(1 - b + b*len/avgdl))` (k1=1.2, b=0.75)

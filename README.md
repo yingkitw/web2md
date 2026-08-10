@@ -139,6 +139,11 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 - Page **diff**, **watch** mode, **webhook** delivery
 - **PII redaction**, proxy support, basic auth, mobile User-Agent
 - **Local BM25 corpus** index over Markdown directories
+- **Library docs fetcher** (`docs` subcommand) — README + metadata from crates.io, npm, or PyPI
+- **Video extraction** (`--format video`) — `<video>`, `<source>`, YouTube/Vimeo embeds as JSON
+- **Links/images summary** (`--links-summary`, `--images-summary`) — append deduplicated lists to Markdown
+- **Markdown chunking** (`--chunk`) — split by headings for RAG pipelines
+- **Domain filtering** on `search` (`--include-domains`, `--exclude-domains`)
 - **MCP server** with structured metadata
 
 See [SPEC.md](SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for full protocol and design details.

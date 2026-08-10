@@ -6,7 +6,7 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 
 ## Non-Goals
 
-- Full DOM rendering / browser engine semantics (no headless Chrome/Firefox)
+- Full DOM rendering / browser engine semantics in the default build (headless Chrome is an opt-in `--features headless` backend)
 - Screenshot or PDF generation
 - Session/cookie persistence across requests
 - Replacing the in-house HTML-to-Markdown converter with third-party crates (`htmd`, `html2md`, etc.)
@@ -79,11 +79,10 @@ web2md <URL>
 web2md fetch <URL> [FLAGS]
   --max-length N       Truncate output after N characters
   --max-tokens N       Cap output by approximate token budget (≈ 4 chars / token); prefers paragraph boundaries
-  --max-length N       Truncate output after N characters
   --timeout SECONDS    Request timeout (default: 30)
   --include-images     Emit Markdown image references
   --no-comments         Skip forum/thread comment extraction
-  --no-tables           Skip HTML tables in output
+  --no-tables           Strip HTML tables from output
   --no-links            Emit link text only (strip Markdown [text](url))
   --cookie NAME=VAL    Send cookie (repeatable)
   --header "Name: Val" Send custom header (repeatable)
@@ -150,6 +149,8 @@ web2md search <QUERY> [FLAGS]
   -l, --limit N          Maximum number of results to return
   --json                 Output as JSON array instead of Markdown
   --fetch                Fetch and convert each result URL to Markdown
+  --include-domains D    Only include results from these domains (repeatable)
+  --exclude-domains D    Exclude results from these domains (repeatable)
   --cookie NAME=VAL      Send cookie (repeatable)
   -H, --header "Name: Val"  Send custom header (repeatable)
 
@@ -170,6 +171,9 @@ web2md batch <FILE> [FLAGS]
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
   --ignore-robots       No-op (robots.txt is off by default; kept for backward compatibility)
+  --links-summary        Append deduplicated link list at end of Markdown output
+  --images-summary       Append deduplicated image list at end of Markdown output
+  --chunk                Split Markdown by headings for RAG pipelines (sections separated by ---)
   --proxy URL           Route requests through HTTP/SOCKS proxy
   --auth USER:PASS      Basic authentication credentials
 
@@ -178,6 +182,12 @@ web2md corpus index <DIR> [--output PATH]
 
 # Query a corpus directory for a free-form query (returns top-N with snippets)
 web2md corpus query <DIR> <QUERY> [-l LIMIT] [--json]
+
+# Fetch README + metadata from a package registry (≈ Context7, no API key)
+web2md docs <NAME> [FLAGS]
+  -r, --registry NAME    Registry: crates, npm, or pypi (default: crates)
+  -t, --timeout SECONDS  Request timeout
+  --json                 Output structured JSON instead of Markdown
 
 # MCP server (stdio JSON-RPC)
 web2md mcp

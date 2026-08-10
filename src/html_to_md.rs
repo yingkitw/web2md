@@ -216,9 +216,26 @@ fn convert_element(
             convert_children(element, &mut inner, false, false, in_anchor);
             let trimmed = inner.trim();
             if !trimmed.is_empty() {
+                ensure_inline_break(out);
                 out.push_str("~~");
                 out.push_str(trimmed);
                 out.push_str("~~");
+            }
+        }
+        "sup" => {
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false, in_anchor);
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!("^({trimmed})"));
+            }
+        }
+        "sub" => {
+            let mut inner = String::new();
+            convert_children(element, &mut inner, false, false, in_anchor);
+            let trimmed = inner.trim();
+            if !trimmed.is_empty() {
+                out.push_str(&format!("~({trimmed})"));
             }
         }
         "blockquote" | "q" | "cite" => {
@@ -253,7 +270,7 @@ fn convert_element(
             out.push_str(&convert_table(element));
             out.push('\n');
         }
-        "html" | "head" | "body" | "span" | "label" | "small" | "sub" | "sup" | "time"
+        "html" | "head" | "body" | "span" | "label" | "small" | "time"
         | "abbr" | "mark" | "td" | "th" | "tr" | "tbody" | "thead" | "tfoot" | "dl" | "dt"
         | "dd" | "form" | "input" | "button" | "select" | "option" | "textarea" | "video"
         | "audio" | "source" | "iframe" | "noscript" | "script" | "style" | "meta" | "link"

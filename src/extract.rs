@@ -298,6 +298,148 @@ fn resolve_url(href: &str, base_url: &str) -> Option<String> {
     base.join(href).ok().map(|u| u.to_string())
 }
 
+/// A single video extracted from the page.
+#[derive(Debug, Serialize)]
+pub struct VideoEntry {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
+}
+
+/// Extract all video URLs from HTML: `<video src>`, `<video><source src>`,
+/// and `<iframe>` embeds (YouTube, Vimeo, etc.). URLs are resolved against `base_url`.
+/// Returns deduplicated entries in document order.
+pub fn extract_videos(html: &str, base_url: &str) -> Vec<VideoEntry> {
+    let mut videos = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut pos = 0;
+
+    // Extract from <video src="..."> and <video><source src="...">
+    while pos < html.len() {
+        let Some(start) = find_ci(&html[pos..], "<video") else {
+            break;
+        };
+        let start = pos + start;
+        let Some(end) = html[start..].find('>') else {
+            break;
+        };
+        let tag = &html[start..=start + end];
+        let tag_end = start + end + 1;
+
+        // Check for src attribute on <video> tag itself
+        if let Some(src) = extract_attr(tag, "src")
+            && let Some(resolved) = resolve_url(&src, base_url)
+                && seen.insert(resolved.clone()) {
+                    let poster = extract_attr(tag, "poster")
+                        .filter(|s| !s.is_empty())
+                        .and_then(|s| resolve_url(&s, base_url));
+                    videos.push(VideoEntry {
+                        url: resolved,
+                        source: Some("video".to_string()),
+                        title: None,
+                        poster,
+                    });
+                }
+
+        // Look for <source> tags within the <video> element
+        let video_close = find_ci(&html[tag_end..], "</video>").unwrap_or(200);
+        let video_inner = &html[tag_end..tag_end + video_close.min(html.len() - tag_end)];
+        let mut source_pos = 0;
+        while source_pos < video_inner.len() {
+            let Some(s_start) = find_ci(&video_inner[source_pos..], "<source") else {
+                break;
+            };
+            let s_start = source_pos + s_start;
+            let Some(s_end) = video_inner[s_start..].find('>') else {
+                break;
+            };
+            let source_tag = &video_inner[s_start..=s_start + s_end];
+            if let Some(src) = extract_attr(source_tag, "src")
+                && let Some(resolved) = resolve_url(&src, base_url)
+                    && seen.insert(resolved.clone()) {
+                        videos.push(VideoEntry {
+                            url: resolved,
+                            source: Some("source".to_string()),
+                            title: None,
+                            poster: None,
+                        });
+                    }
+            source_pos = s_start + s_end + 1;
+        }
+
+        pos = tag_end;
+    }
+
+    // Extract from <iframe> embeds (YouTube, Vimeo, etc.)
+    pos = 0;
+    while pos < html.len() {
+        let Some(start) = find_ci(&html[pos..], "<iframe") else {
+            break;
+        };
+        let start = pos + start;
+        let Some(end) = html[start..].find('>') else {
+            break;
+        };
+        let tag = &html[start..=start + end];
+        let tag_end = start + end + 1;
+
+        if let Some(src) = extract_attr(tag, "src")
+            && let Some(resolved) = resolve_url(&src, base_url)
+                && is_video_embed(&resolved)
+                    && seen.insert(resolved.clone()) {
+                        let source = embed_source_name(&resolved);
+                        videos.push(VideoEntry {
+                            url: resolved,
+                            source: Some(source.to_string()),
+                            title: None,
+                            poster: None,
+                        });
+                    }
+        pos = tag_end;
+    }
+
+    videos
+}
+
+/// Check if a URL is a known video embed (YouTube, Vimeo, Dailymotion, etc.).
+fn is_video_embed(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("youtube.com/embed/")
+        || lower.contains("youtube-nocookie.com/embed/")
+        || lower.contains("player.vimeo.com")
+        || lower.contains("dailymotion.com/embed")
+        || lower.contains("player.twitch.tv")
+        || lower.contains("wistia.com")
+        || lower.contains("loom.com/embed")
+    || lower.contains("videopress.com/embed")
+}
+
+/// Extract the platform name from a video embed URL.
+fn embed_source_name(url: &str) -> &'static str {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("youtube") {
+        "youtube"
+    } else if lower.contains("vimeo") {
+        "vimeo"
+    } else if lower.contains("dailymotion") {
+        "dailymotion"
+    } else if lower.contains("twitch") {
+        "twitch"
+    } else if lower.contains("wistia") {
+        "wistia"
+    } else if lower.contains("loom") {
+        "loom"
+    } else if lower.contains("videopress") {
+        "videopress"
+    } else {
+        "embed"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,5 +552,47 @@ mod tests {
             </script></head><body></body></html>"#;
         let product = extract_product(html).unwrap();
         assert_eq!(product.image.as_deref(), Some("https://x.com/a.jpg"));
+    }
+
+    #[test]
+    fn extract_videos_from_video_src() {
+        let html = r#"<video src="https://example.com/video.mp4" poster="https://example.com/poster.jpg"></video>"#;
+        let videos = extract_videos(html, "https://example.com/");
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].url, "https://example.com/video.mp4");
+        assert_eq!(videos[0].source.as_deref(), Some("video"));
+        assert_eq!(videos[0].poster.as_deref(), Some("https://example.com/poster.jpg"));
+    }
+
+    #[test]
+    fn extract_videos_from_source_tags() {
+        let html = r#"<video><source src="https://example.com/video.webm" type="video/webm"><source src="https://example.com/video.mp4" type="video/mp4"></video>"#;
+        let videos = extract_videos(html, "https://example.com/");
+        assert_eq!(videos.len(), 2);
+        assert_eq!(videos[0].url, "https://example.com/video.webm");
+        assert_eq!(videos[0].source.as_deref(), Some("source"));
+        assert_eq!(videos[1].url, "https://example.com/video.mp4");
+    }
+
+    #[test]
+    fn extract_videos_from_iframe_embeds() {
+        let html = r#"<iframe src="https://www.youtube.com/embed/dQw4w9WgXcQ"></iframe>"#;
+        let videos = extract_videos(html, "https://example.com/");
+        assert_eq!(videos.len(), 1);
+        assert_eq!(videos[0].source.as_deref(), Some("youtube"));
+    }
+
+    #[test]
+    fn extract_videos_skips_non_video_iframes() {
+        let html = r#"<iframe src="https://example.com/ads.html"></iframe>"#;
+        let videos = extract_videos(html, "https://example.com/");
+        assert_eq!(videos.len(), 0);
+    }
+
+    #[test]
+    fn extract_videos_deduplicates() {
+        let html = r#"<video src="https://example.com/video.mp4"></video><video src="https://example.com/video.mp4"></video>"#;
+        let videos = extract_videos(html, "https://example.com/");
+        assert_eq!(videos.len(), 1);
     }
 }

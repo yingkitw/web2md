@@ -1,6 +1,8 @@
 # Rust build artifacts
 /target/
 /Cargo.lock
+AGENTS.md
+MEMORY.md
 
 # IDE
 .idea/
