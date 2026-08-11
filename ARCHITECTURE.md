@@ -8,13 +8,17 @@ main.rs
   ├── <URL> (default) → browse_loop → Browser → PageToMarkdown → ANSI renderer → terminal
   ├── fetch command   → Browser → inline_iframes → PageToMarkdown → stdout
   │                     ├── --depth N → parallel BFS crawl via crawl.rs (same-origin links, 10 concurrent) → multiple Markdown outputs
+  │                     ├── --sitemap-only → crawl from sitemap.xml URLs only (no page-link following; requires --depth > 0)
   │                     ├── --format json → extract_page_metadata → structured JSON output
   │                     ├── --format csv → extract_page_metadata → Trafilatura-style CSV row
   │                     ├── --format tei → extract_page_metadata → TEI XML document
   │                     ├── --format branding → branding::extract_branding → deterministic design profile JSON
   │                     ├── --format links → extract::extract_links → JSON array of {url, text}
-  │                     ├── --format images → extract::extract_images → JSON array of {src, alt, title}
+  │                     ├── --format images → extract::extract_images → JSON array of {src, alt, title} (includes CSS background-image URLs)
   │                     ├── --format product → extract::extract_product → structured JSON from JSON-LD Product
+  │                     ├── --format video → extract::extract_videos → JSON array with title/thumbnail/duration
+  │                     ├── --format attributes → extract::extract_attributes (--attr selector:attribute) → JSON
+  │                     ├── --format menu → extract::extract_menu → JSON-LD Menu sections/items
   │                     ├── --include-selector → filter_by_include_selectors (scraper CSS) → kept elements only
   │                     ├── --pii-redact → redact::redact_pii → regex PII redaction on output
   │                     ├── --mobile → mobile User-Agent string for HTTP requests
@@ -40,8 +44,8 @@ main.rs
   └── mcp command     → McpServer → Browser → inline_iframes → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **per-host rate-limit clock**; sitemap XML parsing; URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
-  ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `prune()`, `invalidate()`
+  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **`--no-cache` / `--cache-max-age`**; **per-host rate-limit clock**; sitemap XML parsing; URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
+  ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `fetched_at()`, `prune()`, `invalidate()`
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
   ├── robots.rs      : robots.txt parser (Disallow, Crawl-delay), per-origin cache in Browser (off by default)
@@ -49,7 +53,7 @@ lib.rs
   ├── structured.rs  : **Domain-specific extractors** — `extract_recipe`, `extract_faq`, `extract_job`, `extract_event`. Walk JSON-LD blocks directly; render deterministic Markdown with YAML frontmatter.
   ├── diff_markdown.rs : **Page diffing** — LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
   ├── branding.rs    : **Brand/design profile** — deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
-  ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product`, `extract_videos` from HTML/JSON-LD; output via `--format links`/`images`/`product`/`video`.
+  ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product`, `extract_videos`, `extract_attributes`, `extract_menu` from HTML/JSON-LD; output via `--format links`/`images`/`product`/`video`/`attributes`/`menu`.
   ├── redact.rs      : **PII redaction** — regex-based redaction of emails, phones, SSNs, credit cards; invoked by `--pii-redact`.
   ├── search.rs      : **Web search** — DuckDuckGo HTML endpoint scraping; `parse_ddg_results` extracts titles/URLs/snippets; `decode_ddg_redirect` resolves DDG redirect links; `results_to_markdown` renders numbered links with blockquote snippets.
   ├── docs.rs        : **Library doc fetcher** — fetches README + metadata from crates.io, npm, or PyPI public APIs (no API key); `parse_registry_response` extracts PackageInfo from each registry's JSON format; `package_info_to_markdown` renders Markdown with metadata table + README.
@@ -58,7 +62,7 @@ lib.rs
   ├── corpus.rs      : **Local BM25 corpus index** (`corpus` subcommand) — tokenizes `.md` files, persists inverted index to `.web2md-index.json`, ranks queries with `idf * (tf*(k1+1)) / (tf + k1*(1 - b + b*len/avgdl))` (k1=1.2, b=0.75)
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding, `strip_html_tags`)
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
-  ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables, inline formatting)
+  ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables with td-row header promotion, angle-escaped URLs, inline formatting)
   ├── markdown.rs  : PageToMarkdown — `ConvertOptions` (precision/recall/comments); page-type profiles; `extraction_quality()` / `detect_page_type()`; main-content heuristics; forum comments; product JSON-LD details; dedup; link absolutization
   └── mcp.rs       : JSON-RPC server; `PageMetadata`; content signals (quality, page_type, stopword language fallback, fingerprint, word/char counts); `to_csv` / `to_tei` / `to_xml`; `language_matches`
 
@@ -133,7 +137,7 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
 
 6. **No-LLM extraction across the board**: All "smart" output shaping (`--topic`, `--summary`, `--max-tokens`, structured extractors, branding, watch change-detection) is implemented locally via regex, TF-IDF, JSON-LD parsing, and simhash fingerprinting. The bet is that deterministic local extraction closes 80–90% of Firecrawl's value at zero credit cost, with deterministic behavior and full offline support — and that the remaining 10–20% (genuine LLM judgment, browser rendering, search) can wait until/unless demand warrants the dependency cost.
 
-7. **Two cache layers, one API**: In-memory (`Browser.cache`, gated by `--cache-ttl`) and on-disk (`--cache-dir`, sha256-keyed JSON files under the directory) share the same TTL semantics. The on-disk layer is checked first when configured; the in-memory cache remains the default for ephemeral CLI runs.
+7. **Two cache layers, one API**: In-memory (`Browser.cache`, gated by `--cache-ttl`) and on-disk (`--cache-dir`, sha256-keyed JSON files under the directory) share the same TTL semantics. The on-disk layer is checked first when configured; the in-memory cache remains the default for ephemeral CLI runs. `--no-cache` skips both read and write; `--cache-max-age` tightens lookup freshness without changing store TTL.
 
 ## Dependencies
 
@@ -170,7 +174,8 @@ No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates 
 
 ## Test Coverage
 
-- **328 tests** pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
+- Tests pass across `cargo test` (lib unit tests, inline main tests, integration tests in `tests/integration.rs`)
 - All public modules have unit tests; new HTTP-using flows have mockito-backed integration tests
 - New modules in the v4 cycle (`readability`, `corpus`, `headless`) ship with their own unit suites; the readability and corpus modules also have end-to-end integration tests
+- v6 adds coverage for CSS background images, `--no-cache`, `--cache-max-age`, td-row table header promotion, and angle-bracket URL escaping
 - `cargo clippy` passes with **0 warnings** (default features and `--features headless`)

@@ -57,6 +57,7 @@ When URL filtering is enabled, Web2MD also loads `~/.web2md/blacklist.txt` if it
 - External links, `mailto:`, fragments, and blacklisted URLs are not followed
 - Output: `--output <dir>` writes one `.md` file per page; without `--output`, pages are printed separated by `---` headers
 - Requires markdown output format (`--format json` / `--format html` are incompatible with `--depth`)
+- **`--sitemap-only`**: with `--depth > 0`, fetch `{origin}/sitemap.xml` and convert those URLs only — do not follow in-page links (≈ Firecrawl sitemap-only crawl)
 
 ## robots.txt
 
@@ -97,6 +98,9 @@ web2md fetch <URL> [FLAGS]
   --format links       Output all links as JSON (≈ Firecrawl `links` format)
   --format images      Output all images as JSON (≈ Firecrawl `images` format)
   --format product     Output structured product from JSON-LD (≈ Firecrawl `product` format, deterministic)
+  --format video       Output videos as JSON (title/thumbnail/duration when present)
+  --format attributes  Output HTML attribute values (requires `--attr selector:attribute`)
+  --format menu        Output restaurant menu from JSON-LD Menu (≈ Firecrawl `menu`, deterministic)
   --type TYPE          Domain extractor: recipe | faq | job | event (LLM-free JSON-LD rendering)
   --topic QUERY        Keep only paragraphs relevant to this query (LLM-free; ≈ Firecrawl `highlights`)
   --summary N          Return top-N sentences by TF-IDF + positional scoring (LLM-free; ≈ Firecrawl `summary`)
@@ -112,8 +116,11 @@ web2md fetch <URL> [FLAGS]
   --rate RPS           Per-host requests-per-second cap (independent rate clock per host)
   --cache-ttl SECONDS  Cache fetched pages for N seconds (0 = disabled)
   --cache-dir DIR      Persist fetched pages as JSON files (sha256 → file) under DIR; survives restarts
+  --no-cache           Bypass cache read/write for this request (≈ Firecrawl `ignoreCache`)
+  --cache-max-age N    Only reuse cache entries younger than N seconds (≈ Firecrawl `minAge`)
   --webhook URL        POST result JSON to this webhook URL after fetch (n8n/Make/Zapier)
   --include-selector SEL  Keep only HTML elements matching CSS selector (e.g. article, .content); repeatable
+  --attr SEL:ATTR      For `--format attributes`: CSS selector + attribute (e.g. a:href); repeatable
   --pii-redact         Redact PII (emails, phones, SSNs, credit cards) from output
   --mobile             Use mobile User-Agent for the request
   --proxy URL          Route requests through HTTP/SOCKS proxy (e.g. http://proxy:8080, socks5://proxy:1080)
@@ -126,6 +133,7 @@ web2md fetch <URL> [FLAGS]
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
   --depth N             Recursively crawl same-origin links up to N levels (markdown only, parallel BFS)
+  --sitemap-only        With --depth > 0: fetch sitemap.xml URLs only (no page-link following)
   --ignore-robots       No-op (robots.txt is off by default; kept for backward compatibility)
 
 # Sitemap discovery
@@ -420,6 +428,9 @@ When the JSON-LD is missing or ambiguous (multiple distinct blocks of the same t
 
 When `--cache-dir <dir>` is set alongside `--cache-ttl`, fetched pages persist as `{sha256(url)}.json` files inside `dir`. Same TTL semantics as the in-memory cache; survives process restarts; shared across runs. `--cache-dir` with `cache_ttl = 0` disables both layers.
 
+- `--no-cache`: skip both cache lookup and store for this request (always hit the live URL).
+- `--cache-max-age N`: only reuse an entry if it is younger than N seconds (stricter than `--cache-ttl` for the current request).
+
 ## Per-host Rate Limiting
 
 `--rate <req/s>` enforces an independent token-bucket per host. The heavier of the global `--delay` (or robots.txt `Crawl-delay`) and the per-host clock applies on every request. Per-host clocks are keyed by host name only, so two different hosts queried in parallel will not block each other.
@@ -449,14 +460,14 @@ No LLM, fully deterministic (≈ Firecrawl `links` format, free).
 
 ## Images Extraction (`--format images`)
 
-`extract_images` walks all `<img>` tags in the HTML and emits a JSON array of `{src, alt?, title?}` objects:
+`extract_images` walks all `<img>` tags and CSS `background-image` / `background: url(...)` references (inline `style` attributes and `<style>` blocks) and emits a JSON array of `{src, alt?, title?}` objects:
 
 - Relative `src` URLs are resolved to absolute using the page URL as base.
 - `data:` URLs are skipped.
 - Images are deduplicated by `src` (first occurrence kept) in document order.
-- `alt` and `title` are included when present and non-empty.
+- `alt` and `title` are included when present and non-empty (CSS backgrounds have neither).
 
-No LLM, fully deterministic (≈ Firecrawl `images` format, free).
+No LLM, fully deterministic (≈ Firecrawl `images` format + v2.11 background image extraction, free).
 
 ## Product Extraction (`--format product`)
 
@@ -484,6 +495,46 @@ No LLM, fully deterministic (≈ Firecrawl `images` format, free).
 - Returns an error if no `Product` JSON-LD is found on the page.
 
 No LLM, fully deterministic (≈ Firecrawl `product` format, free).
+
+## Video Extraction (`--format video`)
+
+`extract_videos` collects `<video src>`, nested `<source>`, known iframe embeds (YouTube/Vimeo/…), and JSON-LD `VideoObject` blocks into a JSON array of `{url, source?, title?, thumbnail?, duration?}`:
+
+- `thumbnail` comes from the `<video poster>` attribute or JSON-LD `thumbnailUrl`.
+- `title` comes from the element `title` attribute or JSON-LD `name`.
+- `duration` is seconds (plain number or ISO-8601 `PT…`).
+- JSON-LD entries enrich matching HTML videos or add standalone entries.
+
+No LLM, fully deterministic (≈ Firecrawl `document.videos[]`, free).
+
+## Attributes Extraction (`--format attributes`)
+
+`extract_attributes` takes one or more `--attr selector:attribute` pairs (split on the last `:`) and emits:
+
+```json
+[
+  {"selector": "a", "attribute": "href", "values": ["/about", "/contact"]},
+  {"selector": "img", "attribute": "src", "values": ["/hero.png"]}
+]
+```
+
+Uses `scraper` CSS selectors. Values are trimmed, non-empty, and deduplicated in document order. Requires at least one `--attr` (≈ Firecrawl `attributes` format, free).
+
+## Menu Extraction (`--format menu`)
+
+`extract_menu` reads JSON-LD `Menu` / `MenuSection` / `MenuItem` blocks (including `@graph`) and emits:
+
+```json
+{
+  "name": "Dinner",
+  "currency": "USD",
+  "sections": [
+    {"name": "Mains", "items": [{"name": "Pasta", "price": "14.50", "currency": "USD"}]}
+  ]
+}
+```
+
+Deterministic restaurant-menu extraction (≈ Firecrawl `menu` format without LLM). Errors if no Menu JSON-LD is present.
 
 ## Include Selector (`--include-selector`)
 

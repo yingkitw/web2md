@@ -44,6 +44,10 @@ enum OutputFormat {
     Product,
     /// Emit all videos as JSON (≈ Firecrawl `video` format, deterministic)
     Video,
+    /// Emit HTML attribute values for selector:attribute pairs (≈ Firecrawl `attributes`)
+    Attributes,
+    /// Emit structured restaurant menu from JSON-LD Menu (≈ Firecrawl `menu`, deterministic)
+    Menu,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -123,6 +127,12 @@ enum Commands {
         /// Cache TTL in seconds (0 = disabled, default: 0)
         #[arg(long)]
         cache_ttl: Option<u64>,
+        /// Bypass cache for this request (always fetch live URL)
+        #[arg(long)]
+        no_cache: bool,
+        /// Only use cache entries younger than N seconds (overrides --cache-ttl for lookup)
+        #[arg(long)]
+        cache_max_age: Option<u64>,
         /// Extract only main content from <article>, <main>, or [role=main] elements
         #[arg(long)]
         main_content: bool,
@@ -141,6 +151,9 @@ enum Commands {
         /// Recursively crawl same-origin links up to N levels deep (markdown output only)
         #[arg(long, default_value = "0")]
         depth: u32,
+        /// Use sitemap.xml URLs only (no page link following); requires --depth > 0
+        #[arg(long)]
+        sitemap_only: bool,
         /// Ignore robots.txt disallow rules and crawl-delay
         #[arg(long)]
         ignore_robots: bool,
@@ -174,6 +187,9 @@ enum Commands {
         /// CSS-like selector to keep only matching HTML elements (e.g. `article`, `.content`); can be given multiple times
         #[arg(long)]
         include_selector: Vec<String>,
+        /// For `--format attributes`: `selector:attribute` pairs (e.g. `a:href`, `img:src`); repeatable
+        #[arg(long)]
+        attr: Vec<String>,
         /// Redact PII (emails, phone numbers, SSNs, credit cards) from output
         #[arg(long)]
         pii_redact: bool,
@@ -269,6 +285,12 @@ enum Commands {
         /// Cache TTL in seconds (0 = disabled, default: 0)
         #[arg(long)]
         cache_ttl: Option<u64>,
+        /// Bypass cache for this request (always fetch live URL)
+        #[arg(long)]
+        no_cache: bool,
+        /// Only use cache entries younger than N seconds (overrides --cache-ttl for lookup)
+        #[arg(long)]
+        cache_max_age: Option<u64>,
         /// Extract only main content from <article>, <main>, or [role=main] elements
         #[arg(long)]
         main_content: bool,
@@ -423,6 +445,12 @@ enum Commands {
         /// Cache TTL in seconds (0 = disabled, default: 0)
         #[arg(long)]
         cache_ttl: Option<u64>,
+        /// Bypass cache for this request (always fetch live URL)
+        #[arg(long)]
+        no_cache: bool,
+        /// Only use cache entries younger than N seconds (overrides --cache-ttl for lookup)
+        #[arg(long)]
+        cache_max_age: Option<u64>,
         /// Extract only main content from <article>, <main>, or [role=main] elements
         #[arg(long)]
         main_content: bool,
@@ -583,6 +611,8 @@ fn format_label(format: &OutputFormat) -> &'static str {
         OutputFormat::Images => "images",
         OutputFormat::Product => "product",
         OutputFormat::Video => "video",
+        OutputFormat::Attributes => "attributes",
+        OutputFormat::Menu => "menu",
     }
 }
 
@@ -698,12 +728,15 @@ async fn main() -> Result<()> {
             delay,
             keep_header,
             cache_ttl,
+            no_cache,
+            cache_max_age,
             main_content,
             output: output_file,
             frontmatter,
             exclude_selector,
             no_blacklist,
             depth,
+            sitemap_only,
             ignore_robots,
             blacklist_file,
             no_user_blacklist,
@@ -715,6 +748,7 @@ async fn main() -> Result<()> {
             rate,
             webhook,
             include_selector,
+            attr,
             pii_redact,
             mobile,
             proxy,
@@ -742,6 +776,10 @@ async fn main() -> Result<()> {
             if let Some(dir) = cache_dir {
                 options.cache_dir = Some(std::path::PathBuf::from(dir));
             }
+            options.no_cache = no_cache;
+            if let Some(max_age) = cache_max_age {
+                options.cache_max_age = Some(Duration::from_secs(max_age));
+            }
             options.host_rate_limit = rate;
             if mobile {
                 options.user_agent = MOBILE_USER_AGENT.to_string();
@@ -754,6 +792,9 @@ async fn main() -> Result<()> {
             }
             let browser = Browser::new(options)?;
 
+            if sitemap_only && depth == 0 {
+                anyhow::bail!("--sitemap-only requires --depth > 0");
+            }
             if depth > 0 {
                 if !matches!(format, OutputFormat::Markdown) {
                     anyhow::bail!("--depth requires markdown output format");
@@ -762,6 +803,7 @@ async fn main() -> Result<()> {
                     &browser,
                     &url,
                     depth,
+                    sitemap_only,
                     max_length,
                     include_images,
                     keep_header,
@@ -892,6 +934,21 @@ async fn main() -> Result<()> {
                     OutputFormat::Video => {
                         let videos = web2md::extract_videos(&html, &url);
                         (serde_json::to_string_pretty(&videos)?, None)
+                    }
+                    OutputFormat::Attributes => {
+                        if attr.is_empty() {
+                            anyhow::bail!(
+                                "--format attributes requires at least one --attr selector:attribute (e.g. --attr a:href)"
+                            );
+                        }
+                        let results = web2md::extract_attributes(&html, &attr);
+                        (serde_json::to_string_pretty(&results)?, None)
+                    }
+                    OutputFormat::Menu => {
+                        match web2md::extract_menu(&html) {
+                            Some(menu) => (serde_json::to_string_pretty(&menu)?, None),
+                            None => anyhow::bail!("no JSON-LD Menu found on this page"),
+                        }
                     }
                     OutputFormat::Html => {
                         if lang.is_some() {
@@ -1042,6 +1099,8 @@ async fn main() -> Result<()> {
                             OutputFormat::Images => unreachable!(),
                             OutputFormat::Product => unreachable!(),
                             OutputFormat::Video => unreachable!(),
+                            OutputFormat::Attributes => unreachable!(),
+                            OutputFormat::Menu => unreachable!(),
                         };
                         (out, fm_meta)
                     }
@@ -1120,6 +1179,8 @@ async fn main() -> Result<()> {
             delay,
             keep_header,
             cache_ttl,
+            no_cache,
+            cache_max_age,
             main_content,
             no_blacklist,
             ignore_robots,
@@ -1137,6 +1198,11 @@ async fn main() -> Result<()> {
                 blacklist_file,
                 ignore_robots,
             );
+            let mut options = options;
+            options.no_cache = no_cache;
+            if let Some(max_age) = cache_max_age {
+                options.cache_max_age = Some(Duration::from_secs(max_age));
+            }
             browse_loop(url, options, include_images, keep_header, main_content).await?;
         }
         Some(Commands::Mcp) => {
@@ -1451,6 +1517,8 @@ async fn main() -> Result<()> {
             delay,
             keep_header,
             cache_ttl,
+            no_cache,
+            cache_max_age,
             main_content,
             output: output_dir,
             frontmatter,
@@ -1488,6 +1556,10 @@ async fn main() -> Result<()> {
                 ignore_robots,
             );
             let mut options = options;
+            options.no_cache = no_cache;
+            if let Some(max_age) = cache_max_age {
+                options.cache_max_age = Some(Duration::from_secs(max_age));
+            }
             if let Some(ref p) = proxy {
                 options.proxy = Some(p.clone());
             }
@@ -1593,7 +1665,7 @@ async fn main() -> Result<()> {
             timeout,
             json,
         }) => {
-            let reg = web2md::Registry::from_str(&registry)
+            let reg = web2md::Registry::parse(&registry)
                 .with_context(|| format!("Unknown registry '{}'. Use: crates, npm, or pypi", registry))?;
             let mut options = BrowserOptions::default();
             if let Some(secs) = timeout {
@@ -1626,6 +1698,7 @@ async fn crawl_fetch(
     browser: &Browser,
     start_url: &str,
     depth: u32,
+    sitemap_only: bool,
     max_length: Option<usize>,
     include_images: bool,
     keep_header: bool,
@@ -1642,8 +1715,6 @@ async fn crawl_fetch(
     const CONCURRENCY: usize = 10;
 
     let root = Url::parse(start_url).context("Invalid URL")?;
-    let start = normalize_crawl_url(start_url, start_url)
-        .unwrap_or_else(|| start_url.to_string());
 
     if let Some(dir) = output_dir {
         std::fs::create_dir_all(dir)?;
@@ -1651,7 +1722,36 @@ async fn crawl_fetch(
 
     let sem = Arc::new(Semaphore::new(CONCURRENCY));
     let mut visited = HashSet::new();
-    let mut current_level: Vec<String> = vec![start];
+
+    // For sitemap-only mode, fetch sitemap.xml and use those URLs as the initial set.
+    let mut current_level: Vec<String> = if sitemap_only {
+        let sitemap_url = format!(
+            "{}://{}/sitemap.xml",
+            root.scheme(),
+            root.host_str().unwrap_or("")
+        );
+        eprintln!("Fetching sitemap: {}", sitemap_url);
+        match browser.fetch(&sitemap_url).await {
+            Ok(xml) => {
+                let urls: Vec<String> = parse_sitemap_urls(&xml)
+                    .into_iter()
+                    .filter(|u| !browser.is_url_blocked(u))
+                    .collect();
+                eprintln!("Sitemap returned {} URL(s)", urls.len());
+                if urls.is_empty() {
+                    return Ok(());
+                }
+                urls
+            }
+            Err(e) => {
+                anyhow::bail!("Failed to fetch sitemap.xml: {}", e);
+            }
+        }
+    } else {
+        let start = normalize_crawl_url(start_url, start_url)
+            .unwrap_or_else(|| start_url.to_string());
+        vec![start]
+    };
     let mut succeeded = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
@@ -1705,7 +1805,7 @@ async fn crawl_fetch(
             let (url, outcome) = res.unwrap();
             match outcome {
                 Ok((html, _)) => {
-                    if level < depth {
+                    if level < depth && !sitemap_only {
                         for link in browser.same_origin_links(&html, &url, &root) {
                             let link_key =
                                 normalize_crawl_url(&link, &link).unwrap_or_else(|| link.clone());

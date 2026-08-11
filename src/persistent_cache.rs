@@ -46,6 +46,15 @@ impl PersistentCache {
         Some(entry.body)
     }
 
+    /// Return the `fetched_at` timestamp (unix millis) for a cached URL, if present.
+    pub fn fetched_at(&self, url: &str) -> Option<u64> {
+        let entry = self.read_entry(url).ok()?;
+        if !self.is_fresh(&entry) {
+            return None;
+        }
+        Some(entry.fetched_at)
+    }
+
     /// Store `body` under `url` in the cache. Overwrites any existing entry.
     pub fn put(&self, url: &str, body: &str) -> Result<()> {
         let entry = CacheEntry {

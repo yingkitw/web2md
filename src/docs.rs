@@ -16,7 +16,7 @@ pub enum Registry {
 }
 
 impl Registry {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "crates" | "crates.io" | "crate" | "rust" => Some(Registry::CratesIo),
             "npm" | "node" => Some(Registry::Npm),
@@ -251,15 +251,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_from_str_works() {
-        assert_eq!(Registry::from_str("crates"), Some(Registry::CratesIo));
-        assert_eq!(Registry::from_str("crates.io"), Some(Registry::CratesIo));
-        assert_eq!(Registry::from_str("rust"), Some(Registry::CratesIo));
-        assert_eq!(Registry::from_str("npm"), Some(Registry::Npm));
-        assert_eq!(Registry::from_str("node"), Some(Registry::Npm));
-        assert_eq!(Registry::from_str("pypi"), Some(Registry::Pypi));
-        assert_eq!(Registry::from_str("python"), Some(Registry::Pypi));
-        assert_eq!(Registry::from_str("unknown"), None);
+    fn registry_parse_works() {
+        assert_eq!(Registry::parse("crates"), Some(Registry::CratesIo));
+        assert_eq!(Registry::parse("crates.io"), Some(Registry::CratesIo));
+        assert_eq!(Registry::parse("rust"), Some(Registry::CratesIo));
+        assert_eq!(Registry::parse("npm"), Some(Registry::Npm));
+        assert_eq!(Registry::parse("node"), Some(Registry::Npm));
+        assert_eq!(Registry::parse("pypi"), Some(Registry::Pypi));
+        assert_eq!(Registry::parse("python"), Some(Registry::Pypi));
+        assert_eq!(Registry::parse("unknown"), None);
     }
 
     #[test]

@@ -134,7 +134,8 @@ fn convert_element(
                     .attr("title")
                     .map(|t| format!(" \"{t}\""))
                     .unwrap_or_default();
-                out.push_str(&format!("![{alt}]({src}{title})"));
+                let safe_src = escape_url_angles(src);
+                out.push_str(&format!("![{alt}]({safe_src}{title})"));
             }
         }
         "pre" => {
@@ -188,7 +189,8 @@ fn convert_element(
             let mut inner = String::new();
             convert_children(element, &mut inner, false, false, true);
             let label = link_label(element, &inner, href);
-            out.push_str(&format!("[{label}]({href})"));
+            let safe_href = escape_url_angles(href);
+            out.push_str(&format!("[{label}]({safe_href})"));
         }
         "strong" | "b" => {
             ensure_inline_break(out);
@@ -336,6 +338,8 @@ fn convert_list(element: ElementRef<'_>, out: &mut String, ordered: bool) {
 fn convert_table(element: ElementRef<'_>) -> String {
     let tr_sel = Selector::parse("tr").expect("valid selector");
     let cell_sel = Selector::parse("td, th").expect("valid selector");
+    // First non-empty row becomes the GFM header — including all-<td> rows
+    // (header promotion, Firecrawl v2.11 / Trafilatura parity).
     let rows: Vec<Vec<String>> = element
         .select(&tr_sel)
         .map(|tr| {
@@ -495,6 +499,12 @@ fn separate_adjacent_markdown(text: &str) -> String {
     text.replace(")[", ")\n[")
 }
 
+/// Escape `<` and `>` in URLs to prevent malformed Markdown link/image syntax.
+/// Common in URLs with query parameters like `?param=<value>`.
+fn escape_url_angles(url: &str) -> String {
+    url.replace('<', "%3C").replace('>', "%3E")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -633,6 +643,16 @@ mod tests {
     }
 
     #[test]
+    fn promotes_td_only_first_row_to_header() {
+        let md = parse_html(
+            "<table><tr><td>Name</td><td>Age</td></tr><tr><td>Ada</td><td>36</td></tr></table>",
+        );
+        assert!(md.contains("| Name | Age |"), "first td row should be header: {md}");
+        assert!(md.contains("| --- | --- |"), "GFM separator required after promoted header: {md}");
+        assert!(md.contains("| Ada | 36 |"), "body row retained: {md}");
+    }
+
+    #[test]
     fn parse_html_progressive_emits_multiple_blocks() {
         let html = r#"<body><div><h1>Title</h1><p>First</p><p>Second</p></div></body>"#;
         let mut blocks = Vec::new();
@@ -640,5 +660,13 @@ mod tests {
         assert!(blocks.len() >= 2, "expected multiple blocks, got {:?}", blocks);
         assert!(blocks.iter().any(|b| b.contains("Title")));
         assert!(blocks.iter().any(|b| b.contains("First")));
+    }
+
+    #[test]
+    fn escapes_angle_brackets_in_link_urls() {
+        let md = parse_html(r#"<a href="/search?q=<test>">Link</a>"#);
+        assert!(md.contains("%3C"), "expected %3C for < in URL, got: {md}");
+        assert!(md.contains("%3E"), "expected %3E for > in URL, got: {md}");
+        assert!(!md.contains("<test>"), "raw angle brackets should not appear in URL, got: {md}");
     }
 }

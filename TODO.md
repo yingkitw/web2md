@@ -114,10 +114,20 @@
 - [x] Opt-in headless browser backend (`--features headless`, `--headless` flag on `fetch`, `--chrome-path <path>`) — routes requests through a real Chrome / Chromium for SPAs and `/interact` parity with Firecrawl
 - [x] **Lean refactoring**: removed YouTube transcript, feed, JS interpreter modules; made `readability` an optional Cargo feature
 - [x] **Streaming output**: `fetch` streams HTTP chunks (stderr progress) and emits Markdown blocks to stdout incrementally via `convert_progressive_with` (default for plain Markdown)
+- [x] Background image extraction from CSS `background-image: url(...)` / `background: url(...)` (inline styles + `<style>` blocks) in `--format images`
+- [x] `--no-cache` flag — bypass cache read/write for a single request (Firecrawl `ignoreCache` parity)
+- [x] Table header promotion — first all-`<td>` row treated as GFM header (Firecrawl v2.11 table fix)
+- [x] Escape angle brackets in Markdown link/image URLs (`<`/`>` → `%3C`/`%3E`)
+- [x] `--sitemap-only` on `fetch --depth N` — crawl sitemap.xml URLs exclusively, no page-link following
+- [x] `--cache-max-age SECONDS` — only reuse cache entries younger than N seconds
+- [x] Word/character count fields on `PageMetadata` (`word_count` / `char_count`)
+- [x] `--format attributes` + `--attr selector:attribute` — Firecrawl attributes parity
+- [x] Richer `--format video` metadata (`title`, `thumbnail`, `duration`, JSON-LD VideoObject)
+- [x] `--format menu` — JSON-LD Menu / MenuSection / MenuItem → structured JSON
 
 ## In Progress
 
-_None — v5 cycle (links-summary, images-summary, video format, domain filters, chunk, sup/sub) is complete._
+_None — v7 cycle complete._
 
 ## Brainstorming
 
@@ -125,7 +135,7 @@ _Competitive gaps vs Trafilatura, Firecrawl, Readability.js, and rs-trafilatura:
 
 - PDF output format for archival pipelines — plain text done via `--format text`; PDF remains future work
 - `--include-links` element toggle (Trafilatura parity) — `--no-tables` and `--no-links` already implemented
-- Word/character count fields on `PageMetadata`
+- Word/character count fields on `PageMetadata` — ✅ Done (`word_count` / `char_count` via content signals)
 
 ### Brainstorming v2 — beating Firecrawl and Context7
 
@@ -241,3 +251,52 @@ Researched Firecrawl v2.9–v2.11, Jina Reader (2026-04), and Trafilatura v2.2.
 - Firecrawl Research Index (SaaS, arXiv corpus)
 - Jina `X-With-Generated-Alt` (VLM for alt text)
 - Jina PDF/Office uploads (requires file format parsers)
+
+### Brainstorming v6 — competitive intelligence (Aug 2026, round 2)
+
+Researched Firecrawl v2.11.0 release notes, Jina Reader 2026-04 OSS sync, and Trafilatura v2.2.0.
+
+**New gaps identified (deterministic, no LLM, no SaaS — all feasible locally):**
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 36 | Background image extraction from CSS `background-image: url(...)` — include in `--format images` output | Firecrawl v2.11 background image extraction | ✅ Done |
+| 37 | `--no-cache` flag on `fetch` — bypass cache for a single request | Firecrawl `ignoreCache` parameter | ✅ Done |
+| 38 | Table header promotion — first row with `td` cells promoted to header row | Firecrawl v2.11 table fix | ✅ Done |
+| 39 | Escape angle brackets in Markdown link URLs | Trafilatura v2.2 (#877) | ✅ Done |
+| 40 | `crawl --sitemap-only` — use sitemap URLs exclusively, don't follow page links | Firecrawl sitemap-only crawl mode | ✅ Done |
+| 41 | `--cache-max-age SECONDS` — only use cache if younger than N seconds | Firecrawl `minAge` parameter | ✅ Done |
+
+**Skipped (requires LLM, SaaS, or heavy deps — violates our constraint):**
+- Firecrawl `/agent` queries (LLM-powered, Spark model family)
+- Firecrawl `/monitor` web-scale always-on search (SaaS infrastructure)
+- Firecrawl Research Index (SaaS, arXiv corpus)
+- Firecrawl `question` format (LLM)
+- Firecrawl `highlights` format (LLM-backed relevance model)
+- Firecrawl `lockdown` mode (SaaS index serving)
+- Firecrawl `/parse` endpoint (requires PDF/DOCX parsers — deferred)
+- Jina ReaderLM-v2 model (1.5B parameter LLM)
+- Jina VLM image captioning (`x-with-generated-alt`)
+
+### Brainstorming v7 — next cycle candidates
+
+Deterministic gaps still open after v6 (no LLM / no SaaS):
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 42 | Word/character count fields on `PageMetadata` | Trafilatura metadata parity | ✅ Done |
+| 43 | `--format attributes` — extract named HTML attributes as JSON | Firecrawl `attributes` format | ✅ Done |
+| 44 | Richer `--format video` metadata (title, thumbnail, duration when present) | Firecrawl v2.11 `document.videos[]` | ✅ Done |
+| 45 | `--format menu` — JSON-LD Menu / MenuSection / MenuItem as structured JSON | Firecrawl `menu` format | ✅ Done |
+
+**Still deferred** (heavy deps or SaaS): PDF/DOCX parsing, screenshots, LLM question/highlights, Research Index.
+
+### Brainstorming v8 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 46 | Expand sitemap indexes recursively in `--sitemap-only` / `sitemap` | Firecrawl multi-sitemap crawl | 🔲 Planned |
+| 47 | `--format audio` — `<audio>` / `<source>` / known audio embeds as JSON | Firecrawl `audio` format | 🔲 Planned |
+| 48 | MCP tool parity for `attributes` / `menu` / `video` formats | Firecrawl MCP surface | 🔲 Planned |
+
+**Still deferred**: PDF/DOCX (`--format pdf` / `/parse`), screenshots, LLM formats.

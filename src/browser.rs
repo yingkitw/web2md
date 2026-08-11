@@ -68,6 +68,10 @@ pub struct BrowserOptions {
     pub proxy: Option<String>,
     /// Optional basic auth credentials (format: "user:password")
     pub basic_auth: Option<String>,
+    /// Bypass cache entirely for this request (always hit the live URL)
+    pub no_cache: bool,
+    /// Only use cached entries younger than this duration (None = use cache_ttl)
+    pub cache_max_age: Option<Duration>,
 }
 
 impl Default for BrowserOptions {
@@ -87,6 +91,8 @@ impl Default for BrowserOptions {
             extra_blacklist_files: Vec::new(),
             proxy: None,
             basic_auth: None,
+            no_cache: false,
+            cache_max_age: None,
         }
     }
 }
@@ -112,7 +118,7 @@ impl Clone for Browser {
             client: self.client.clone(),
             options: self.options.clone(),
             blacklist: self.blacklist.clone(),
-            last_request: Mutex::new(self.last_request.lock().unwrap().clone()),
+            last_request: Mutex::new(*self.last_request.lock().unwrap()),
             per_host_last: Mutex::new(self.per_host_last.lock().unwrap().clone()),
             cache: Mutex::new(self.cache.lock().unwrap().clone()),
             robots_cache: Mutex::new(self.robots_cache.lock().unwrap().clone()),
@@ -297,8 +303,9 @@ impl Browser {
 
     /// Fetch raw HTML from a URL
     pub async fn fetch(&self, url: &str) -> Result<String> {
-        // Check cache first
-        if !self.options.cache_ttl.is_zero()
+        // Check cache first (unless --no-cache is set)
+        if !self.options.no_cache
+            && !self.options.cache_ttl.is_zero()
             && let Some(cached) = self.lookup_cache(url) {
                 return Ok(cached);
             }
@@ -317,8 +324,9 @@ impl Browser {
 
         self.enforce_delay(robots_delay, parsed.host_str().unwrap_or("")).await;
         let body = self.fetch_raw(url).await?;
-        // Persist to persistent cache, if configured.
-        if let Some(cache) = &self.persistent_cache
+        // Persist to persistent cache, if configured and not bypassed.
+        if !self.options.no_cache
+            && let Some(cache) = &self.persistent_cache
             && let Err(e) = cache.put(url, &body) {
                 eprintln!("warning: failed to persist cache entry for {}: {}", url, e);
             }
@@ -385,11 +393,12 @@ impl Browser {
 
         let body = String::from_utf8_lossy(&body).into_owned();
 
-        if !self.options.cache_ttl.is_zero() {
+        if !self.options.no_cache && !self.options.cache_ttl.is_zero() {
             let mut cache = self.cache.lock().unwrap();
             cache.insert(url.to_string(), (body.clone(), Instant::now()));
         }
-        if let Some(cache) = &self.persistent_cache
+        if !self.options.no_cache
+            && let Some(cache) = &self.persistent_cache
             && let Err(e) = cache.put(url, &body) {
                 eprintln!("warning: failed to persist cache entry for {}: {}", url, e);
             }
@@ -427,8 +436,8 @@ impl Browser {
 
         let body = resp.text().await.context("Failed to read response body")?;
 
-        // Store in cache if enabled
-        if !self.options.cache_ttl.is_zero() {
+        // Store in cache if enabled and not bypassed via --no-cache
+        if !self.options.no_cache && !self.options.cache_ttl.is_zero() {
             let mut cache = self.cache.lock().unwrap();
             cache.insert(url.to_string(), (body.clone(), Instant::now()));
         }
@@ -441,13 +450,27 @@ impl Browser {
     fn lookup_cache(&self, url: &str) -> Option<String> {
         if let Some(persistent) = &self.persistent_cache {
             if let Some(body) = persistent.get(url) {
+                // Check cache_max_age if set
+                if let Some(max_age) = self.options.cache_max_age
+                    && let Some(fetched_ms) = persistent.fetched_at(url)
+                {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+                    let age = Duration::from_millis(now.saturating_sub(fetched_ms));
+                    if age > max_age {
+                        return None;
+                    }
+                }
                 return Some(body);
             }
             return None;
         }
         let mut cache = self.cache.lock().unwrap();
         if let Some((body, fetched_at)) = cache.get(url) {
-            if fetched_at.elapsed() < self.options.cache_ttl {
+            let max = self.options.cache_max_age.unwrap_or(self.options.cache_ttl);
+            if fetched_at.elapsed() < max {
                 return Some(body.clone());
             }
             cache.remove(url);
@@ -1085,6 +1108,55 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let _ = browser.fetch(&url).await.unwrap();
 
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_no_cache_bypasses_and_skips_store() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/bypass")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Live</body></html>")
+            .expect(2)
+            .create_async()
+            .await;
+
+        let opts = BrowserOptions {
+            cache_ttl: Duration::from_secs(60),
+            no_cache: true,
+            ..Default::default()
+        };
+        let browser = Browser::new(opts).unwrap();
+        let url = format!("{}/bypass", server.url());
+        let _ = browser.fetch(&url).await.unwrap();
+        let _ = browser.fetch(&url).await.unwrap();
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn browser_cache_max_age_rejects_stale_entries() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/maxage")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body("<html><body>Fresh</body></html>")
+            .expect(2)
+            .create_async()
+            .await;
+
+        let opts = BrowserOptions {
+            cache_ttl: Duration::from_secs(60),
+            cache_max_age: Some(Duration::from_millis(50)),
+            ..Default::default()
+        };
+        let browser = Browser::new(opts).unwrap();
+        let url = format!("{}/maxage", server.url());
+        let _ = browser.fetch(&url).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        let _ = browser.fetch(&url).await.unwrap();
         mock.assert_async().await;
     }
 
