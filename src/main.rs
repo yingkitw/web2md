@@ -3,7 +3,7 @@ use url::Url;
 use web2md::{
     content_fingerprint, extract_event, extract_faq, extract_job, extract_page_metadata,
     extract_recipe, extract_summary, extract_topic, language_matches, normalize_crawl_url,
-    parse_sitemap_urls, truncate_by_tokens, truncate_with_marker, Browser, BrowserOptions,
+    truncate_by_tokens, truncate_with_marker, Browser, BrowserOptions,
     ConvertOptions, McpRequest, McpServer, PageMetadata, PageToMarkdown,
 };
 use clap::{Parser, Subcommand, ValueEnum};
@@ -44,6 +44,8 @@ enum OutputFormat {
     Product,
     /// Emit all videos as JSON (≈ Firecrawl `video` format, deterministic)
     Video,
+    /// Emit all audio clips as JSON (≈ Firecrawl `audio` format, deterministic)
+    Audio,
     /// Emit HTML attribute values for selector:attribute pairs (≈ Firecrawl `attributes`)
     Attributes,
     /// Emit structured restaurant menu from JSON-LD Menu (≈ Firecrawl `menu`, deterministic)
@@ -611,6 +613,7 @@ fn format_label(format: &OutputFormat) -> &'static str {
         OutputFormat::Images => "images",
         OutputFormat::Product => "product",
         OutputFormat::Video => "video",
+        OutputFormat::Audio => "audio",
         OutputFormat::Attributes => "attributes",
         OutputFormat::Menu => "menu",
     }
@@ -935,6 +938,10 @@ async fn main() -> Result<()> {
                         let videos = web2md::extract_videos(&html, &url);
                         (serde_json::to_string_pretty(&videos)?, None)
                     }
+                    OutputFormat::Audio => {
+                        let audios = web2md::extract_audios(&html, &url);
+                        (serde_json::to_string_pretty(&audios)?, None)
+                    }
                     OutputFormat::Attributes => {
                         if attr.is_empty() {
                             anyhow::bail!(
@@ -1099,6 +1106,7 @@ async fn main() -> Result<()> {
                             OutputFormat::Images => unreachable!(),
                             OutputFormat::Product => unreachable!(),
                             OutputFormat::Video => unreachable!(),
+                            OutputFormat::Audio => unreachable!(),
                             OutputFormat::Attributes => unreachable!(),
                             OutputFormat::Menu => unreachable!(),
                         };
@@ -1391,10 +1399,7 @@ async fn main() -> Result<()> {
 
             match browser.fetch(&sitemap_url).await {
                 Ok(xml) => {
-                    let sitemap_urls: Vec<String> = parse_sitemap_urls(&xml)
-                        .into_iter()
-                        .filter(|u| !browser.is_url_blocked(u))
-                        .collect();
+                    let sitemap_urls = browser.expand_sitemap(&sitemap_url, &xml).await;
                     if !sitemap_urls.is_empty() {
                         println!("# Sitemap URLs from {}\n", sitemap_url);
                         for u in &sitemap_urls {
@@ -1733,10 +1738,7 @@ async fn crawl_fetch(
         eprintln!("Fetching sitemap: {}", sitemap_url);
         match browser.fetch(&sitemap_url).await {
             Ok(xml) => {
-                let urls: Vec<String> = parse_sitemap_urls(&xml)
-                    .into_iter()
-                    .filter(|u| !browser.is_url_blocked(u))
-                    .collect();
+                let urls = browser.expand_sitemap(&sitemap_url, &xml).await;
                 eprintln!("Sitemap returned {} URL(s)", urls.len());
                 if urls.is_empty() {
                     return Ok(());

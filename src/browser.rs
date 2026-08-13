@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::{Client, ClientBuilder};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -331,6 +331,46 @@ impl Browser {
                 eprintln!("warning: failed to persist cache entry for {}: {}", url, e);
             }
         Ok(body)
+    }
+
+    /// Expand a sitemap or sitemap index recursively, returning all leaf page URLs.
+    /// Resolves relative `<loc>` values against the sitemap URL, follows nested
+    /// `<sitemapindex>` documents up to a fixed depth, and filters blacklisted URLs.
+    pub async fn expand_sitemap(&self, sitemap_url: &str, xml: &str) -> Vec<String> {
+        const MAX_DEPTH: usize = 5;
+        let mut page_urls = Vec::new();
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back((sitemap_url.to_string(), xml.to_string(), 0usize));
+
+        while let Some((base, xml, depth)) = queue.pop_front() {
+            let base_url = match Url::parse(&base) {
+                Ok(u) => u,
+                Err(_) => continue,
+            };
+            let locs: Vec<String> = parse_sitemap_urls(&xml)
+                .into_iter()
+                .map(|loc| base_url.join(&loc).map(|u| u.to_string()).unwrap_or(loc))
+                .filter(|u| !self.is_url_blocked(u))
+                .collect();
+            if xml.to_ascii_lowercase().contains("<sitemapindex") {
+                if depth >= MAX_DEPTH {
+                    continue;
+                }
+                for loc in locs {
+                    if !seen.insert(loc.clone()) {
+                        continue;
+                    }
+                    match self.fetch(&loc).await {
+                        Ok(child) => queue.push_back((loc, child, depth + 1)),
+                        Err(e) => eprintln!("warning: failed to fetch sitemap {}: {}", loc, e),
+                    }
+                }
+            } else {
+                page_urls.extend(locs);
+            }
+        }
+        page_urls
     }
 
     /// Fetch a URL while bypassing robots.txt checks.
@@ -1201,6 +1241,47 @@ mod tests {
         let urls = parse_sitemap_urls(xml);
         assert_eq!(urls.len(), 1);
         assert_eq!(urls[0], "https://example.com/page");
+    }
+
+    #[tokio::test]
+    async fn expand_sitemap_follows_index_and_urlset() {
+        let mut server = mockito::Server::new_async().await;
+        let index = r#"<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>sitemap-pages.xml</loc></sitemap>
+</sitemapindex>"#;
+        let urlset = r#"<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/page1</loc></url>
+  <url><loc>https://example.com/page2</loc></url>
+</urlset>"#;
+
+        server
+            .mock("GET", "/sitemap.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(index)
+            .create_async()
+            .await;
+        server
+            .mock("GET", "/sitemap-pages.xml")
+            .with_status(200)
+            .with_header("content-type", "application/xml")
+            .with_body(urlset)
+            .create_async()
+            .await;
+
+        let browser = Browser::new(BrowserOptions {
+            load_user_blacklist: false,
+            ..Default::default()
+        }).unwrap();
+        let sitemap_url = format!("{}/sitemap.xml", server.url());
+        let xml = browser.fetch(&sitemap_url).await.unwrap();
+        let urls = browser.expand_sitemap(&sitemap_url, &xml).await;
+
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains(&"https://example.com/page1".to_string()));
+        assert!(urls.contains(&"https://example.com/page2".to_string()));
     }
 
     #[tokio::test]

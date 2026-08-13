@@ -90,6 +90,15 @@ Call the `fetch` tool:
 
 Response includes `markdown`, `title`, `description`, `author`, `published_date`, `canonical_url`, `language`, `excerpt`, and extraction `quality`.
 
+For structured extraction, pass a `format`:
+
+```json
+{ "url": "https://example.com/article", "format": "video" }
+{ "url": "https://example.com/article", "format": "attributes", "attr": ["a:href", "img:src"] }
+```
+
+Supported `format` values: `video`, `audio`, `images`, `links`, `product`, `menu`, `branding`, `attributes`. The response carries a `result` field with the structured JSON and `markdown` is empty.
+
 ### Extract only what matters
 
 ```bash
@@ -131,20 +140,23 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 - **Optional Mozilla Readability.js** article isolation (`--features readability --readability`)
 - **Optional headless Chrome** for SPAs (`--features headless`)
 - **Main-content extraction**, noise stripping, content deduplication
+- **Boilerplate element stripping** — removes cookie banners, social-share widgets, breadcrumbs, newsletter popups, and related-posts blocks by `class`/`id` keyword matching (deterministic, no LLM)
+- **Markdown noise cleanup** — strips Wikipedia citation markers, `[edit]` section links, `[File:…]` links, and unwraps heading self-anchor links for cleaner output
 - **Query-focused extraction** (`--topic`), extractive summarization (`--summary`), token-budget truncation (`--max-tokens`)
 - **Recipe/FAQ/Job/Event** JSON-LD extractors (`--type`)
 - **Persistent file cache**, per-host rate limiting, optional `robots.txt` respect
-- **Recursive crawl** (parallel BFS, up to 10 concurrent), sitemap discovery
+- **Recursive crawl** (parallel BFS, up to 10 concurrent), sitemap discovery, recursive sitemap index expansion
 - **Links**, **images**, **product**, and **branding** extraction (`--format`)
 - Page **diff**, **watch** mode, **webhook** delivery
 - **PII redaction**, proxy support, basic auth, mobile User-Agent
 - **Local BM25 corpus** index over Markdown directories
 - **Library docs fetcher** (`docs` subcommand) — README + metadata from crates.io, npm, or PyPI
 - **Video extraction** (`--format video`) — `<video>`, `<source>`, YouTube/Vimeo embeds as JSON
+- **Audio extraction** (`--format audio`) — `<audio>`, `<source>`, SoundCloud/Spotify/Apple Podcasts embeds as JSON
 - **Links/images summary** (`--links-summary`, `--images-summary`) — append deduplicated lists to Markdown
 - **Markdown chunking** (`--chunk`) — split by headings for RAG pipelines
 - **Domain filtering** on `search` (`--include-domains`, `--exclude-domains`)
-- **MCP server** with structured metadata
+- **MCP server** with structured metadata and `format` parity (`video`, `audio`, `images`, `links`, `product`, `menu`, `branding`, `attributes`)
 
 See [SPEC.md](SPEC.md) and [ARCHITECTURE.md](ARCHITECTURE.md) for full protocol and design details.
 

@@ -57,7 +57,7 @@ When URL filtering is enabled, Web2MD also loads `~/.web2md/blacklist.txt` if it
 - External links, `mailto:`, fragments, and blacklisted URLs are not followed
 - Output: `--output <dir>` writes one `.md` file per page; without `--output`, pages are printed separated by `---` headers
 - Requires markdown output format (`--format json` / `--format html` are incompatible with `--depth`)
-- **`--sitemap-only`**: with `--depth > 0`, fetch `{origin}/sitemap.xml` and convert those URLs only — do not follow in-page links (≈ Firecrawl sitemap-only crawl)
+- **`--sitemap-only`**: with `--depth > 0`, fetch `{origin}/sitemap.xml`, recursively expand any nested `<sitemapindex>` documents, and convert those URLs only — do not follow in-page links (≈ Firecrawl sitemap-only crawl)
 
 ## robots.txt
 
@@ -99,6 +99,7 @@ web2md fetch <URL> [FLAGS]
   --format images      Output all images as JSON (≈ Firecrawl `images` format)
   --format product     Output structured product from JSON-LD (≈ Firecrawl `product` format, deterministic)
   --format video       Output videos as JSON (title/thumbnail/duration when present)
+  --format audio       Output audio clips as JSON (title/duration when present)
   --format attributes  Output HTML attribute values (requires `--attr selector:attribute`)
   --format menu        Output restaurant menu from JSON-LD Menu (≈ Firecrawl `menu`, deterministic)
   --type TYPE          Domain extractor: recipe | faq | job | event (LLM-free JSON-LD rendering)
@@ -141,6 +142,8 @@ web2md sitemap <URL> [FLAGS]
   --timeout SECONDS    Request timeout (default: 30)
   --cookie NAME=VAL    Send cookie (repeatable)
   --header "Name: Val" Send custom header (repeatable)
+
+Recursively expands `<sitemapindex>` nested sitemaps up to a depth limit and emits leaf page URLs.
 
 # Discover all URLs on a page by extracting <a href> links (≈ Firecrawl /map)
 web2md map <URL> [FLAGS]
@@ -237,16 +240,25 @@ web2md watch <URL> [FLAGS]
   "include_images": false,
   "keep_header": false,
   "main_content": false,
-  "max_length": 4000
+  "max_length": 4000,
+  "format": "video",
+  "attr": ["a:href", "img:src"]
 }
 ```
 
+Optional `format` values: `markdown` (default), `video`, `audio`, `images`, `links`, `product`, `menu`, `branding`, `attributes`. Use `attr` with `attributes`.
+
 ### MCP JSON-RPC Response
+
+When a `format` is requested, the response includes a `result` field containing the structured data and `markdown` is empty:
 
 ```json
 {
   "url": "https://example.com/article",
-  "markdown": "# Article Title\n\nBody content...",
+  "markdown": "",
+  "result": [
+    {"url": "https://example.com/clip.mp4", "source": "video", "title": "Demo", "duration": 90}
+  ],
   "title": "Article Title",
   "description": "A summary of the article",
   "author": "Jane Doe",
@@ -374,6 +386,7 @@ Trafilatura-style plain XML:
    - Extract main content if `main_content` is true or the profile prefers it (Trafilatura-style fallback: score semantic tags with bonus, top-level blocks, paragraph clusters; pick best candidate; strip boilerplate; fall back to JSON-LD `articleBody` / `description` or Open Graph description when heuristics score ≤ 100)
    - Strip `<script>`, `<style>`, `<iframe>`
    - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
+   - Strip boilerplate elements by `class`/`id` keywords (cookie, consent, gdpr, social, share, breadcrumb, newsletter, subscribe, popup, modal, overlay, toolbar, advert, related-posts, etc.)
    - Strip elements matching `--exclude-selector` (`.class` or `#id`)
    - Extract code languages from `<code class="language-xxx">`
    - Strip `<img>` unless `include_images` is true or the product profile prefers images
@@ -382,8 +395,9 @@ Trafilatura-style plain XML:
      - HTML entity decoding (`&amp;`, `&#169;`, etc.)
      - Markdown control-character escaping in plain text (`*`, `#`, `_`, etc.)
      - Tolerant of malformed/unclosed tags (html5ever tree repair)
-   - Inject languages into fenced code blocks (` ```rust `)
+   - Inject languages into opening fenced code blocks only (` ```rust `; closing fences stay bare)
    - Deduplicate repeated paragraph-level blocks (>20 chars, first occurrence kept)
+   - Clean Markdown noise: Wikipedia citation markers (`^([[ N ]](#cite_note-…))`), `[edit]` section links, `[File:…]`/`[Image:…]` links, heading self-anchor unwrapping (`### [Title](#anchor) ###` → `### Title ###`)
    - Collapse excessive whitespace
    - Append JSON-LD Product details (`## Product details`) for product pages when name/brand/SKU/price are available
    - Extract comments from forum/thread pages (detects `class="comment"`, `id="comment-N"`, `data-testid="comment"`, `data-author`; extracts author + text + nesting depth; appends as `## Comments` section with blockquotes and indentation)
@@ -506,6 +520,17 @@ No LLM, fully deterministic (≈ Firecrawl `product` format, free).
 - JSON-LD entries enrich matching HTML videos or add standalone entries.
 
 No LLM, fully deterministic (≈ Firecrawl `document.videos[]`, free).
+
+## Audio Extraction (`--format audio`)
+
+`extract_audios` collects `<audio src>`, nested `<source>`, known iframe embeds (SoundCloud/Spotify/Apple Podcasts/…), and JSON-LD `AudioObject` blocks into a JSON array of `{url, source?, title?, duration?}`:
+
+- `source` is `audio` for `<audio src>`, `source` for `<source>`, the embed platform for known players, or `json-ld` for JSON-LD entries.
+- `title` comes from the element `title` attribute or JSON-LD `name`.
+- `duration` is seconds (plain number or ISO-8601 `PT…`).
+- JSON-LD entries enrich matching HTML audio or add standalone entries.
+
+No LLM, fully deterministic (≈ Firecrawl `document.audio[]`, free).
 
 ## Attributes Extraction (`--format attributes`)
 

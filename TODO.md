@@ -295,8 +295,9 @@ Deterministic gaps still open after v6 (no LLM / no SaaS):
 
 | # | Feature | Beats | Status |
 |---|---|---|---|
-| 46 | Expand sitemap indexes recursively in `--sitemap-only` / `sitemap` | Firecrawl multi-sitemap crawl | 🔲 Planned |
-| 47 | `--format audio` — `<audio>` / `<source>` / known audio embeds as JSON | Firecrawl `audio` format | 🔲 Planned |
-| 48 | MCP tool parity for `attributes` / `menu` / `video` formats | Firecrawl MCP surface | 🔲 Planned |
+| 46 | Expand sitemap indexes recursively in `--sitemap-only` / `sitemap` | Firecrawl multi-sitemap crawl | ✅ Done |
+| 47 | `--format audio` — `<audio>` / `<source>` / known audio embeds as JSON | Firecrawl `audio` format | ✅ Done |
+| 48 | MCP tool parity for `attributes` / `menu` / `video` formats | Firecrawl MCP surface | ✅ Done |
+| 49 | Markdown output quality pass: code-block language injection fix, class/id boilerplate stripping, Wikipedia citation/edit-link/File-link cleanup, heading anchor unwrapping | Firecrawl `onlyCleanContent` (deterministic portion) | ✅ Done |
 
 **Still deferred**: PDF/DOCX (`--format pdf` / `/parse`), screenshots, LLM formats.

@@ -261,6 +261,7 @@ impl PageToMarkdown {
         let html = Self::strip_scripts_and_styles(&html);
         let html = Self::strip_iframe_tags(&html);
         let html = Self::strip_noise_tags(&html, opts.keep_header);
+        let html = Self::strip_boilerplate_elements(&html);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
         let html = if opts.include_tables {
@@ -277,6 +278,7 @@ impl PageToMarkdown {
         let md = crate::html_to_md::parse_html(&html);
         let md = Self::inject_code_languages(&md, &languages);
         let md = Self::deduplicate_blocks(&md);
+        let md = Self::clean_markdown_noise(&md);
         let md = Self::clean(&md);
         let md = Self::append_page_profile_extras(&original_html, md);
         let md = if opts.include_links {
@@ -424,6 +426,7 @@ impl PageToMarkdown {
         let html = Self::strip_scripts_and_styles(&html);
         let html = Self::strip_iframe_tags(&html);
         let html = Self::strip_noise_tags(&html, opts.keep_header);
+        let html = Self::strip_boilerplate_elements(&html);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
         let html = if opts.include_tables {
@@ -442,6 +445,7 @@ impl PageToMarkdown {
         let mut seen = HashSet::new();
         crate::html_to_md::parse_html_progressive(&html, |block| {
             let block = Self::inject_code_languages_from(&block, &languages, &mut lang_idx);
+            let block = Self::clean_markdown_noise(&block);
             let block = Self::clean(&block);
             let block = if opts.include_links {
                 block
@@ -783,6 +787,190 @@ impl PageToMarkdown {
         out
     }
 
+    /// Remove HTML elements whose `class` or `id` attribute matches common
+    /// boilerplate patterns (cookie banners, social share, breadcrumbs,
+    /// newsletter signups, popups, toolbars, ads). Deterministic, no LLM.
+    fn strip_boilerplate_elements(html: &str) -> String {
+        let boilerplate_keywords = [
+            "cookie",
+            "consent",
+            "gdpr",
+            "social",
+            "share",
+            "sharing",
+            "breadcrumb",
+            "newsletter",
+            "subscribe",
+            "popup",
+            "modal",
+            "overlay",
+            "toolbar",
+            "scrollbar",
+            "advert",
+            "ad-block",
+            "adsense",
+            "related-posts",
+            "related-articles",
+            "cookie-notice",
+            "cookie-banner",
+        ];
+
+        // Find opening tags with class/id matching boilerplate keywords.
+        // We scan for `<div`, `<section`, `<aside`, `<span` with matching attrs,
+        // then remove the element and its matching closing tag (nesting-aware).
+        let tags_to_check = ["div", "section", "aside", "span", "ul", "li", "nav"];
+        let mut result = html.to_string();
+
+        for tag in &tags_to_check {
+            let open = format!("<{}", tag);
+            loop {
+                let lower = result.to_ascii_lowercase();
+                let mut found_pos = None;
+                let mut search_from = 0;
+                while let Some(start) = lower[search_from..].find(&open) {
+                    let start = search_from + start;
+                    // Find the end of the opening tag
+                    if let Some(gt) = result[start..].find('>') {
+                        let tag_content = &lower[start..=start + gt];
+                        let is_boilerplate = boilerplate_keywords
+                            .iter()
+                            .any(|kw| tag_content.contains(&format!("class=\"{kw}"))
+                                || tag_content.contains(&format!("class='{kw}"))
+                                || tag_content.contains(&format!("id=\"{kw}"))
+                                || tag_content.contains(&format!("id='{kw}"))
+                                || tag_content.contains(&format!(" class=\"{kw} "))
+                                || tag_content.contains(&format!(" class='{kw} "))
+                                || tag_content.contains(&format!("class=\"{kw}-"))
+                                || tag_content.contains(&format!("class='{kw}-"))
+                                || tag_content.contains(&format!("id=\"{kw}-"))
+                                || tag_content.contains(&format!("id='{kw}-")));
+                        if is_boilerplate {
+                            found_pos = Some(start);
+                            break;
+                        }
+                    }
+                    search_from = start + 1;
+                }
+
+                if let Some(start) = found_pos {
+                    // Find matching closing tag (nesting-aware)
+                    let open_str = format!("<{}", tag);
+                    let close_str = format!("</{}>", tag);
+                    if let Some(gt) = result[start..].find('>') {
+                        let content_start = start + gt + 1;
+                        if let Some(end_pos) = Self::find_matching_close(&result, content_start, &open_str, &close_str) {
+                            result = format!("{}{}", &result[..start], &result[end_pos + close_str.len()..]);
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                } else {
+                    break; // No more boilerplate elements for this tag
+                }
+            }
+        }
+        result
+    }
+
+    /// Post-process Markdown to remove common noise patterns:
+    /// - Wikipedia-style citation markers: `^([[ N ]](#cite_note-...))`
+    /// - `[edit]` links in section headings
+    /// - Heading self-anchor links: `[Heading](#anchor)` → `Heading`
+    /// - `[File:...]` links (Wikipedia file description pages)
+    fn clean_markdown_noise(md: &str) -> String {
+        let mut result = md.to_string();
+
+        // Remove Wikipedia-style citation markers: ^([[ N ]](#cite_note-...))
+        // The pattern is: ^ ( [[ N ]] (#cite_note-...) )
+        let citation_re = regex::Regex::new(
+            r"\^\(\[\[\s*\d+\s*\]\]\(#[^)]*\)\)"
+        ).unwrap();
+        // Remove stacked citations (multiple in a row)
+        loop {
+            let before = result.clone();
+            result = citation_re.replace_all(&result, "").to_string();
+            if result == before {
+                break;
+            }
+        }
+        // Also remove bare citation links without the ^() wrapper: [[ N ]](#cite_note-...)
+        let bare_citation_re = regex::Regex::new(
+            r"\[\[\s*\d+\s*\]\]\(#[^)]*\)"
+        ).unwrap();
+        loop {
+            let before = result.clone();
+            result = bare_citation_re.replace_all(&result, "").to_string();
+            if result == before {
+                break;
+            }
+        }
+        // Remove ^([[ note N ]](#cite_note-...)) patterns
+        let note_re = regex::Regex::new(
+            r"\^\(\[\[\s*note\s*\d+\s*\]\]\(#[^)]*\)\)"
+        ).unwrap();
+        result = note_re.replace_all(&result, "").to_string();
+
+        // Remove [edit] links: [ [edit](url) ] or [edit](url)
+        // URLs may contain parens (e.g. Wikipedia article URLs), so match
+        // balanced parens by matching until the closing `)` followed by `]` or end.
+        let edit_re = regex::Regex::new(
+            r"\[?\[edit\]\([^)]*(?:\([^)]*\)[^)]*)*\)\]?"
+        ).unwrap();
+        result = edit_re.replace_all(&result, "").to_string();
+
+        // Clean up leftover bracket fragments from partial matches:
+        // `[ <url-suffix>) ]` patterns left after the edit link text was stripped
+        // but the URL contained parens that broke the match.
+        let leftover_re = regex::Regex::new(
+            r"\[\s*&action=edit[^]]*\]"
+        ).unwrap();
+        result = leftover_re.replace_all(&result, "").to_string();
+
+        // Remove [File:...] links (Wikipedia file description pages)
+        let file_re = regex::Regex::new(r"\[File:[^\]]*\]\([^)]*\)").unwrap();
+        result = file_re.replace_all(&result, "").to_string();
+
+        // Remove [Image:...] links similarly
+        let image_re = regex::Regex::new(r"\[Image:[^\]]*\]\([^)]*\)").unwrap();
+        result = image_re.replace_all(&result, "").to_string();
+
+        // Clean heading self-anchor links: ### [Heading](#anchor) ### → ### Heading ###
+        // Only applies to heading lines (starting with # or containing ===/---)
+        let heading_anchor_re = regex::Regex::new(
+            r"^(#{1,6}\s+)\[([^\]]+)\]\(#[^)]+\)(\s+#{0,6})$"
+        ).unwrap();
+        result = heading_anchor_re.replace_all(&result, "$1$2$3").to_string();
+
+        // Also handle setext-style headings with anchor links:
+        // [Heading](#anchor)\n=== → Heading\n===
+        let setext_re = regex::Regex::new(
+            r"^\[([^\]]+)\]\(#[^)]+\)$"
+        ).unwrap();
+        let lines: Vec<&str> = result.lines().collect();
+        let mut cleaned_lines = Vec::with_capacity(lines.len());
+        for (i, line) in lines.iter().enumerate() {
+            let next_is_setext = i + 1 < lines.len()
+                && (lines[i + 1].trim().chars().all(|c| c == '=') && lines[i + 1].trim().len() >= 3
+                    || lines[i + 1].trim().chars().all(|c| c == '-') && lines[i + 1].trim().len() >= 3);
+            if next_is_setext {
+                if let Some(caps) = setext_re.captures(line) {
+                    cleaned_lines.push(caps.get(1).unwrap().as_str().to_string());
+                    continue;
+                }
+            }
+            cleaned_lines.push(line.to_string());
+        }
+        result = cleaned_lines.join("\n");
+
+        // Clean up extra spaces left by removed elements
+        let multi_space = regex::Regex::new(r"  +").unwrap();
+        result = multi_space.replace_all(&result, " ").to_string();
+
+        result
+    }
+
     /// Remove HTML comments `<!-- ... -->` (case-insensitive on delimiters).
     fn strip_html_comments(html: &str) -> String {
         let mut out = String::with_capacity(html.len());
@@ -935,13 +1123,26 @@ impl PageToMarkdown {
         }
         let mut result = String::with_capacity(md.len());
         let lines: Vec<&str> = md.lines().collect();
+        let mut in_code_block = false;
         let mut i = 0;
         while i < lines.len() {
             let line = lines[i];
             let trimmed = line.trim();
-            if trimmed == "```" && *lang_idx < languages.len() {
-                result.push_str(&format!("```{}", languages[*lang_idx]));
-                *lang_idx += 1;
+            if trimmed.starts_with("```") {
+                if !in_code_block {
+                    // Opening fence — inject language if available
+                    in_code_block = true;
+                    if *lang_idx < languages.len() {
+                        result.push_str(&format!("```{}", languages[*lang_idx]));
+                        *lang_idx += 1;
+                    } else {
+                        result.push_str(line);
+                    }
+                } else {
+                    // Closing fence — do NOT inject language
+                    in_code_block = false;
+                    result.push_str(line);
+                }
             } else {
                 result.push_str(line);
             }
@@ -2469,5 +2670,113 @@ mod tests {
         assert!(text.contains("two"));
         assert!(text.contains("Paragraph"));
         assert!(!text.contains("* one"));
+    }
+
+    #[test]
+    fn inject_code_languages_only_into_opening_fence() {
+        let md = "```\nfn main() {}\n```";
+        let langs = vec!["rust".to_string()];
+        let result = PageToMarkdown::inject_code_languages(md, &langs);
+        let lines: Vec<&str> = result.lines().collect();
+        assert!(lines[0].starts_with("```rust"));
+        assert_eq!(lines[2], "```"); // closing fence has no language
+    }
+
+    #[test]
+    fn inject_code_languages_handles_multiple_blocks() {
+        let md = "```\ncode1\n```\n\ntext\n\n```\ncode2\n```";
+        let langs = vec!["rust".to_string(), "python".to_string()];
+        let result = PageToMarkdown::inject_code_languages(md, &langs);
+        let lines: Vec<&str> = result.lines().collect();
+        assert!(lines[0].starts_with("```rust"));
+        assert_eq!(lines[2], "```");
+        assert!(lines[6].starts_with("```python"));
+        assert_eq!(lines[8], "```");
+    }
+
+    #[test]
+    fn strip_boilerplate_removes_cookie_banner() {
+        let html = r#"<div class="cookie-banner">We use cookies</div><p>Real content</p>"#;
+        let result = PageToMarkdown::strip_boilerplate_elements(html);
+        assert!(!result.contains("cookie"));
+        assert!(result.contains("Real content"));
+    }
+
+    #[test]
+    fn strip_boilerplate_removes_social_share() {
+        let html = r#"<div class="social-share"><a href="twitter">Tweet</a></div><p>Article text</p>"#;
+        let result = PageToMarkdown::strip_boilerplate_elements(html);
+        assert!(!result.contains("Tweet"));
+        assert!(result.contains("Article text"));
+    }
+
+    #[test]
+    fn strip_boilerplate_removes_breadcrumb() {
+        let html = r#"<nav class="breadcrumb"><a href="/">Home</a> > <a href="/cat">Category</a></nav><p>Content</p>"#;
+        let result = PageToMarkdown::strip_boilerplate_elements(html);
+        assert!(!result.contains("breadcrumb"));
+    }
+
+    #[test]
+    fn strip_boilerplate_preserves_content_divs() {
+        let html = r#"<div class="article-content"><p>Important text</p></div>"#;
+        let result = PageToMarkdown::strip_boilerplate_elements(html);
+        assert!(result.contains("Important text"));
+    }
+
+    #[test]
+    fn strip_boilerplate_handles_nested_elements() {
+        let html = r#"<div class="cookie-consent"><div><p>Cookie text</p></div></div><p>Real content</p>"#;
+        let result = PageToMarkdown::strip_boilerplate_elements(html);
+        assert!(!result.contains("Cookie text"));
+        assert!(result.contains("Real content"));
+    }
+
+    #[test]
+    fn clean_markdown_noise_removes_wikipedia_citations() {
+        let md = "Rust was created in 2006.^([[ 20 ]](#cite_note-MITTechReview-24))";
+        let result = PageToMarkdown::clean_markdown_noise(md);
+        assert!(!result.contains("cite_note"));
+        assert!(!result.contains("[[ 20 ]]"));
+        assert!(result.contains("Rust was created in 2006."));
+    }
+
+    #[test]
+    fn clean_markdown_noise_removes_stacked_citations() {
+        let md = "Text.^([[ 20 ]](#cite_note-a))^([[ 21 ]](#cite_note-b))";
+        let result = PageToMarkdown::clean_markdown_noise(md);
+        assert!(!result.contains("cite_note"));
+        assert!(result.contains("Text."));
+    }
+
+    #[test]
+    fn clean_markdown_noise_removes_edit_links() {
+        let md = "History\n----------\n\n[ [edit](/w/index.php?title=Rust&action=edit) ]\n\nContent here.";
+        let result = PageToMarkdown::clean_markdown_noise(md);
+        assert!(!result.contains("edit"));
+        assert!(result.contains("Content here."));
+    }
+
+    #[test]
+    fn clean_markdown_noise_removes_file_links() {
+        let md = "[File:Rust_logo.svg](https://en.wikipedia.org/wiki/File:Rust_logo.svg)\n\nContent.";
+        let result = PageToMarkdown::clean_markdown_noise(md);
+        assert!(!result.contains("File:"));
+        assert!(result.contains("Content."));
+    }
+
+    #[test]
+    fn clean_markdown_noise_unwraps_heading_anchor_links() {
+        let md = "### [Command Line Notation](#command-line-notation) ###";
+        let result = PageToMarkdown::clean_markdown_noise(md);
+        assert_eq!(result, "### Command Line Notation ###");
+    }
+
+    #[test]
+    fn clean_markdown_noise_unwraps_setext_heading_anchor() {
+        let md = "[Installation](#installation)\n==========\n\nBody text.";
+        let result = PageToMarkdown::clean_markdown_noise(md);
+        assert!(result.contains("Installation\n=========="));
+        assert!(!result.contains("](#installation)"));
     }
 }

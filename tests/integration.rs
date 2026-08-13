@@ -3,10 +3,11 @@ use url::Url;
 #[cfg(feature = "readability")]
 use web2md::{apply_readability, is_readerable};
 use web2md::{
-    build_index, corpus_results_to_markdown, extract_event, extract_faq, extract_job,
-    extract_metadata, extract_page_metadata, extract_recipe, extract_summary, extract_topic,
-    index_path_for, normalize_crawl_url, parse_sitemap_urls, query_index, same_origin_links,
-    truncate_by_tokens, Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown,
+    build_index, corpus_results_to_markdown, extract_audios, extract_event, extract_faq,
+    extract_job, extract_metadata, extract_page_metadata, extract_recipe, extract_summary,
+    extract_topic, index_path_for, normalize_crawl_url, parse_sitemap_urls, query_index,
+    same_origin_links, truncate_by_tokens, Browser, BrowserOptions, McpRequest, McpServer,
+    PageToMarkdown,
 };
 
 #[tokio::test]
@@ -460,9 +461,46 @@ async fn sitemap_discovery_fetches_and_parses() {
     mock.assert_async().await;
 }
 
+#[tokio::test]
+async fn sitemap_index_expands_recursively() {
+    let mut server = mockito::Server::new_async().await;
+    let index = r#"<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <sitemap><loc>nested/sitemap-pages.xml</loc></sitemap>
+</sitemapindex>"#;
+    let urlset = r#"<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>https://example.com/a</loc></url>
+  <url><loc>https://example.com/b</loc></url>
+</urlset>"#;
 
+    server
+        .mock("GET", "/sitemap.xml")
+        .with_status(200)
+        .with_header("content-type", "application/xml")
+        .with_body(index)
+        .create_async()
+        .await;
+    server
+        .mock("GET", "/nested/sitemap-pages.xml")
+        .with_status(200)
+        .with_header("content-type", "application/xml")
+        .with_body(urlset)
+        .create_async()
+        .await;
 
+    let browser = Browser::new(BrowserOptions {
+        load_user_blacklist: false,
+        ..Default::default()
+    }).unwrap();
+    let sitemap_url = format!("{}/sitemap.xml", server.url());
+    let xml = browser.fetch(&sitemap_url).await.unwrap();
+    let urls = browser.expand_sitemap(&sitemap_url, &xml).await;
 
+    assert_eq!(urls.len(), 2);
+    assert!(urls.contains(&"https://example.com/a".to_string()));
+    assert!(urls.contains(&"https://example.com/b".to_string()));
+}
 
 
 
@@ -1163,6 +1201,34 @@ async fn video_format_extracts_video_and_embed_urls() {
     assert!(videos[0].url.ends_with("/clip.mp4"));
     assert_eq!(videos[0].source.as_deref(), Some("video"));
     assert_eq!(videos[1].source.as_deref(), Some("youtube"));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn audio_format_extracts_audio_sources_and_embeds() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/episode")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(r#"<html><body>
+            <audio src="/podcast.mp3" title="Episode 1"></audio>
+            <iframe src="https://w.soundcloud.com/player/?url=abc"></iframe>
+            <iframe src="/ads.html"></iframe>
+            </body></html>"#)
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/episode", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let audios = extract_audios(&html, &url);
+
+    assert_eq!(audios.len(), 2);
+    assert!(audios[0].url.ends_with("/podcast.mp3"));
+    assert_eq!(audios[0].source.as_deref(), Some("audio"));
+    assert_eq!(audios[1].source.as_deref(), Some("soundcloud"));
 
     mock.assert_async().await;
 }

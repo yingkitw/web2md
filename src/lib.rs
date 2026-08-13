@@ -31,9 +31,9 @@ pub use docs::{package_info_to_markdown, parse_registry_response, registry_api_u
 pub use persistent_cache::PersistentCache;
 pub use crawl::{normalize_crawl_url, same_origin_links};
 pub use extract::{
-    extract_attributes, extract_images, extract_links, extract_menu, extract_product, extract_videos,
-    AttributeResult, ImageEntry, LinkEntry, MenuEntry, MenuItem, MenuSection, ProductEntry,
-    ProductVariant, VideoEntry,
+    extract_attributes, extract_audios, extract_images, extract_links, extract_menu, extract_product,
+    extract_videos, AttributeResult, AudioEntry, ImageEntry, LinkEntry, MenuEntry, MenuItem,
+    MenuSection, ProductEntry, ProductVariant, VideoEntry,
 };
 pub use headless::{is_headless_available, render_url, HeadlessOptions};
 pub use markdown::{ConvertOptions, PageToMarkdown};

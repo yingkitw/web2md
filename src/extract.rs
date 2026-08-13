@@ -1,6 +1,6 @@
-//! Deterministic page-element extractors: links, images, products, videos, attributes, menus.
+//! Deterministic page-element extractors: links, images, products, videos, audio, attributes, menus.
 //!
-//! These mirror Firecrawl's `links`, `images`, `product`, `video`, `attributes`, and `menu`
+//! These mirror Firecrawl's `links`, `images`, `product`, `video`, `audio`, `attributes`, and `menu`
 //! formats but are fully deterministic (no LLM, no SaaS) — they parse HTML and JSON-LD locally.
 
 use serde::Serialize;
@@ -652,6 +652,203 @@ fn embed_source_name(url: &str) -> &'static str {
     }
 }
 
+/// Check if a URL is a known audio embed (SoundCloud, Spotify, podcast players, etc.).
+fn is_audio_embed(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("soundcloud.com")
+        || lower.contains("spotify.com")
+        || lower.contains("mixcloud.com")
+        || lower.contains("anchor.fm")
+        || lower.contains("podcasts.apple.com")
+        || lower.contains("iheart.com")
+        || lower.contains("podbean.com")
+        || lower.contains("buzzsprout.com")
+        || lower.contains("transistor.fm")
+        || lower.contains("libsyn.com")
+        || lower.contains("spreaker.com")
+        || lower.contains("simplecast.com")
+        || lower.contains("captivate.fm")
+}
+
+/// Extract the platform name from an audio embed URL.
+fn audio_embed_source_name(url: &str) -> &'static str {
+    let lower = url.to_ascii_lowercase();
+    if lower.contains("soundcloud") {
+        "soundcloud"
+    } else if lower.contains("spotify") {
+        "spotify"
+    } else if lower.contains("mixcloud") {
+        "mixcloud"
+    } else if lower.contains("anchor") {
+        "anchor"
+    } else if lower.contains("podcasts.apple") {
+        "apple-podcasts"
+    } else if lower.contains("iheart") {
+        "iheart"
+    } else if lower.contains("podbean") {
+        "podbean"
+    } else if lower.contains("buzzsprout") {
+        "buzzsprout"
+    } else if lower.contains("transistor") {
+        "transistor"
+    } else if lower.contains("libsyn") {
+        "libsyn"
+    } else if lower.contains("spreaker") {
+        "spreaker"
+    } else if lower.contains("simplecast") {
+        "simplecast"
+    } else if lower.contains("captivate") {
+        "captivate"
+    } else {
+        "embed"
+    }
+}
+
+/// A single audio clip extracted from the page.
+#[derive(Debug, Serialize)]
+pub struct AudioEntry {
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Duration in seconds when known (from `duration` attr or JSON-LD AudioObject).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+}
+
+/// Extract all audio URLs from HTML: `<audio src>`, `<audio><source src>`,
+/// `<iframe>` audio embeds (SoundCloud, Spotify, etc.), and JSON-LD `AudioObject` blocks.
+/// URLs are resolved against `base_url`. Returns deduplicated entries in document order.
+pub fn extract_audios(html: &str, base_url: &str) -> Vec<AudioEntry> {
+    let mut audios = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut pos = 0;
+
+    // Extract from <audio src="..."> and <audio><source src="...">
+    while pos < html.len() {
+        let Some(start) = find_ci(&html[pos..], "<audio") else {
+            break;
+        };
+        let start = pos + start;
+        let Some(end) = html[start..].find('>') else {
+            break;
+        };
+        let tag = &html[start..=start + end];
+        let tag_end = start + end + 1;
+
+        let title = extract_attr(tag, "title").filter(|s| !s.is_empty());
+        let duration = extract_attr(tag, "duration")
+            .and_then(|s| parse_duration_seconds(&s));
+
+        if let Some(src) = extract_attr(tag, "src")
+            && let Some(resolved) = resolve_url(&src, base_url)
+                && seen.insert(resolved.clone()) {
+                    audios.push(AudioEntry {
+                        url: resolved,
+                        source: Some("audio".to_string()),
+                        title: title.clone(),
+                        duration,
+                    });
+                }
+
+        let audio_close = find_ci(&html[tag_end..], "</audio>").unwrap_or(200);
+        let audio_inner = &html[tag_end..tag_end + audio_close.min(html.len() - tag_end)];
+        let mut source_pos = 0;
+        while source_pos < audio_inner.len() {
+            let Some(s_start) = find_ci(&audio_inner[source_pos..], "<source") else {
+                break;
+            };
+            let s_start = source_pos + s_start;
+            let Some(s_end) = audio_inner[s_start..].find('>') else {
+                break;
+            };
+            let source_tag = &audio_inner[s_start..=s_start + s_end];
+            if let Some(src) = extract_attr(source_tag, "src")
+                && let Some(resolved) = resolve_url(&src, base_url)
+                    && seen.insert(resolved.clone()) {
+                        audios.push(AudioEntry {
+                            url: resolved,
+                            source: Some("source".to_string()),
+                            title: title.clone(),
+                            duration,
+                        });
+                    }
+            source_pos = s_start + s_end + 1;
+        }
+
+        pos = tag_end;
+    }
+
+    // Extract from <iframe> audio embeds.
+    pos = 0;
+    while pos < html.len() {
+        let Some(start) = find_ci(&html[pos..], "<iframe") else {
+            break;
+        };
+        let start = pos + start;
+        let Some(end) = html[start..].find('>') else {
+            break;
+        };
+        let tag = &html[start..=start + end];
+        let tag_end = start + end + 1;
+
+        if let Some(src) = extract_attr(tag, "src")
+            && let Some(resolved) = resolve_url(&src, base_url)
+                && is_audio_embed(&resolved)
+                    && seen.insert(resolved.clone()) {
+                        let source = audio_embed_source_name(&resolved);
+                        let title = extract_attr(tag, "title").filter(|s| !s.is_empty());
+                        audios.push(AudioEntry {
+                            url: resolved,
+                            source: Some(source.to_string()),
+                            title,
+                            duration: None,
+                        });
+                    }
+        pos = tag_end;
+    }
+
+    // Merge JSON-LD AudioObject blocks (title / duration enrichment).
+    for json in iter_json_ld_blocks(html) {
+        if !json_ld_value_is_type(&json, "AudioObject") {
+            continue;
+        }
+        let Some(url) = json
+            .get("contentUrl")
+            .and_then(json_string)
+            .or_else(|| json.get("embedUrl").and_then(json_string))
+            .or_else(|| json.get("url").and_then(json_string))
+            .and_then(|u| resolve_url(&u, base_url))
+        else {
+            continue;
+        };
+        let title = json.get("name").and_then(json_string);
+        let duration = json
+            .get("duration")
+            .and_then(json_string)
+            .and_then(|s| parse_duration_seconds(&s));
+
+        if let Some(existing) = audios.iter_mut().find(|a| a.url == url) {
+            if existing.title.is_none() {
+                existing.title = title;
+            }
+            if existing.duration.is_none() {
+                existing.duration = duration;
+            }
+        } else if seen.insert(url.clone()) {
+            audios.push(AudioEntry {
+                url,
+                source: Some("json-ld".to_string()),
+                title,
+                duration,
+            });
+        }
+    }
+
+    audios
+}
+
 /// One attribute extraction result (≈ Firecrawl `attributes` format entry).
 #[derive(Debug, Serialize)]
 pub struct AttributeResult {
@@ -1044,6 +1241,56 @@ mod tests {
         assert_eq!(videos[0].thumbnail.as_deref(), Some("https://cdn.example.com/talk.jpg"));
         assert_eq!(videos[0].duration, Some(120.0));
         assert_eq!(videos[0].source.as_deref(), Some("json-ld"));
+    }
+
+    #[test]
+    fn extract_audios_from_audio_src() {
+        let html = r#"<audio src="https://example.com/podcast.mp3" title="Episode 1" duration="PT45M"></audio>"#;
+        let audios = extract_audios(html, "https://example.com/");
+        assert_eq!(audios.len(), 1);
+        assert_eq!(audios[0].url, "https://example.com/podcast.mp3");
+        assert_eq!(audios[0].source.as_deref(), Some("audio"));
+        assert_eq!(audios[0].title.as_deref(), Some("Episode 1"));
+        assert_eq!(audios[0].duration, Some(2700.0));
+    }
+
+    #[test]
+    fn extract_audios_from_source_tags() {
+        let html = r#"<audio><source src="https://example.com/podcast.ogg" type="audio/ogg"><source src="https://example.com/podcast.mp3" type="audio/mpeg"></audio>"#;
+        let audios = extract_audios(html, "https://example.com/");
+        assert_eq!(audios.len(), 2);
+        assert_eq!(audios[0].url, "https://example.com/podcast.ogg");
+        assert_eq!(audios[0].source.as_deref(), Some("source"));
+        assert_eq!(audios[1].url, "https://example.com/podcast.mp3");
+    }
+
+    #[test]
+    fn extract_audios_from_iframe_embeds() {
+        let html = r#"<iframe src="https://open.spotify.com/embed/episode/abc123" title="Spotify Episode"></iframe>"#;
+        let audios = extract_audios(html, "https://example.com/");
+        assert_eq!(audios.len(), 1);
+        assert_eq!(audios[0].source.as_deref(), Some("spotify"));
+        assert_eq!(audios[0].title.as_deref(), Some("Spotify Episode"));
+    }
+
+    #[test]
+    fn extract_audios_deduplicates() {
+        let html = r#"<audio src="https://example.com/podcast.mp3"></audio><audio src="https://example.com/podcast.mp3"></audio>"#;
+        let audios = extract_audios(html, "https://example.com/");
+        assert_eq!(audios.len(), 1);
+    }
+
+    #[test]
+    fn extract_audios_from_json_ld_audio_object() {
+        let html = r#"<html><head>
+            <script type="application/ld+json">
+            {"@type":"AudioObject","name":"Interview","contentUrl":"https://cdn.example.com/interview.mp3","duration":"PT30M"}
+            </script></head><body></body></html>"#;
+        let audios = extract_audios(html, "https://example.com/");
+        assert_eq!(audios.len(), 1);
+        assert_eq!(audios[0].title.as_deref(), Some("Interview"));
+        assert_eq!(audios[0].duration, Some(1800.0));
+        assert_eq!(audios[0].source.as_deref(), Some("json-ld"));
     }
 
     #[test]

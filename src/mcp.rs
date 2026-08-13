@@ -1,5 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 
 use crate::html_meta::{
     collect_meta_property_values, extract_attr, extract_html_lang, extract_json_ld_field,
@@ -35,6 +36,12 @@ pub struct McpRequest {
     pub include_links: bool,
     #[serde(default)]
     pub only_with_metadata: bool,
+    /// Optional structured output format (attributes, menu, video, audio, images, links, product, branding).
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Attribute specs for `format: "attributes"` (e.g. `["a:href", "img:src"]`).
+    #[serde(default)]
+    pub attr: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -55,6 +62,8 @@ impl Default for McpRequest {
             include_tables: true,
             include_links: true,
             only_with_metadata: false,
+            format: None,
+            attr: Vec::new(),
         }
     }
 }
@@ -64,6 +73,9 @@ impl Default for McpRequest {
 pub struct McpResponse {
     pub url: String,
     pub markdown: String,
+    /// Structured result for `format` requests (e.g. `video`, `menu`, `attributes`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<JsonValue>,
     #[serde(flatten)]
     pub meta: PageMetadata,
 }
@@ -675,9 +687,35 @@ impl McpServer {
     }
 
     /// Handle a single MCP request: fetch URL and return Markdown
+    /// or a structured `format` result (`video`, `menu`, `attributes`, etc.).
     pub async fn handle(&self, req: McpRequest) -> Result<McpResponse> {
         let html = self.browser.fetch(&req.url).await?;
         let html = self.browser.prepare_html(&html, &req.url).await?;
+
+        let result = match req.format.as_deref() {
+            Some("attributes") => {
+                if req.attr.is_empty() {
+                    anyhow::bail!("format 'attributes' requires at least one attr");
+                }
+                Some(serde_json::to_value(crate::extract_attributes(&html, &req.attr))?)
+            }
+            Some("menu") => match crate::extract_menu(&html) {
+                Some(menu) => Some(serde_json::to_value(menu)?),
+                None => anyhow::bail!("no JSON-LD Menu found on this page"),
+            },
+            Some("video") => Some(serde_json::to_value(crate::extract_videos(&html, &req.url))?),
+            Some("audio") => Some(serde_json::to_value(crate::extract_audios(&html, &req.url))?),
+            Some("images") => Some(serde_json::to_value(crate::extract_images(&html, &req.url))?),
+            Some("links") => Some(serde_json::to_value(crate::extract_links(&html, &req.url))?),
+            Some("product") => match crate::extract_product(&html) {
+                Some(product) => Some(serde_json::to_value(product)?),
+                None => anyhow::bail!("no JSON-LD Product found on this page"),
+            },
+            Some("branding") => Some(serde_json::to_value(crate::extract_branding(&html))?),
+            Some(other) => anyhow::bail!("unsupported MCP format: {}", other),
+            None => None,
+        };
+
         let opts = ConvertOptions {
             include_images: req.include_images,
             keep_header: req.keep_header,
@@ -704,9 +742,12 @@ impl McpServer {
             );
         }
 
+        let output_markdown = if result.is_some() { String::new() } else { markdown };
+
         Ok(McpResponse {
             url: req.url,
-            markdown,
+            markdown: output_markdown,
+            result,
             meta,
         })
     }
@@ -1635,5 +1676,100 @@ mod tests {
         };
         let fm = meta.to_frontmatter(None).unwrap();
         assert!(fm.contains("title: \"Path\\\\with\\\\backslashes\""));
+    }
+
+    #[tokio::test]
+    async fn mcp_server_returns_video_format() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/video")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(r#"<html><body>
+                <video src="/clip.mp4" poster="/poster.jpg" title="Demo" duration="PT1M30S"></video>
+                </body></html>"#)
+            .create_async()
+            .await;
+
+        let mcp = McpServer::new().unwrap();
+        let resp = mcp
+            .handle(McpRequest {
+                url: format!("{}/video", server.url()),
+                format: Some("video".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.markdown.is_empty());
+        let result = resp.result.expect("result present");
+        let arr = result.as_array().expect("result is array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["url"].as_str().unwrap().ends_with("/clip.mp4"), true);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_server_returns_attributes_format() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/attrs")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(r#"<html><body>
+                <a href="/a">A</a><a href="/b">B</a>
+                <img src="/x.png" data-id="1">
+                </body></html>"#)
+            .create_async()
+            .await;
+
+        let mcp = McpServer::new().unwrap();
+        let resp = mcp
+            .handle(McpRequest {
+                url: format!("{}/attrs", server.url()),
+                format: Some("attributes".to_string()),
+                attr: vec!["a:href".into(), "img:data-id".into()],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.markdown.is_empty());
+        let result = resp.result.expect("result present");
+        let arr = result.as_array().expect("result is array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["selector"].as_str().unwrap(), "a");
+        assert_eq!(arr[0]["attribute"].as_str().unwrap(), "href");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_server_returns_menu_format() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/menu")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(r#"<html><head>
+                <script type="application/ld+json">
+                {"@type":"Menu","name":"Lunch","hasMenuSection":{"@type":"MenuSection","name":"Mains","hasMenuItem":{"@type":"MenuItem","name":"Burger","offers":{"@type":"Offer","price":"12","priceCurrency":"USD"}}}}
+                </script></head><body></body></html>"#)
+            .create_async()
+            .await;
+
+        let mcp = McpServer::new().unwrap();
+        let resp = mcp
+            .handle(McpRequest {
+                url: format!("{}/menu", server.url()),
+                format: Some("menu".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.markdown.is_empty());
+        let result = resp.result.expect("result present");
+        assert_eq!(result["name"].as_str().unwrap(), "Lunch");
+        mock.assert_async().await;
     }
 }
