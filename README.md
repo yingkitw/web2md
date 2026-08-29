@@ -54,6 +54,7 @@ web2md fetch https://example.com
 
 # Terminal browser with numbered links (Lynx-like)
 web2md https://example.com
+# Pages with Space/-, searches with /pattern, saves with s, bookmarks with a, quit with q
 
 # Isolate the article body (requires the readability feature)
 web2md fetch https://example.com/article --readability

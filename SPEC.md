@@ -74,7 +74,10 @@ robots.txt is **off by default**. When enabled via `BrowserOptions { respect_rob
 ```bash
 # Default: interactive terminal browser (Lynx-like)
 web2md <URL>
-# Controls: [1-N] follow link, [b]ack, [f]orward, [u] enter URL, [q]uit
+# Keys: Space/+/-/j/k scroll pages, g/G top/end, /pat search, n/N next/prev match,
+#       1-N follow link, u enter URL, b/f back/forward, r reload, s save page as .md,
+#       a bookmark page, v list bookmarks, L list links, y copy URL (OSC 52),
+#       m toggle raw/ansi view, ? help, q quit
 
 # One-shot fetch to stdout
 web2md fetch <URL> [FLAGS]

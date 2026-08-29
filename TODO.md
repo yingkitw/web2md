@@ -20,6 +20,7 @@
 - [x] `--format` CLI option: `markdown` (default) or `html` raw
 - [x] `--render` flag: ANSI terminal rendering of Markdown (colors, bold, underlined links)
 - [x] `browse` subcommand: interactive Lynx-like terminal browser with back/forward history and link navigation
+- [x] TUI browser v2: paged viewport (Space/-/j/k/g/G), in-page search (/pat, n/N), save page as .md (s), bookmarks (a/v → ~/.web2md/bookmarks.txt), link list (L), URL copy via OSC 52 (y), reload (r), raw/ansi view toggle (m), help (?) — zero new dependencies
 - [x] Default command: passing a URL directly launches `browse` mode
 - [x] Strip `<iframe>` tags from HTML before Markdown conversion
 - [x] Inline iframe content: fetch `src` and consolidate into parent page

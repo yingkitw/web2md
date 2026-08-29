@@ -71,7 +71,9 @@ main.rs (helpers)
   ├── fix_raw_links()        : Post-process multi-line `[text](url)` patterns
   ├── extract_links()          : Parse Markdown links for browse navigation
   ├── url_to_filename()        : Convert URL to safe filename for batch output
-  └── browse_loop()           : Interactive terminal browser with history
+  ├── viewport_window() / find_match_forward() / find_match_backward() : pure TUI helpers (paging, in-page search)
+  ├── b64() / bookmarks_path() / load_bookmarks() / add_bookmark() : OSC 52 clipboard + $HOME/.web2md/bookmarks.txt
+  └── browse_loop()           : Interactive terminal browser — paged viewport, search, history, bookmarks, save, yank, raw/ansi toggle
 ```
 
 ## Data Flow
