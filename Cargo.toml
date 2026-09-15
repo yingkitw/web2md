@@ -1,13 +1,13 @@
 [package]
 name = "web2md"
-version = "0.1.12"
+version = "0.1.13"
 edition = "2024"
 authors = ["Ying Kit WONG"]
 description = "Turn web pages into clean Markdown — local, deterministic, API-key-free"
 license = "Apache-2.0"
 repository = "https://github.com/yingkitw/web2md"
 documentation = "https://docs.rs/web2md"
-homepage = "https://github.com/yingkitw/web2md"
+homepage = "https://web2md.net"
 readme = "README.md"
 categories = ["web-programming", "development-tools"]
 keywords = ["mcp", "markdown", "web-scraping", "html", "converter"]

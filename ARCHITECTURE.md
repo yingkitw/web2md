@@ -3,10 +3,10 @@
 ## Module Relationships
 
 ```
-main.rs
-  ├── CLI parsing (clap)
-  ├── <URL> (default) → browse_loop → Browser → PageToMarkdown → ANSI renderer → terminal
-  ├── fetch command   → Browser → inline_iframes → PageToMarkdown → stdout
+main.rs (thin entry) → cli::Cli::parse() → commands::run()
+  ├── CLI parsing (clap, defined in cli.rs)
+  ├── <URL> (default) → tui::browse_loop → Browser → PageToMarkdown → ansi renderer → terminal
+  ├── fetch command   → commands::fetch → Browser → inline_iframes → PageToMarkdown → stdout
   │                     ├── --depth N → parallel BFS crawl via crawl.rs (same-origin links, 10 concurrent) → multiple Markdown outputs
   │                     ├── --sitemap-only → crawl from sitemap.xml URLs only (no page-link following; requires --depth > 0)
   │                     ├── --format json → extract_page_metadata → structured JSON output
@@ -30,12 +30,12 @@ main.rs
   │                     ├── --max-tokens <N> → transform::truncate_by_tokens → stdout
   │                     ├── --cache-dir <path> → persistent_cache.rs (sha256 → JSON file) → reused on next fetch
   │                     ├── --rate <rps> → Browser::enforce_delay per-host clock
-  │                     ├── --webhook <url> → main::post_webhook → POST `{event,url,format,result}`
+  │                     ├── --webhook <url> → options::post_webhook → POST `{event,url,format,result}`
   │                     ├── (default) → Browser::fetch_stream (chunked HTTP, stderr progress) → PageToMarkdown::convert_progressive_with → incremental Markdown blocks to stdout
   │                     └── --format xml → extract_page_metadata → plain `<doc>` XML
   ├── peek command   → Browser (--proxy/--auth supported) → extract_page_metadata (no body conversion) → key fields only
   ├── diff command   → Browser ×2 (or cached file) → diff_markdown::diff_markdown → unified-diff output
-  ├── watch command  → Browser (poll loop) → main::poll_once → content_fingerprint → emit on change; persists last-seen fingerprint under --cache-dir
+  ├── watch command  → commands::run loop → watch::poll_once → content_fingerprint → emit on change; persists last-seen fingerprint under --cache-dir
   ├── sitemap command → Browser → parse_sitemap_urls → URL list
   ├── map command     → Browser → extract::extract_links → URL list (optional --same-origin, --json)
   ├── search command  → Browser (DDG HTML) → search::parse_ddg_results → results (Markdown or JSON, optional --fetch)
@@ -44,7 +44,7 @@ main.rs
   └── mcp command     → McpServer → Browser → inline_iframes → PageToMarkdown → JSON-RPC
 
 lib.rs
-  ├── browser.rs   : HTTP client; persistent + in-memory cache with TTL; **`--no-cache` / `--cache-max-age`**; **per-host rate-limit clock**; sitemap XML parsing; URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
+  ├── browser/      : HTTP client (browser/mod.rs); persistent + in-memory cache with TTL; **`--no-cache` / `--cache-max-age`**; **per-host rate-limit clock**; sitemap XML parsing (browser/sitemap.rs); URL blacklist filtering on secondary fetches; **proxy support** (`--proxy`); **basic auth** (`--auth`)
   ├── persistent_cache.rs : JSON files keyed by sha256(url) under `--cache-dir`; same TTL semantics; `fetched_at()`, `prune()`, `invalidate()`
   ├── url_blacklist.rs : Host/path pattern matching for ads, analytics, and tracking pixels; BlacklistPatterns with built-in + `~/.web2md/blacklist.txt` + `--blacklist-file` merge
   ├── crawl.rs       : HTML link extraction, same-origin filtering, URL normalization for recursive crawl (`--depth N`)
@@ -53,7 +53,7 @@ lib.rs
   ├── structured.rs  : **Domain-specific extractors** — `extract_recipe`, `extract_faq`, `extract_job`, `extract_event`. Walk JSON-LD blocks directly; render deterministic Markdown with YAML frontmatter.
   ├── diff_markdown.rs : **Page diffing** — LCS-based unified diff for the `diff` subcommand (URL vs URL or URL vs cached file).
   ├── branding.rs    : **Brand/design profile** — deterministic top-N colors / fonts / heading sizes extracted from inline `<style>` blocks; output via `--format branding`.
-  ├── extract.rs     : **Page-element extractors** — `extract_links`, `extract_images`, `extract_product`, `extract_videos`, `extract_attributes`, `extract_menu` from HTML/JSON-LD; output via `--format links`/`images`/`product`/`video`/`attributes`/`menu`.
+  ├── extract/       : **Page-element extractors** (extract/{links,images,product,media,menu,attributes}.rs) — `extract_links`, `extract_images`, `extract_product`, `extract_videos`, `extract_audios`, `extract_attributes`, `extract_menu` from HTML/JSON-LD; output via `--format links`/`images`/`product`/`video`/`audio`/`attributes`/`menu`.
   ├── redact.rs      : **PII redaction** — regex-based redaction of emails, phones, SSNs, credit cards; invoked by `--pii-redact`.
   ├── search.rs      : **Web search** — DuckDuckGo HTML endpoint scraping; `parse_ddg_results` extracts titles/URLs/snippets; `decode_ddg_redirect` resolves DDG redirect links; `results_to_markdown` renders numbered links with blockquote snippets.
   ├── docs.rs        : **Library doc fetcher** — fetches README + metadata from crates.io, npm, or PyPI public APIs (no API key); `parse_registry_response` extracts PackageInfo from each registry's JSON format; `package_info_to_markdown` renders Markdown with metadata table + README.
@@ -63,17 +63,18 @@ lib.rs
   ├── html_util.rs  : Shared HTML helpers (`find_ci`, entity decoding, `strip_html_tags`)
   ├── html_meta.rs  : Shared `<meta>`, JSON-LD, `<link rel>`, and `<html lang>` parsing (`collect_meta_property_values`, `extract_json_ld_string_list`)
   ├── html_to_md.rs : In-house HTML → Markdown converter via `scraper`/html5ever DOM walk (headings, links, images, lists, code blocks, tables with td-row header promotion, angle-escaped URLs, inline formatting)
-  ├── markdown.rs  : PageToMarkdown — `ConvertOptions` (precision/recall/comments); page-type profiles; `extraction_quality()` / `detect_page_type()`; main-content heuristics; forum comments; product JSON-LD details; dedup; link absolutization
+  ├── markdown/    : PageToMarkdown — mod.rs holds `ConvertOptions` (precision/recall/comments), page-type profiles, `extraction_quality()` / `detect_page_type()`, dedup, link absolutization, plain-text; strip.rs (boilerplate/noise removal); content.rs (Trafilatura-style main-content selection); comments.rs (forum/thread extraction); structured.rs (JSON-LD/OG fallback)
   └── mcp.rs       : JSON-RPC server; `PageMetadata`; content signals (quality, page_type, stopword language fallback, fingerprint, word/char counts); `to_csv` / `to_tei` / `to_xml`; `language_matches`
 
-main.rs (helpers)
-  ├── render_markdown_ansi() : pulldown-cmark → ANSI escape codes (headings, links, tables, code)
-  ├── fix_raw_links()        : Post-process multi-line `[text](url)` patterns
-  ├── extract_links()          : Parse Markdown links for browse navigation
-  ├── url_to_filename()        : Convert URL to safe filename for batch output
-  ├── viewport_window() / find_match_forward() / find_match_backward() : pure TUI helpers (paging, in-page search)
-  ├── b64() / bookmarks_path() / load_bookmarks() / add_bookmark() : OSC 52 clipboard + $HOME/.web2md/bookmarks.txt
-  └── browse_loop()           : Interactive terminal browser — paged viewport, search, history, bookmarks, save, yank, raw/ansi toggle
+main.rs (binary, presentation layer)
+  ├── cli.rs        : clap definitions — `Cli`, `Commands`, `FetchArgs` / `BrowseArgs` / `BatchArgs` (`clap::Args` structs), `OutputFormat`, `format_label()`, `url_to_filename()`
+  ├── options.rs    : `build_browser_options()` (shared flag → BrowserOptions mapping), blacklist toggles, `filter_by_include_selectors()`, `post_webhook()`
+  ├── watch.rs      : `poll_once()` fingerprint polling + persisted watch state (sha256-named state files)
+  ├── commands/mod.rs : subcommand dispatch; inline arms for peek/diff/watch/sitemap/map/search/corpus/docs/mcp; `run_stdio_mcp()`; `domain_matches_any()`
+  ├── commands/fetch.rs : `fetch` handler (streaming path, all `--format` outputs, `--type` structured extractors, post-processing transforms) + `crawl_fetch()` (BFS `--depth` crawler) + `chunk_markdown_by_headings()`
+  ├── commands/batch.rs : `batch` handler (URL list → sequential conversion, per-URL blacklist/robots checks)
+  ├── ansi.rs       : `AnsiRenderer` — pulldown-cmark → ANSI escape codes (headings, links, tables, code); `render_markdown_ansi()`; `fix_raw_links()` (multi-line `[text](url)` post-processing)
+  └── tui.rs        : `browse_loop()` — interactive terminal browser (paged viewport, in-page search, history, bookmarks, save, yank, raw/ansi toggle); viewport/search/bookmark helpers
 ```
 
 ## Data Flow
@@ -157,7 +158,7 @@ URL ──► Browser.fetch() ──► raw HTML       (or headless::render_url 
 | `sha2` | SHA-256 for persistent-cache file names and watch-state identifiers |
 | `regex` | PII redaction, brand/design extraction |
 | `anyhow` | Error handling |
-| `futures-util` | Stream utilities for chunked HTTP response (`--stream`) |
+| `futures-util` | Stream utilities for chunked HTTP response (default streaming fetch path) |
 | `mockito` | HTTP mocking in tests (dev) |
 
 No dedicated HTML-to-Markdown, language-detection, or PDF/DOCX-rendering crates are pulled in. All such capabilities are implemented in-house to keep the default binary small (~5 MB release) and the audit surface manageable. The `readabilityrs` crate is gated behind the `readability` cargo feature so the default build stays lean. The `headless_chrome` crate is gated behind the `headless` cargo feature for the same reason.

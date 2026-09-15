@@ -22,7 +22,7 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 | HTML utilities | `html_util.rs` — case-insensitive search, entity decoding |
 | Persistent cache keys | `sha2` (SHA-256 of URL → JSON file) |
 | Optional regex | `regex` (PII redaction, brand/design extraction) |
-| Conversion pipeline | `markdown.rs` (`PageToMarkdown`) wraps `html_to_md::parse_html` |
+| Conversion pipeline | `markdown/` (`PageToMarkdown`) wraps `html_to_md::parse_html` |
 | Output transforms | `transform.rs` — `--topic`, `--summary`, `--max-tokens`, paragraph splitter |
 | Domain-specific extractors | `structured.rs` — Recipe, FAQPage, JobPosting, Event JSON-LD → Markdown |
 | Page diffing | `diff_markdown.rs` — LCS-based unified diff for the `diff` subcommand |
@@ -705,6 +705,6 @@ Non-2xx responses are logged to stderr; the local fetch result is still printed 
 
 ## Quality Bar
 
-- All features have unit and integration tests (420 tests across lib, main, and integration suites at last count)
+- All features have unit and integration tests (395 tests across lib, main, and integration suites at last count)
 - `cargo build` and `cargo test` must pass before merge
 - `cargo clippy` passes with 0 warnings
