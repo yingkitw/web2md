@@ -22,6 +22,48 @@ pub(crate) fn apply_blacklist_options(
     options.extra_blacklist_files = blacklist_file;
 }
 
+/// Load cookies from a file.
+///
+/// Supports:
+/// - simple `name=value` lines (`#` comments / blank lines ignored)
+/// - Netscape cookie jar lines (`domain\tflag\tpath\tsecure\texpiry\tname\tvalue`)
+pub(crate) fn load_cookie_file(path: &str) -> anyhow::Result<Vec<String>> {
+    let data = std::fs::read_to_string(path)
+        .with_context(|| format!("reading cookie file {}", path))?;
+    Ok(parse_cookie_file(&data))
+}
+
+/// Parse cookie file contents into `name=value` pairs.
+pub(crate) fn parse_cookie_file(data: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in data.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        // Netscape HTTP Cookie File: 7+ tab-separated fields.
+        if trimmed.contains('\t') {
+            let parts: Vec<&str> = trimmed.split('\t').collect();
+            if parts.len() >= 7 {
+                let name = parts[5].trim();
+                let value = parts[6].trim();
+                if !name.is_empty() {
+                    out.push(format!("{name}={value}"));
+                }
+            }
+            continue;
+        }
+        // Simple name=value
+        if let Some((name, value)) = trimmed.split_once('=') {
+            let name = name.trim();
+            if !name.is_empty() {
+                out.push(format!("{name}={}", value.trim()));
+            }
+        }
+    }
+    out
+}
+
 /// POST `body` as JSON to `url`. Returns Ok(()) for any 2xx response. Non-2xx
 /// are returned as errors so callers can log. Network errors also propagate.
 pub(crate) async fn post_webhook(url: &str, body: &str) -> anyhow::Result<()> {
@@ -43,6 +85,21 @@ pub(crate) async fn post_webhook(url: &str, body: &str) -> anyhow::Result<()> {
     } else {
         anyhow::bail!("webhook returned HTTP {}", status)
     }
+}
+
+/// Merge `--include-tags` (alphanumeric tag names) into the CSS include-selector list.
+pub(crate) fn merge_include_selectors(
+    selectors: &[String],
+    tags: &[String],
+) -> Vec<String> {
+    let mut out = selectors.to_vec();
+    for tag in tags {
+        let name = tag.trim().to_ascii_lowercase();
+        if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric()) {
+            out.push(name);
+        }
+    }
+    out
 }
 
 /// Keep only HTML elements matching the given CSS selectors (e.g. `article`, `.content`, `#main`).
@@ -85,6 +142,7 @@ pub(crate) fn build_browser_options(
     no_user_blacklist: bool,
     blacklist_file: Vec<String>,
     _ignore_robots: bool,
+    respect_robots: bool,
 ) -> BrowserOptions {
     let mut options = BrowserOptions::default();
     if let Some(secs) = timeout {
@@ -98,6 +156,53 @@ pub(crate) fn build_browser_options(
     }
     options.cookies = cookies;
     options.headers = headers;
+    options.respect_robots_txt = respect_robots;
     apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
     options
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_cookie_file_simple_and_netscape() {
+        let data = r#"
+# comment
+session=abc123
+auth = xyz
+
+# Netscape HTTP Cookie File
+.example.com	TRUE	/	FALSE	0	token	secret
+"#;
+        let cookies = parse_cookie_file(data);
+        assert_eq!(
+            cookies,
+            vec![
+                "session=abc123".to_string(),
+                "auth=xyz".to_string(),
+                "token=secret".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_include_selectors_appends_valid_tags() {
+        let sels = vec![".content".to_string()];
+        let tags = vec!["article".into(), "main!".into(), "MAIN".into()];
+        assert_eq!(
+            merge_include_selectors(&sels, &tags),
+            vec![".content".to_string(), "article".into(), "main".into()]
+        );
+    }
+
+    #[test]
+    fn include_tags_keeps_named_elements() {
+        let html = r#"<nav>Nav</nav><article><p>Keep me</p></article><footer>Foot</footer>"#;
+        let sels = merge_include_selectors(&[], &["article".into()]);
+        let kept = filter_by_include_selectors(html, &sels);
+        assert!(kept.contains("Keep me"));
+        assert!(!kept.contains("Nav"));
+        assert!(!kept.contains("Foot"));
+    }
 }

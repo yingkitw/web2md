@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use std::time::Duration;
-use web2md::{extract_page_metadata, Browser, PageToMarkdown};
+use web2md::{extract_page_metadata, Browser, ConvertOptions, PageToMarkdown};
 
 use crate::cli::{url_to_filename, BatchArgs};
 use crate::options::build_browser_options;
@@ -23,19 +23,25 @@ if urls.is_empty() {
     return Ok(());
 }
 
+let mut cookies = args.cookie;
+if let Some(ref path) = args.cookie_file {
+    cookies.extend(crate::options::load_cookie_file(path)?);
+}
 let options = build_browser_options(
     args.timeout,
     args.delay,
     args.cache_ttl,
-    args.cookie,
+    cookies,
     args.header,
     args.no_blacklist,
     args.no_user_blacklist,
     args.blacklist_file,
     args.ignore_robots,
+    args.respect_robots,
 );
 let mut options = options;
 options.no_cache = args.no_cache;
+options.skip_tls_verify = args.skip_tls_verify;
 if let Some(max_age) = args.cache_max_age {
     options.cache_max_age = Some(Duration::from_secs(max_age));
 }
@@ -78,7 +84,14 @@ for (i, url) in urls.iter().enumerate() {
                 Ok(prepared) => prepared,
                 Err(_) => html,
             };
-            match PageToMarkdown::convert(&html, args.include_images, args.keep_header, args.main_content, &args.exclude_selector) {
+            let convert_opts = ConvertOptions {
+                include_images: args.include_images,
+                keep_header: args.keep_header,
+                main_content: args.main_content,
+                exclude_tags: args.exclude_tags.clone(),
+                ..Default::default()
+            };
+            match PageToMarkdown::convert_with(&html, &convert_opts, &args.exclude_selector) {
                 Ok(md) => {
                     let md = PageToMarkdown::absolutize_links(&md, url);
                     let md = if args.frontmatter {

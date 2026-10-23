@@ -7,29 +7,37 @@ use std::collections::HashSet;
 use std::time::Duration;
 use url::Url;
 use web2md::{
-    extract_event, extract_faq, extract_job, extract_page_metadata, extract_recipe,
-    extract_summary, extract_topic, language_matches, normalize_crawl_url, truncate_by_tokens,
-    truncate_with_marker, Browser, ConvertOptions, PageToMarkdown,
+    extract_course, extract_event, extract_faq, extract_howto, extract_job, extract_metadata,
+    extract_page_metadata, extract_qapage, extract_recipe, extract_software_application,
+    extract_speakable, extract_summary, extract_topic, language_matches, normalize_crawl_url,
+    path_allowed, remove_base64_images, to_atom_feed, to_llms_txt_site, truncate_by_tokens,
+    truncate_with_marker, AtomEntry, Browser, ConvertOptions, LlmsPageEntry, PageToMarkdown,
 };
 
 use crate::ansi::render_markdown_ansi;
 use crate::cli::{format_label, CliJsonOutput, FetchArgs, OutputFormat};
 use crate::cli::url_to_filename;
 use crate::options::{
-    build_browser_options, filter_by_include_selectors, post_webhook, MOBILE_USER_AGENT,
+    build_browser_options, filter_by_include_selectors, load_cookie_file, merge_include_selectors,
+    post_webhook, MOBILE_USER_AGENT,
 };
 
 pub(crate) async fn handle(args: FetchArgs) -> Result<()> {
+let mut cookies = args.cookie;
+if let Some(ref path) = args.cookie_file {
+    cookies.extend(load_cookie_file(path)?);
+}
 let options = build_browser_options(
     args.timeout,
     args.delay,
     args.cache_ttl,
-    args.cookie,
+    cookies,
     args.header,
     args.no_blacklist,
     args.no_user_blacklist,
     args.blacklist_file,
     args.ignore_robots,
+    args.respect_robots,
 );
 let mut options = options;
 if let Some(dir) = args.cache_dir {
@@ -40,6 +48,7 @@ if let Some(max_age) = args.cache_max_age {
     options.cache_max_age = Some(Duration::from_secs(max_age));
 }
 options.host_rate_limit = args.rate;
+options.skip_tls_verify = args.skip_tls_verify;
 if args.mobile {
     options.user_agent = MOBILE_USER_AGENT.to_string();
 }
@@ -55,22 +64,36 @@ if args.sitemap_only && args.depth == 0 {
     anyhow::bail!("--sitemap-only requires --depth > 0");
 }
 if args.depth > 0 {
-    if !matches!(args.format, OutputFormat::Markdown) {
-        anyhow::bail!("--depth requires markdown output format");
+    if !matches!(
+        args.format,
+        OutputFormat::Markdown | OutputFormat::LlmsTxt | OutputFormat::Atom
+    ) {
+        anyhow::bail!("--depth requires markdown, llms-txt, or atom output format");
     }
+    let crawl_mode = match args.format {
+        OutputFormat::LlmsTxt => CrawlMode::LlmsTxt,
+        OutputFormat::Atom => CrawlMode::Atom,
+        _ => CrawlMode::Markdown,
+    };
     crawl_fetch(
         &browser,
         &args.url,
         args.depth,
         args.sitemap_only,
+        args.max_pages,
+        &args.path_prefix,
+        &args.path_exclude,
         args.max_length,
         args.include_images,
         args.keep_header,
         args.main_content,
         args.frontmatter,
         &args.exclude_selector,
+        &args.exclude_tags,
         args.output.as_deref(),
         args.render,
+        args.remove_base64_images,
+        crawl_mode,
     )
     .await?;
 } else {
@@ -106,6 +129,8 @@ if args.depth > 0 {
         let opts = web2md::HeadlessOptions {
             wait_ms: 0,
             chrome_path: args.chrome_path.clone(),
+            wait_for_selector: args.wait_for_selector.clone(),
+            scroll: args.scroll.unwrap_or(0),
         };
         web2md::render_url(&args.url, opts).await?
     } else {
@@ -115,7 +140,8 @@ if args.depth > 0 {
 
     // Streaming Markdown output: emit blocks incrementally.
     if can_stream {
-        let html = filter_by_include_selectors(&html, &args.include_selector);
+        let include_sels = merge_include_selectors(&args.include_selector, &args.include_tags);
+        let html = filter_by_include_selectors(&html, &include_sels);
         #[cfg(feature = "readability")]
         let html = if args.readability {
             web2md::apply_readability(&html, Some(&args.url))?
@@ -131,6 +157,7 @@ if args.depth > 0 {
             include_comments: !args.no_comments,
             include_tables: !args.no_tables,
             include_links: !args.no_links,
+            exclude_tags: args.exclude_tags.clone(),
         };
         let mut first = true;
         PageToMarkdown::convert_progressive_with(
@@ -162,7 +189,8 @@ if args.depth > 0 {
         return Ok(());
     }
 
-    let html = filter_by_include_selectors(&html, &args.include_selector);
+    let include_sels = merge_include_selectors(&args.include_selector, &args.include_tags);
+    let html = filter_by_include_selectors(&html, &include_sels);
     #[cfg(feature = "readability")]
     let html = if args.readability {
         web2md::apply_readability(&html, Some(&args.url))?
@@ -213,6 +241,47 @@ if args.depth > 0 {
                 None => anyhow::bail!("no JSON-LD Menu found on this page"),
             }
         }
+        OutputFormat::Breadcrumbs => {
+            match web2md::extract_breadcrumbs(&html, &args.url) {
+                Some(list) => (serde_json::to_string_pretty(&list)?, None),
+                None => anyhow::bail!("no JSON-LD BreadcrumbList found on this page"),
+            }
+        }
+        OutputFormat::Meta => {
+            let dump = web2md::extract_meta_dump(&html);
+            (serde_json::to_string_pretty(&dump)?, None)
+        }
+        OutputFormat::LlmsTxt => {
+            let meta = web2md::extract_metadata(&html);
+            let links = web2md::extract_links(&html, &args.url);
+            let pairs: Vec<(String, String)> =
+                links.into_iter().map(|l| (l.url, l.text)).collect();
+            let out = web2md::to_llms_txt(
+                &args.url,
+                meta.title.as_deref(),
+                meta.description.as_deref(),
+                &pairs,
+            );
+            (out, None)
+        }
+        OutputFormat::Atom => {
+            let meta = web2md::extract_metadata(&html);
+            let entry = AtomEntry {
+                url: args.url.clone(),
+                title: meta
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| args.url.clone()),
+                summary: meta.description.clone(),
+                updated: meta.published_date.clone(),
+            };
+            let out = to_atom_feed(
+                &args.url,
+                meta.site_name.as_deref().or(meta.title.as_deref()),
+                &[entry],
+            );
+            (out, None)
+        }
         OutputFormat::Html => {
             if args.lang.is_some() {
                 anyhow::bail!("--args.lang requires a converted output args.format (not html)");
@@ -261,9 +330,51 @@ if args.depth > 0 {
                         None
                     }
                 },
+                Some("howto") => match extract_howto(&html) {
+                    Ok(Some(md)) => Some(md),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!("--type howto: {}, falling back", e);
+                        None
+                    }
+                },
+                Some("qapage") => match extract_qapage(&html) {
+                    Ok(Some(md)) => Some(md),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!("--type qapage: {}, falling back", e);
+                        None
+                    }
+                },
+                Some("speakable") => match extract_speakable(&html) {
+                    Ok(Some(md)) => Some(md),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!("--type speakable: {}, falling back", e);
+                        None
+                    }
+                },
+                Some("course") => match extract_course(&html) {
+                    Ok(Some(md)) => Some(md),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!("--type course: {}, falling back", e);
+                        None
+                    }
+                },
+                Some("software") | Some("softwareapplication") => {
+                    match extract_software_application(&html) {
+                        Ok(Some(md)) => Some(md),
+                        Ok(None) => None,
+                        Err(e) => {
+                            eprintln!("--type software: {}, falling back", e);
+                            None
+                        }
+                    }
+                }
                 Some(other) => {
                     anyhow::bail!(
-                        "unsupported --type {}; expected one of: recipe, faq, job, event",
+                        "unsupported --type {}; expected one of: recipe, faq, job, event, howto, qapage, speakable, course, software",
                         other
                     );
                 }
@@ -282,6 +393,7 @@ if args.depth > 0 {
                         include_comments: !args.no_comments,
                         include_tables: !args.no_tables,
                         include_links: !args.no_links,
+                        exclude_tags: args.exclude_tags.clone(),
                     };
                     let body = PageToMarkdown::convert_with(
                         &html,
@@ -365,6 +477,10 @@ if args.depth > 0 {
                 OutputFormat::Audio => unreachable!(),
                 OutputFormat::Attributes => unreachable!(),
                 OutputFormat::Menu => unreachable!(),
+                OutputFormat::Breadcrumbs => unreachable!(),
+                OutputFormat::Meta => unreachable!(),
+                OutputFormat::LlmsTxt => unreachable!(),
+                OutputFormat::Atom => unreachable!(),
             };
             (out, fm_meta)
         }
@@ -410,6 +526,10 @@ if args.depth > 0 {
         result = truncate_with_marker(&result, max);
     }
 
+    if args.remove_base64_images {
+        result = remove_base64_images(&result);
+    }
+
     if args.pii_redact {
         result = web2md::redact_pii(&result);
     }
@@ -437,6 +557,13 @@ if args.depth > 0 {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum CrawlMode {
+    Markdown,
+    LlmsTxt,
+    Atom,
+}
+
 /// Recursively fetch and convert same-origin pages up to `depth` link hops.
 /// Pages at each BFS level are fetched in parallel (up to 10 concurrent).
 #[allow(clippy::too_many_arguments)]
@@ -445,14 +572,20 @@ async fn crawl_fetch(
     start_url: &str,
     depth: u32,
     sitemap_only: bool,
+    max_pages: Option<usize>,
+    path_prefix: &[String],
+    path_exclude: &[String],
     max_length: Option<usize>,
     include_images: bool,
     keep_header: bool,
     main_content: bool,
     frontmatter: bool,
     exclude_selector: &[String],
+    exclude_tags: &[String],
     output_dir: Option<&str>,
     render: bool,
+    strip_base64_images: bool,
+    mode: CrawlMode,
 ) -> Result<()> {
     use std::sync::Arc;
     use tokio::sync::Semaphore;
@@ -468,6 +601,11 @@ async fn crawl_fetch(
 
     let sem = Arc::new(Semaphore::new(CONCURRENCY));
     let mut visited = HashSet::new();
+    let mut llms_pages: Vec<LlmsPageEntry> = Vec::new();
+    let mut atom_entries: Vec<AtomEntry> = Vec::new();
+    let mut site_title: Option<String> = None;
+    let mut site_description: Option<String> = None;
+    let aggregate = matches!(mode, CrawlMode::LlmsTxt | CrawlMode::Atom);
 
     // For sitemap-only mode, fetch sitemap.xml and use those URLs as the initial set.
     let mut current_level: Vec<String> = if sitemap_only {
@@ -479,7 +617,12 @@ async fn crawl_fetch(
         eprintln!("Fetching sitemap: {}", sitemap_url);
         match browser.fetch(&sitemap_url).await {
             Ok(xml) => {
-                let urls = browser.expand_sitemap(&sitemap_url, &xml).await;
+                let urls: Vec<String> = browser
+                    .expand_sitemap(&sitemap_url, &xml)
+                    .await
+                    .into_iter()
+                    .filter(|u| path_allowed(u, path_prefix, path_exclude))
+                    .collect();
                 eprintln!("Sitemap returned {} URL(s)", urls.len());
                 if urls.is_empty() {
                     return Ok(());
@@ -512,11 +655,31 @@ async fn crawl_fetch(
                 skipped += 1;
                 continue;
             }
+            if !path_allowed(&url, path_prefix, path_exclude) {
+                eprintln!("Skipped (path filter): {}", url);
+                skipped += 1;
+                continue;
+            }
             to_fetch.push(url);
         }
 
         if to_fetch.is_empty() {
             break;
+        }
+
+        if let Some(max) = max_pages {
+            let remaining = max.saturating_sub(succeeded);
+            if remaining == 0 {
+                eprintln!("Reached --max-pages {}", max);
+                break;
+            }
+            if to_fetch.len() > remaining {
+                eprintln!(
+                    "Capping crawl at {} remaining page(s) (--max-pages {})",
+                    remaining, max
+                );
+                to_fetch.truncate(remaining);
+            }
         }
 
         eprintln!("[depth {}] {} URL(s)", level, to_fetch.len());
@@ -550,6 +713,9 @@ async fn crawl_fetch(
                 Ok((html, _)) => {
                     if level < depth && !sitemap_only {
                         for link in browser.same_origin_links(&html, &url, &root) {
+                            if !path_allowed(&link, path_prefix, path_exclude) {
+                                continue;
+                            }
                             let link_key =
                                 normalize_crawl_url(&link, &link).unwrap_or_else(|| link.clone());
                             if !visited.contains(&link_key) {
@@ -558,41 +724,84 @@ async fn crawl_fetch(
                         }
                     }
 
-                    match PageToMarkdown::convert(
-                        &html,
-                        include_images,
-                        keep_header,
-                        main_content,
-                        exclude_selector,
-                    ) {
-                        Ok(md) => {
-                            let mut md = PageToMarkdown::absolutize_links(&md, &url);
-                            if frontmatter {
-                                let meta = extract_page_metadata(&html, &md);
-                                if let Some(fm) = meta.to_frontmatter(Some(&url)) {
-                                    md = format!("{}{}", fm, md);
-                                }
-                            }
-                            if let Some(max) = max_length {
-                                md = truncate_with_marker(&md, max);
-                            }
-                            if render {
-                                md = render_markdown_ansi(&md, false).0;
-                            }
-
-                            if let Some(dir) = output_dir {
-                                let filename = url_to_filename(&url);
-                                let path = format!("{}/{}", dir, filename);
-                                std::fs::write(&path, &md)?;
-                                eprintln!("  → {}", path);
-                            } else {
-                                println!("---\n# {}\n\n{}", url, md);
-                            }
-                            succeeded += 1;
+                    if aggregate {
+                        let meta = extract_metadata(&html);
+                        if site_title.is_none() {
+                            site_title = meta
+                                .site_name
+                                .clone()
+                                .or_else(|| meta.title.clone());
                         }
-                        Err(e) => {
-                            eprintln!("  Error converting {}: {}", url, e);
-                            failed += 1;
+                        if site_description.is_none() {
+                            site_description = meta.description.clone();
+                        }
+                        let title = meta
+                            .title
+                            .clone()
+                            .filter(|t| !t.trim().is_empty())
+                            .unwrap_or_else(|| url.clone());
+                        match mode {
+                            CrawlMode::LlmsTxt => {
+                                llms_pages.push(LlmsPageEntry {
+                                    url: url.clone(),
+                                    title,
+                                    description: meta.description,
+                                });
+                            }
+                            CrawlMode::Atom => {
+                                atom_entries.push(AtomEntry {
+                                    url: url.clone(),
+                                    title,
+                                    summary: meta.description,
+                                    updated: meta.published_date,
+                                });
+                            }
+                            CrawlMode::Markdown => unreachable!(),
+                        }
+                        eprintln!("  → indexed {}", url);
+                        succeeded += 1;
+                    } else {
+                        let convert_opts = ConvertOptions {
+                            include_images,
+                            keep_header,
+                            main_content,
+                            exclude_tags: exclude_tags.to_vec(),
+                            ..Default::default()
+                        };
+                        match PageToMarkdown::convert_with(&html, &convert_opts, exclude_selector)
+                        {
+                            Ok(md) => {
+                                let mut md = PageToMarkdown::absolutize_links(&md, &url);
+                                if strip_base64_images {
+                                    md = remove_base64_images(&md);
+                                }
+                                if frontmatter {
+                                    let meta = extract_page_metadata(&html, &md);
+                                    if let Some(fm) = meta.to_frontmatter(Some(&url)) {
+                                        md = format!("{}{}", fm, md);
+                                    }
+                                }
+                                if let Some(max) = max_length {
+                                    md = truncate_with_marker(&md, max);
+                                }
+                                if render {
+                                    md = render_markdown_ansi(&md, false).0;
+                                }
+
+                                if let Some(dir) = output_dir {
+                                    let filename = url_to_filename(&url);
+                                    let path = format!("{}/{}", dir, filename);
+                                    std::fs::write(&path, &md)?;
+                                    eprintln!("  → {}", path);
+                                } else {
+                                    println!("---\n# {}\n\n{}", url, md);
+                                }
+                                succeeded += 1;
+                            }
+                            Err(e) => {
+                                eprintln!("  Error converting {}: {}", url, e);
+                                failed += 1;
+                            }
                         }
                     }
                 }
@@ -604,6 +813,36 @@ async fn crawl_fetch(
         }
 
         current_level = next_level;
+    }
+
+    match mode {
+        CrawlMode::LlmsTxt => {
+            let out = to_llms_txt_site(
+                start_url,
+                site_title.as_deref(),
+                site_description.as_deref(),
+                &llms_pages,
+                "Pages",
+            );
+            if let Some(dir) = output_dir {
+                let path = format!("{}/llms.txt", dir);
+                std::fs::write(&path, &out)?;
+                eprintln!("  → {}", path);
+            } else {
+                println!("{}", out);
+            }
+        }
+        CrawlMode::Atom => {
+            let out = to_atom_feed(start_url, site_title.as_deref(), &atom_entries);
+            if let Some(dir) = output_dir {
+                let path = format!("{}/feed.atom", dir);
+                std::fs::write(&path, &out)?;
+                eprintln!("  → {}", path);
+            } else {
+                println!("{}", out);
+            }
+        }
+        CrawlMode::Markdown => {}
     }
 
     eprintln!(

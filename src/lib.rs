@@ -29,26 +29,33 @@ pub use corpus::{build_index, index_path_for, query_index, results_to_markdown a
 pub use diff_markdown::{diff_markdown, summarize};
 pub use docs::{package_info_to_markdown, parse_registry_response, registry_api_url, PackageInfo, Registry};
 pub use persistent_cache::PersistentCache;
-pub use crawl::{normalize_crawl_url, same_origin_links};
+pub use crawl::{normalize_crawl_url, path_allowed, same_origin_links};
 pub use extract::{
-    extract_attributes, extract_audios, extract_images, extract_links, extract_menu, extract_product,
-    extract_videos, AttributeResult, AudioEntry, ImageEntry, LinkEntry, MenuEntry, MenuItem,
-    MenuSection, ProductEntry, ProductVariant, VideoEntry,
+    extract_attributes, extract_audios, extract_breadcrumbs, extract_images, extract_links,
+    extract_menu, extract_product, extract_videos, AttributeResult, AudioEntry, BreadcrumbCrumb,
+    BreadcrumbList, ImageEntry, LinkEntry, MenuEntry, MenuItem, MenuSection, ProductEntry,
+    ProductVariant, VideoEntry,
 };
 pub use headless::{is_headless_available, render_url, HeadlessOptions};
+pub use html_meta::{extract_meta_dump, MetaDump};
 pub use markdown::{ConvertOptions, PageToMarkdown};
 pub use mcp::{
     content_fingerprint, detect_content_language, extract_metadata, extract_page_metadata,
-    language_matches, truncate_with_marker, McpRequest, McpServer, PageMetadata,
+    estimate_reading_time_minutes, language_matches, truncate_with_marker, McpRequest, McpServer,
+    PageMetadata,
 };
 #[cfg(feature = "readability")]
 pub use readability::{apply_readability, is_readerable};
 pub use structured::{
-    extract_event, extract_faq, extract_job, extract_recipe, StructuredError,
+    extract_course, extract_event, extract_faq, extract_howto, extract_job, extract_qapage,
+    extract_recipe, extract_software_application, extract_speakable, StructuredError,
 };
 pub use redact::redact_pii;
 pub use search::{ddg_search_url, parse_ddg_results, results_to_markdown, SearchResult};
-pub use transform::{extract_summary, extract_topic, truncate_by_tokens};
+pub use transform::{
+    extract_summary, extract_topic, remove_base64_images, to_atom_feed, to_llms_txt,
+    to_llms_txt_site, truncate_by_tokens, AtomEntry, LlmsPageEntry,
+};
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_USER_AGENT: &str = concat!(

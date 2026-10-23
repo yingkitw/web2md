@@ -7,6 +7,9 @@
 //! - [`extract_summary`] — extractive summarization by TF score (≈ Firecrawl `summary`)
 //! - [`truncate_by_tokens`] — soft cap by token budget, not character count
 //! - [`split_paragraphs`] — shared splitter used by topic and summary
+//! - [`remove_base64_images`] — strip `data:` image URIs from Markdown (≈ Firecrawl `removeBase64Images`)
+//! - [`to_llms_txt`] — single-page [`llms.txt`](https://llmstxt.org)-style summary
+//! - [`to_atom_feed`] — Atom 1.0 feed from page entries (crawl / single-page)
 //!
 //! All public functions are pure and operate on `&str`, making them trivial
 //! to unit test.
@@ -366,9 +369,310 @@ fn truncate_with_marker(s: &str, max: usize) -> String {
     format!("{}\n\n[truncated]", s[..cut].trim_end())
 }
 
+/// Strip Markdown images and HTML `<img>` tags that use `data:` URIs
+/// (≈ Firecrawl `removeBase64Images`). Leaves normal http(s) images untouched.
+pub fn remove_base64_images(md: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE_MD: OnceLock<Regex> = OnceLock::new();
+    static RE_HTML: OnceLock<Regex> = OnceLock::new();
+    let re_md = RE_MD.get_or_init(|| {
+        Regex::new(r"!\[[^\]]*\]\(\s*data:[^)]*\)").expect("valid regex")
+    });
+    let re_html = RE_HTML.get_or_init(|| {
+        Regex::new(r#"(?i)<img\b[^>]*\bsrc\s*=\s*["']data:[^"']*["'][^>]*/?>"#)
+            .expect("valid regex")
+    });
+    let without_md = re_md.replace_all(md, "");
+    let without_html = re_html.replace_all(&without_md, "");
+    // Collapse runs of 3+ newlines left by removals.
+    let mut out = String::with_capacity(without_html.len());
+    let mut newlines = 0usize;
+    for ch in without_html.chars() {
+        if ch == '\n' {
+            newlines += 1;
+            if newlines <= 2 {
+                out.push(ch);
+            }
+        } else {
+            newlines = 0;
+            out.push(ch);
+        }
+    }
+    out
+}
+
+/// One crawled page entry for a multi-page [`llms.txt`](https://llmstxt.org) index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LlmsPageEntry {
+    pub url: String,
+    pub title: String,
+    pub description: Option<String>,
+}
+
+/// Render a single-page [`llms.txt`](https://llmstxt.org)-style summary:
+/// title, optional description blockquote, source URL, and a capped link list.
+pub fn to_llms_txt(
+    url: &str,
+    title: Option<&str>,
+    description: Option<&str>,
+    links: &[(String, String)],
+) -> String {
+    let pages: Vec<LlmsPageEntry> = links
+        .iter()
+        .take(50)
+        .map(|(href, text)| {
+            let label = {
+                let t = text.trim();
+                if t.is_empty() {
+                    href.clone()
+                } else {
+                    t.to_string()
+                }
+            };
+            LlmsPageEntry {
+                url: href.clone(),
+                title: label,
+                description: None,
+            }
+        })
+        .collect();
+    to_llms_txt_site(url, title, description, &pages, "Links")
+}
+
+/// Render a multi-page site index in llms.txt form (root title + page list).
+pub fn to_llms_txt_site(
+    root_url: &str,
+    title: Option<&str>,
+    description: Option<&str>,
+    pages: &[LlmsPageEntry],
+    section: &str,
+) -> String {
+    let title = title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(root_url);
+    let mut out = format!("# {}\n\n", title);
+    if let Some(desc) = description.map(str::trim).filter(|s| !s.is_empty()) {
+        out.push_str("> ");
+        out.push_str(desc);
+        out.push_str("\n\n");
+    }
+    out.push_str(&format!("Source: {}\n", root_url));
+    if pages.is_empty() {
+        return out;
+    }
+    out.push_str(&format!("\n## {}\n\n", section));
+    for page in pages.iter().take(500) {
+        let label = {
+            let t = page.title.trim();
+            if t.is_empty() {
+                page.url.as_str()
+            } else {
+                t
+            }
+        };
+        out.push_str(&format!("- [{}]({})", label, page.url));
+        if let Some(desc) = page
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            out.push_str(": ");
+            out.push_str(desc);
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// One Atom feed entry (title / url / optional summary + updated).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AtomEntry {
+    pub url: String,
+    pub title: String,
+    pub summary: Option<String>,
+    pub updated: Option<String>,
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Emit an Atom 1.0 feed document from crawled (or single-page) entries.
+pub fn to_atom_feed(
+    feed_url: &str,
+    title: Option<&str>,
+    entries: &[AtomEntry],
+) -> String {
+    let title = title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(feed_url);
+    let updated = entries
+        .iter()
+        .find_map(|e| e.updated.as_deref())
+        .unwrap_or("1970-01-01T00:00:00Z");
+    let mut out = String::from(r#"<?xml version="1.0" encoding="utf-8"?>"#);
+    out.push('\n');
+    out.push_str(r#"<feed xmlns="http://www.w3.org/2005/Atom">"#);
+    out.push('\n');
+    out.push_str(&format!("  <title>{}</title>\n", xml_escape(title)));
+    out.push_str(&format!(
+        "  <link href=\"{}\" rel=\"alternate\"/>\n",
+        xml_escape(feed_url)
+    ));
+    out.push_str(&format!("  <id>{}</id>\n", xml_escape(feed_url)));
+    out.push_str(&format!("  <updated>{}</updated>\n", xml_escape(updated)));
+    for entry in entries.iter().take(500) {
+        let entry_title = {
+            let t = entry.title.trim();
+            if t.is_empty() {
+                entry.url.as_str()
+            } else {
+                t
+            }
+        };
+        let entry_updated = entry
+            .updated
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(updated);
+        out.push_str("  <entry>\n");
+        out.push_str(&format!(
+            "    <title>{}</title>\n",
+            xml_escape(entry_title)
+        ));
+        out.push_str(&format!(
+            "    <link href=\"{}\"/>\n",
+            xml_escape(&entry.url)
+        ));
+        out.push_str(&format!("    <id>{}</id>\n", xml_escape(&entry.url)));
+        out.push_str(&format!(
+            "    <updated>{}</updated>\n",
+            xml_escape(entry_updated)
+        ));
+        if let Some(summary) = entry
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            out.push_str(&format!(
+                "    <summary>{}</summary>\n",
+                xml_escape(summary)
+            ));
+        }
+        out.push_str("  </entry>\n");
+    }
+    out.push_str("</feed>\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_llms_txt_renders_title_desc_and_links() {
+        let out = to_llms_txt(
+            "https://example.com/",
+            Some("Example"),
+            Some("A demo page"),
+            &[
+                ("https://example.com/a".into(), "Alpha".into()),
+                ("https://example.com/b".into(), "".into()),
+            ],
+        );
+        assert!(out.starts_with("# Example\n"));
+        assert!(out.contains("> A demo page"));
+        assert!(out.contains("Source: https://example.com/"));
+        assert!(out.contains("- [Alpha](https://example.com/a)"));
+        assert!(out.contains("- [https://example.com/b](https://example.com/b)"));
+    }
+
+    #[test]
+    fn to_atom_feed_emits_entries() {
+        let entries = vec![
+            AtomEntry {
+                url: "https://example.com/a".into(),
+                title: "Alpha & Co".into(),
+                summary: Some("First <post>".into()),
+                updated: Some("2026-01-01T00:00:00Z".into()),
+            },
+            AtomEntry {
+                url: "https://example.com/b".into(),
+                title: "Beta".into(),
+                summary: None,
+                updated: None,
+            },
+        ];
+        let out = to_atom_feed("https://example.com/", Some("Example Feed"), &entries);
+        assert!(out.contains("<feed xmlns=\"http://www.w3.org/2005/Atom\">"));
+        assert!(out.contains("<title>Example Feed</title>"));
+        assert!(out.contains("<title>Alpha &amp; Co</title>"));
+        assert!(out.contains("<summary>First &lt;post&gt;</summary>"));
+        assert!(out.contains("<link href=\"https://example.com/b\"/>"));
+        assert!(out.contains("<updated>2026-01-01T00:00:00Z</updated>"));
+    }
+
+    #[test]
+    fn to_llms_txt_site_lists_pages_with_descriptions() {
+        let pages = vec![
+            LlmsPageEntry {
+                url: "https://example.com/docs".into(),
+                title: "Docs".into(),
+                description: Some("Getting started".into()),
+            },
+            LlmsPageEntry {
+                url: "https://example.com/api".into(),
+                title: "API".into(),
+                description: None,
+            },
+        ];
+        let out = to_llms_txt_site(
+            "https://example.com/",
+            Some("Example Site"),
+            Some("Docs hub"),
+            &pages,
+            "Pages",
+        );
+        assert!(out.contains("# Example Site"));
+        assert!(out.contains("## Pages"));
+        assert!(out.contains("- [Docs](https://example.com/docs): Getting started"));
+        assert!(out.contains("- [API](https://example.com/api)\n"));
+    }
+
+    #[test]
+    fn remove_base64_images_strips_data_uris() {
+        let md = "Before\n\n![logo](data:image/png;base64,AAAA)\n\n![ok](https://example.com/a.png)\n\nAfter";
+        let out = remove_base64_images(md);
+        assert!(!out.contains("data:image"));
+        assert!(out.contains("![ok](https://example.com/a.png)"));
+        assert!(out.contains("Before"));
+        assert!(out.contains("After"));
+    }
+
+    #[test]
+    fn remove_base64_images_strips_html_img() {
+        let md = r#"Text <img src="data:image/gif;base64,ABC" alt="x"> more"#;
+        let out = remove_base64_images(md);
+        assert!(!out.contains("data:image"));
+        assert!(out.contains("Text"));
+        assert!(out.contains("more"));
+    }
 
     #[test]
     fn split_paragraphs_preserves_code_blocks() {

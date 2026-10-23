@@ -292,11 +292,11 @@ impl PageToMarkdown {
             let next_is_setext = i + 1 < lines.len()
                 && (lines[i + 1].trim().chars().all(|c| c == '=') && lines[i + 1].trim().len() >= 3
                     || lines[i + 1].trim().chars().all(|c| c == '-') && lines[i + 1].trim().len() >= 3);
-            if next_is_setext {
-                if let Some(caps) = setext_re.captures(line) {
-                    cleaned_lines.push(caps.get(1).unwrap().as_str().to_string());
-                    continue;
-                }
+            if next_is_setext
+                && let Some(caps) = setext_re.captures(line)
+            {
+                cleaned_lines.push(caps.get(1).unwrap().as_str().to_string());
+                continue;
             }
             cleaned_lines.push(line.to_string());
         }
@@ -326,6 +326,21 @@ impl PageToMarkdown {
             break;
         }
         out
+    }
+
+    /// Strip additional HTML tag names (≈ Firecrawl `excludeTags`).
+    /// Only alphanumeric tag names are accepted; others are ignored.
+    pub(super) fn strip_exclude_tags(html: &str, tags: &[String]) -> String {
+        let mut result = html.to_string();
+        for tag in tags {
+            let name = tag.trim().to_ascii_lowercase();
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric()) {
+                continue;
+            }
+            let close = format!("</{name}>");
+            result = Self::strip_tag_pair(&result, &name, &close);
+        }
+        result
     }
 
     /// Remove HTML elements matching CSS-like selectors from the HTML.

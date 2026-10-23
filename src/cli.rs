@@ -38,6 +38,14 @@ pub(crate) enum OutputFormat {
     Attributes,
     /// Emit structured restaurant menu from JSON-LD Menu (≈ Firecrawl `menu`, deterministic)
     Menu,
+    /// Emit JSON-LD BreadcrumbList as JSON
+    Breadcrumbs,
+    /// Emit Open Graph / Twitter / Dublin Core / standard meta tags as JSON
+    Meta,
+    /// Emit a single-page llms.txt-style summary (title, description, links)
+    LlmsTxt,
+    /// Emit an Atom 1.0 feed (single page, or multi-page with --depth / --sitemap-only)
+    Atom,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -76,6 +84,9 @@ pub(crate) struct FetchArgs {
     /// Cookie to send with the request (format: name=value); can be given multiple times
     #[arg(short, long)]
     pub(crate) cookie: Vec<String>,
+    /// Load cookies from a file (`name=value` lines or Netscape cookie jar)
+    #[arg(long)]
+    pub(crate) cookie_file: Option<String>,
     /// Custom HTTP header (format: "Name: Value"); can be given multiple times
     #[arg(short = 'H', long)]
     pub(crate) header: Vec<String>,
@@ -133,6 +144,12 @@ pub(crate) struct FetchArgs {
     /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
     #[arg(long)]
     pub(crate) exclude_selector: Vec<String>,
+    /// HTML tag names to strip before conversion (e.g. `figure`, `svg`); can be given multiple times
+    #[arg(long)]
+    pub(crate) exclude_tags: Vec<String>,
+    /// Keep only these HTML tag names before conversion (e.g. `article`, `main`); can be given multiple times
+    #[arg(long)]
+    pub(crate) include_tags: Vec<String>,
     /// Disable URL blacklist filtering for ads/tracking pixels
     #[arg(long)]
     pub(crate) no_blacklist: bool,
@@ -142,7 +159,22 @@ pub(crate) struct FetchArgs {
     /// Use sitemap.xml URLs only (no page link following); requires --depth > 0
     #[arg(long)]
     pub(crate) sitemap_only: bool,
-    /// Ignore robots.txt disallow rules and crawl-delay
+    /// Cap crawl at N pages (applies with --depth / --sitemap-only)
+    #[arg(long)]
+    pub(crate) max_pages: Option<usize>,
+    /// Only crawl URLs whose path starts with this prefix (repeatable; requires --depth)
+    #[arg(long)]
+    pub(crate) path_prefix: Vec<String>,
+    /// Skip crawl URLs whose path starts with this prefix (repeatable; requires --depth)
+    #[arg(long)]
+    pub(crate) path_exclude: Vec<String>,
+    /// Strip `data:` (base64) image URIs from Markdown / HTML image tags
+    #[arg(long)]
+    pub(crate) remove_base64_images: bool,
+    /// Honor robots.txt Disallow and Crawl-delay (off by default)
+    #[arg(long)]
+    pub(crate) respect_robots: bool,
+    /// No-op (robots.txt is off by default; kept for backward compatibility)
     #[arg(long)]
     pub(crate) ignore_robots: bool,
     /// Additional blacklist pattern file (one host or path pattern per line)
@@ -160,7 +192,7 @@ pub(crate) struct FetchArgs {
     /// Extract an extactive summary of this many sentences (≈ Firecrawl `summary`)
     #[arg(long)]
     pub(crate) summary: Option<usize>,
-    /// Force structured extractor: `recipe` / `faq` / `job` / `event` (LLM-free)
+    /// Force structured extractor: `recipe` / `faq` / `job` / `event` / `howto` (LLM-free)
     #[arg(long = "type")]
     pub(crate) r#type: Option<String>,
     /// Persist fetched pages as JSON files under this directory; survives restarts
@@ -190,6 +222,9 @@ pub(crate) struct FetchArgs {
     /// Basic authentication credentials (format: "user:password")
     #[arg(long)]
     pub(crate) auth: Option<String>,
+    /// Accept invalid TLS certificates (corporate MITM / self-signed proxies)
+    #[arg(long)]
+    pub(crate) skip_tls_verify: bool,
     /// Apply Mozilla Readability.js (via readabilityrs) before conversion
     /// to strip chrome and isolate the article body.
     /// Requires building with --features readability.
@@ -206,6 +241,12 @@ pub(crate) struct FetchArgs {
     /// defaults to the system install).
     #[arg(long, requires = "headless")]
     pub(crate) chrome_path: Option<String>,
+    /// Wait for this CSS selector after headless navigation (≈ Firecrawl waitFor)
+    #[arg(long, requires = "headless")]
+    pub(crate) wait_for_selector: Option<String>,
+    /// Scroll to bottom N times to trigger lazy-load (requires --headless; default 3 if flag alone)
+    #[arg(long, requires = "headless", num_args = 0..=1, default_missing_value = "3")]
+    pub(crate) scroll: Option<u32>,
     /// Append a deduplicated list of all links at the end of Markdown output
     #[arg(long)]
     pub(crate) links_summary: bool,
@@ -231,6 +272,9 @@ pub(crate) struct BrowseArgs {
     /// Cookie to send with the request (format: name=value); can be given multiple times
     #[arg(short, long)]
     pub(crate) cookie: Vec<String>,
+    /// Load cookies from a file (`name=value` lines or Netscape cookie jar)
+    #[arg(long)]
+    pub(crate) cookie_file: Option<String>,
     /// Custom HTTP header (format: "Name: Value"); can be given multiple times
     #[arg(short = 'H', long)]
     pub(crate) header: Vec<String>,
@@ -255,7 +299,10 @@ pub(crate) struct BrowseArgs {
     /// Disable URL blacklist filtering for ads/tracking pixels
     #[arg(long)]
     pub(crate) no_blacklist: bool,
-    /// Ignore robots.txt disallow rules and crawl-delay
+    /// Honor robots.txt Disallow and Crawl-delay (off by default)
+    #[arg(long)]
+    pub(crate) respect_robots: bool,
+    /// No-op (robots.txt is off by default; kept for backward compatibility)
     #[arg(long)]
     pub(crate) ignore_robots: bool,
     /// Additional blacklist pattern file (one host or path pattern per line)
@@ -264,6 +311,9 @@ pub(crate) struct BrowseArgs {
     /// Do not load ~/.web2md/blacklist.txt
     #[arg(long)]
     pub(crate) no_user_blacklist: bool,
+    /// Accept invalid TLS certificates (corporate MITM / self-signed proxies)
+    #[arg(long)]
+    pub(crate) skip_tls_verify: bool,
 }
 
 /// Arguments for `web2md batch`.
@@ -280,6 +330,9 @@ pub(crate) struct BatchArgs {
     /// Cookie to send with the request (format: name=value); can be given multiple times
     #[arg(short, long)]
     pub(crate) cookie: Vec<String>,
+    /// Load cookies from a file (`name=value` lines or Netscape cookie jar)
+    #[arg(long)]
+    pub(crate) cookie_file: Option<String>,
     /// Custom HTTP header (format: "Name: Value"); can be given multiple times
     #[arg(short = 'H', long)]
     pub(crate) header: Vec<String>,
@@ -310,10 +363,16 @@ pub(crate) struct BatchArgs {
     /// CSS-like selector to exclude HTML elements (e.g. `.ad`, `#sidebar`); can be given multiple times
     #[arg(long)]
     pub(crate) exclude_selector: Vec<String>,
+    /// HTML tag names to strip before conversion (e.g. `figure`, `svg`); can be given multiple times
+    #[arg(long)]
+    pub(crate) exclude_tags: Vec<String>,
     /// Disable URL blacklist filtering for ads/tracking pixels
     #[arg(long)]
     pub(crate) no_blacklist: bool,
-    /// Ignore robots.txt disallow rules and crawl-delay
+    /// Honor robots.txt Disallow and Crawl-delay (off by default)
+    #[arg(long)]
+    pub(crate) respect_robots: bool,
+    /// No-op (robots.txt is off by default; kept for backward compatibility)
     #[arg(long)]
     pub(crate) ignore_robots: bool,
     /// Additional blacklist pattern file (one host or path pattern per line)
@@ -328,6 +387,9 @@ pub(crate) struct BatchArgs {
     /// Basic authentication credentials (format: "user:password")
     #[arg(long)]
     pub(crate) auth: Option<String>,
+    /// Accept invalid TLS certificates (corporate MITM / self-signed proxies)
+    #[arg(long)]
+    pub(crate) skip_tls_verify: bool,
 }
 
 #[derive(Subcommand)]
@@ -409,9 +471,15 @@ pub(crate) enum Commands {
         /// Custom HTTP header (format: "Name: Value"); can be given multiple times
         #[arg(short = 'H', long)]
         header: Vec<String>,
-        /// Persist seen fingerprints across restarts at this directory
+        /// Persist seen fingerprints (and body for --diff) across restarts at this directory
         #[arg(long)]
         cache_dir: Option<String>,
+        /// On change, emit a unified Markdown diff against the previous body
+        #[arg(long)]
+        diff: bool,
+        /// POST JSON change event to this URL whenever the fingerprint changes
+        #[arg(long)]
+        webhook: Option<String>,
         /// Ignore robots.txt for this fetch
         #[arg(long)]
         ignore_robots: bool,
@@ -549,6 +617,10 @@ pub(crate) fn format_label(format: &OutputFormat) -> &'static str {
         OutputFormat::Audio => "audio",
         OutputFormat::Attributes => "attributes",
         OutputFormat::Menu => "menu",
+        OutputFormat::Breadcrumbs => "breadcrumbs",
+        OutputFormat::Meta => "meta",
+        OutputFormat::LlmsTxt => "llms-txt",
+        OutputFormat::Atom => "atom",
     }
 }
 

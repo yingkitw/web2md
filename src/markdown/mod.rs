@@ -201,6 +201,8 @@ pub struct ConvertOptions {
     pub include_tables: bool,
     /// Keep Markdown links as `[text](url)` (default: true); when false, emit link text only.
     pub include_links: bool,
+    /// Extra HTML tag names to strip before conversion (≈ Firecrawl `excludeTags`).
+    pub exclude_tags: Vec<String>,
 }
 
 impl Default for ConvertOptions {
@@ -214,6 +216,7 @@ impl Default for ConvertOptions {
             include_comments: true,
             include_tables: true,
             include_links: true,
+            exclude_tags: Vec::new(),
         }
     }
 }
@@ -272,6 +275,7 @@ impl PageToMarkdown {
         let html = Self::strip_boilerplate_elements(&html);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
+        let html = Self::strip_exclude_tags(&html, &opts.exclude_tags);
         let html = if opts.include_tables {
             html
         } else {
@@ -437,6 +441,7 @@ impl PageToMarkdown {
         let html = Self::strip_boilerplate_elements(&html);
         let html = Self::strip_html_comments(&html);
         let html = Self::strip_by_selectors(&html, exclude_selectors);
+        let html = Self::strip_exclude_tags(&html, &opts.exclude_tags);
         let html = if opts.include_tables {
             html
         } else {

@@ -410,9 +410,28 @@ pub fn extract_recipe(html: &str) -> Result<Option<String>, StructuredError> {
     Ok(Some(out))
 }
 
-/// Render an FAQPage JSON-LD block as Markdown (each Q = heading, A = prose).
+/// Render an FAQPage or QAPage JSON-LD block as Markdown (each Q = heading, A = prose).
 pub fn extract_faq(html: &str) -> Result<Option<String>, StructuredError> {
-    let blocks = find_blocks_of_type(html, "FAQPage");
+    render_qa_page(html, "FAQPage", "faq", "FAQ")
+}
+
+/// Render a QAPage JSON-LD block as Markdown (same shape as FAQPage).
+pub fn extract_qapage(html: &str) -> Result<Option<String>, StructuredError> {
+    let md = render_qa_page(html, "QAPage", "qapage", "Q&A")?;
+    if md.is_some() {
+        return Ok(md);
+    }
+    // Fall back to FAQPage when the page only publishes that type.
+    render_qa_page(html, "FAQPage", "qapage", "Q&A")
+}
+
+fn render_qa_page(
+    html: &str,
+    type_name: &str,
+    frontmatter_type: &str,
+    default_title: &str,
+) -> Result<Option<String>, StructuredError> {
+    let blocks = find_blocks_of_type(html, type_name);
     if blocks.is_empty() {
         return Ok(None);
     }
@@ -430,11 +449,12 @@ pub fn extract_faq(html: &str) -> Result<Option<String>, StructuredError> {
     if entries.is_empty() {
         return Ok(None);
     }
-    let title = first_nonempty_string(faq, &["name"]).unwrap_or_else(|| "FAQ".to_string());
+    let title =
+        first_nonempty_string(faq, &["name"]).unwrap_or_else(|| default_title.to_string());
 
     let mut out = String::from("---\n");
     out.push_str(&format!("title: {}\n", yaml_escape(&title)));
-    out.push_str("type: faq\n");
+    out.push_str(&format!("type: {}\n", frontmatter_type));
     out.push_str("---\n\n");
     out.push_str(&format!("# {}\n\n", title));
 
@@ -452,6 +472,81 @@ pub fn extract_faq(html: &str) -> Result<Option<String>, StructuredError> {
         } else {
             out.push_str(&format!("{}\n\n", answer));
         }
+    }
+    Ok(Some(out))
+}
+
+fn collect_css_selectors(value: &serde_json::Value, out: &mut Vec<String>) {
+    if let Some(s) = value.as_str() {
+        let trimmed = s.trim();
+        if !trimmed.is_empty() && !out.iter().any(|x| x == trimmed) {
+            out.push(trimmed.to_string());
+        }
+        return;
+    }
+    if let Some(arr) = value.as_array() {
+        for v in arr {
+            collect_css_selectors(v, out);
+        }
+        return;
+    }
+    if let Some(obj) = value.as_object() {
+        if let Some(css) = obj.get("cssSelector") {
+            collect_css_selectors(css, out);
+        }
+        if let Some(speakable) = obj.get("speakable") {
+            collect_css_selectors(speakable, out);
+        }
+    }
+}
+
+/// Render SpeakableSpecification / `speakable` CSS selectors as Markdown sections.
+/// Pulls matching element text from the page HTML via `scraper`.
+pub fn extract_speakable(html: &str) -> Result<Option<String>, StructuredError> {
+    let mut selectors = Vec::new();
+    for block in find_blocks_of_type(html, "SpeakableSpecification") {
+        collect_css_selectors(&block, &mut selectors);
+    }
+    for json in iter_json_ld_blocks(html) {
+        collect_css_selectors(&json, &mut selectors);
+        if let Some(graph) = json.get("@graph") {
+            collect_css_selectors(graph, &mut selectors);
+        }
+    }
+    if selectors.is_empty() {
+        return Ok(None);
+    }
+
+    use scraper::{Html, Selector};
+    let document = Html::parse_document(html);
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for sel_str in &selectors {
+        let Ok(selector) = Selector::parse(sel_str) else {
+            continue;
+        };
+        let mut texts = Vec::new();
+        for el in document.select(&selector) {
+            let text: String = el.text().collect::<Vec<_>>().join(" ");
+            let trimmed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if !trimmed.is_empty() {
+                texts.push(trimmed);
+            }
+        }
+        if !texts.is_empty() {
+            sections.push((sel_str.clone(), texts.join("\n\n")));
+        }
+    }
+    if sections.is_empty() {
+        return Ok(None);
+    }
+
+    let mut out = String::from("---\n");
+    out.push_str("title: Speakable\n");
+    out.push_str("type: speakable\n");
+    out.push_str("---\n\n");
+    out.push_str("# Speakable\n\n");
+    for (sel, text) in sections {
+        out.push_str(&format!("## `{}`\n\n{}\n\n", sel, text));
     }
     Ok(Some(out))
 }
@@ -648,6 +743,146 @@ fn strip_simple_html(s: &str) -> String {
     out
 }
 
+/// Render a HowTo JSON-LD block as Markdown (frontmatter + numbered steps).
+pub fn extract_howto(html: &str) -> Result<Option<String>, StructuredError> {
+    let blocks = find_blocks_of_type(html, "HowTo");
+    if blocks.is_empty() {
+        return Ok(None);
+    }
+    if blocks.len() > 1 {
+        return Err(StructuredError::Ambiguous(format!(
+            "found {} HowTo blocks; refusing to guess which to render",
+            blocks.len()
+        )));
+    }
+    let howto = &blocks[0];
+    let name = first_nonempty_string(howto, &["name"])
+        .unwrap_or_else(|| "How-to".to_string());
+    let description = first_nonempty_string(howto, &["description"]).unwrap_or_default();
+    let total_min = howto
+        .get("totalTime")
+        .and_then(|v| v.as_str())
+        .and_then(parse_iso8601_minutes)
+        .or_else(|| {
+            howto
+                .get("timeRequired")
+                .and_then(|v| v.as_str())
+                .and_then(parse_iso8601_minutes)
+        });
+    let steps = extract_howto_steps(howto);
+    let tools = extract_named_list(howto, "tool");
+    let supplies = extract_named_list(howto, "supply");
+
+    let mut fm: Vec<(&str, String)> = vec![("title", name.clone()), ("type", "howto".into())];
+    if !description.is_empty() {
+        fm.push(("description", description.clone()));
+    }
+    if let Some(m) = total_min {
+        fm.push(("total_minutes", m.to_string()));
+    }
+    if !tools.is_empty() {
+        fm.push(("tools", tools.join("; ")));
+    }
+    if !supplies.is_empty() {
+        fm.push(("supplies", supplies.join("; ")));
+    }
+
+    let mut md = frontmatter_block(&fm);
+    md.push_str(&format!("# {}\n\n", name));
+    if !description.is_empty() {
+        md.push_str(&description);
+        md.push_str("\n\n");
+    }
+    if !supplies.is_empty() {
+        md.push_str("## Supplies\n\n");
+        for s in &supplies {
+            md.push_str(&format!("- {}\n", s));
+        }
+        md.push('\n');
+    }
+    if !tools.is_empty() {
+        md.push_str("## Tools\n\n");
+        for t in &tools {
+            md.push_str(&format!("- {}\n", t));
+        }
+        md.push('\n');
+    }
+    if !steps.is_empty() {
+        md.push_str("## Steps\n\n");
+        for step in &steps {
+            md.push_str(step);
+            md.push('\n');
+        }
+    }
+    Ok(Some(md))
+}
+
+fn extract_howto_steps(howto: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let raw = match howto.get("step") {
+        Some(r) => r,
+        None => return out,
+    };
+    let arr: Vec<&serde_json::Value> = if let Some(a) = raw.as_array() {
+        a.iter().collect()
+    } else {
+        vec![raw]
+    };
+    let mut step_no = 1usize;
+    for entry in arr {
+        if let Some(items) = entry.get("itemListElement").and_then(|v| v.as_array()) {
+            for it in items {
+                if let Some(line) = howto_step_line(it, step_no) {
+                    out.push(line);
+                    step_no += 1;
+                }
+            }
+            continue;
+        }
+        if let Some(line) = howto_step_line(entry, step_no) {
+            out.push(line);
+            step_no += 1;
+        }
+    }
+    out
+}
+
+fn howto_step_line(entry: &serde_json::Value, step_no: usize) -> Option<String> {
+    let text = entry
+        .get("text")
+        .and_then(|v| v.as_str())
+        .or_else(|| entry.get("name").and_then(|v| v.as_str()))
+        .or_else(|| entry.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    Some(format!("{}. {}", step_no, text))
+}
+
+fn extract_named_list(value: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(raw) = value.get(key) else {
+        return out;
+    };
+    let nodes: Vec<&serde_json::Value> = if let Some(arr) = raw.as_array() {
+        arr.iter().collect()
+    } else {
+        vec![raw]
+    };
+    for node in nodes {
+        if let Some(name) = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .or_else(|| node.as_str())
+        {
+            let trimmed = name.trim();
+            if !trimmed.is_empty() {
+                out.push(trimmed.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// Render an Event JSON-LD block as Markdown.
 pub fn extract_event(html: &str) -> Result<Option<String>, StructuredError> {
     let blocks = find_blocks_of_type(html, "Event");
@@ -766,6 +1001,151 @@ fn build_event_addr(addr: Option<&serde_json::Value>) -> String {
     parts.join(", ")
 }
 
+/// Render a Course JSON-LD block as Markdown (frontmatter + description).
+pub fn extract_course(html: &str) -> Result<Option<String>, StructuredError> {
+    let blocks = find_blocks_of_type(html, "Course");
+    if blocks.is_empty() {
+        return Ok(None);
+    }
+    if blocks.len() > 1 {
+        return Err(StructuredError::Ambiguous(format!(
+            "found {} Course blocks",
+            blocks.len()
+        )));
+    }
+    let course = &blocks[0];
+    let name = first_nonempty_string(course, &["name"]).unwrap_or_else(|| "Course".to_string());
+    let description = first_nonempty_string(course, &["description"]).unwrap_or_default();
+    let provider = first_nonempty_string(course, &["provider", "name"])
+        .or_else(|| first_nonempty_string(course, &["provider"]))
+        .unwrap_or_default();
+    let url = first_nonempty_string(course, &["url"]).unwrap_or_default();
+    let code = first_nonempty_string(course, &["courseCode"]).unwrap_or_default();
+    let language = first_nonempty_string(course, &["inLanguage"]).unwrap_or_default();
+
+    let mut fm: Vec<(&str, String)> = vec![("title", name.clone()), ("type", "course".into())];
+    if !provider.is_empty() {
+        fm.push(("provider", provider.clone()));
+    }
+    if !code.is_empty() {
+        fm.push(("course_code", code.clone()));
+    }
+    if !language.is_empty() {
+        fm.push(("language", language.clone()));
+    }
+    if !url.is_empty() {
+        fm.push(("url", url.clone()));
+    }
+
+    let mut md = frontmatter_block(&fm);
+    md.push_str(&format!("# {}\n\n", name));
+    if !provider.is_empty() {
+        md.push_str(&format!("- **Provider:** {}\n", provider));
+    }
+    if !code.is_empty() {
+        md.push_str(&format!("- **Course code:** {}\n", code));
+    }
+    if !url.is_empty() {
+        md.push_str(&format!("- **URL:** <{}>\n", url));
+    }
+    if !description.is_empty() {
+        md.push('\n');
+        md.push_str(&strip_simple_html(&description));
+        md.push('\n');
+    }
+    Ok(Some(md))
+}
+
+/// Render a SoftwareApplication JSON-LD block as Markdown.
+pub fn extract_software_application(html: &str) -> Result<Option<String>, StructuredError> {
+    let mut blocks = find_blocks_of_type(html, "SoftwareApplication");
+    if blocks.is_empty() {
+        blocks = find_blocks_of_type(html, "WebApplication");
+    }
+    if blocks.is_empty() {
+        return Ok(None);
+    }
+    if blocks.len() > 1 {
+        return Err(StructuredError::Ambiguous(format!(
+            "found {} SoftwareApplication blocks",
+            blocks.len()
+        )));
+    }
+    let app = &blocks[0];
+    let name =
+        first_nonempty_string(app, &["name"]).unwrap_or_else(|| "SoftwareApplication".to_string());
+    let description = first_nonempty_string(app, &["description"]).unwrap_or_default();
+    let url = first_nonempty_string(app, &["url"])
+        .or_else(|| first_nonempty_string(app, &["downloadUrl"]))
+        .unwrap_or_default();
+    let category = first_nonempty_string(app, &["applicationCategory"]).unwrap_or_default();
+    let os = first_nonempty_string(app, &["operatingSystem"]).unwrap_or_default();
+    let version = first_nonempty_string(app, &["softwareVersion"])
+        .or_else(|| first_nonempty_string(app, &["version"]))
+        .unwrap_or_default();
+    let offers_price = app
+        .get("offers")
+        .and_then(|o| o.get("price"))
+        .and_then(|p| p.as_str())
+        .map(str::to_string)
+        .or_else(|| {
+            app.get("offers")
+                .and_then(|o| o.get("price"))
+                .and_then(|p| p.as_f64())
+                .map(|n| n.to_string())
+        })
+        .unwrap_or_default();
+    let rating = first_nonempty_string(app, &["aggregateRating", "ratingValue"]).unwrap_or_default();
+
+    let mut fm: Vec<(&str, String)> =
+        vec![("title", name.clone()), ("type", "software".into())];
+    if !category.is_empty() {
+        fm.push(("category", category.clone()));
+    }
+    if !os.is_empty() {
+        fm.push(("os", os.clone()));
+    }
+    if !version.is_empty() {
+        fm.push(("version", version.clone()));
+    }
+    if !offers_price.is_empty() {
+        fm.push(("price", offers_price.clone()));
+    }
+    if !rating.is_empty() {
+        fm.push(("rating", rating.clone()));
+    }
+    if !url.is_empty() {
+        fm.push(("url", url.clone()));
+    }
+
+    let mut md = frontmatter_block(&fm);
+    md.push_str(&format!("# {}\n\n", name));
+    if !category.is_empty() {
+        md.push_str(&format!("- **Category:** {}\n", category));
+    }
+    if !os.is_empty() {
+        md.push_str(&format!("- **OS:** {}\n", os));
+    }
+    if !version.is_empty() {
+        md.push_str(&format!("- **Version:** {}\n", version));
+    }
+    if !offers_price.is_empty() {
+        md.push_str(&format!("- **Price:** {}\n", offers_price));
+    }
+    if !rating.is_empty() {
+        md.push_str(&format!("- **Rating:** {}\n", rating));
+    }
+    if !url.is_empty() {
+        md.push_str(&format!("- **URL:** <{}>\n", url));
+    }
+    if !description.is_empty() {
+        md.push('\n');
+        md.push_str(&strip_simple_html(&description));
+        md.push('\n');
+    }
+    Ok(Some(md))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,6 +1227,54 @@ mod tests {
     }
 
     #[test]
+    fn qapage_extracts_qa_pairs() {
+        let html = r#"<html><head>
+        <script type="application/ld+json">
+        {
+          "@type": "QAPage",
+          "name": "Forum Thread",
+          "mainEntity": {
+            "@type": "Question",
+            "name": "How do I install?",
+            "acceptedAnswer": {"@type": "Answer", "text": "Run cargo install web2md."}
+          }
+        }
+        </script>
+        </head></html>"#;
+        let md = extract_qapage(html).unwrap().expect("md");
+        assert!(md.contains("type: qapage"));
+        assert!(md.contains("## How do I install?"));
+        assert!(md.contains("Run cargo install web2md."));
+    }
+
+    #[test]
+    fn speakable_extracts_css_selector_text() {
+        let html = r#"<!doctype html><html><head>
+        <script type="application/ld+json">
+        {
+          "@type": "Article",
+          "speakable": {
+            "@type": "SpeakableSpecification",
+            "cssSelector": [".summary", "h1"]
+          }
+        }
+        </script>
+        </head>
+        <body>
+          <h1>Headline</h1>
+          <p class="summary">Spoken summary for assistants.</p>
+          <p class="noise">Ignore me</p>
+        </body></html>"#;
+        let md = extract_speakable(html).unwrap().expect("md");
+        assert!(md.contains("type: speakable"));
+        assert!(md.contains("## `.summary`"));
+        assert!(md.contains("Spoken summary for assistants."));
+        assert!(md.contains("## `h1`"));
+        assert!(md.contains("Headline"));
+        assert!(!md.contains("Ignore me"));
+    }
+
+    #[test]
     fn job_extracts_core_fields() {
         let html = r#"<html><head>
         <script type="application/ld+json">
@@ -896,11 +1324,91 @@ mod tests {
     }
 
     #[test]
+    fn howto_extracts_steps_and_supplies() {
+        let html = r#"<html><head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "HowTo",
+          "name": "Change a tire",
+          "description": "Safe roadside tire change",
+          "totalTime": "PT20M",
+          "tool": [{"@type":"HowToTool","name":"Jack"}, {"@type":"HowToTool","name":"Lug wrench"}],
+          "supply": [{"@type":"HowToSupply","name":"Spare tire"}],
+          "step": [
+            {"@type":"HowToStep","text":"Park safely and engage the handbrake."},
+            {"@type":"HowToStep","text":"Loosen the lug nuts."},
+            {"@type":"HowToStep","text":"Raise the car and replace the wheel."}
+          ]
+        }
+        </script>
+        </head></html>"#;
+        let md = extract_howto(html).unwrap().expect("md");
+        assert!(md.contains("title: Change a tire"));
+        assert!(md.contains("type: howto"));
+        assert!(md.contains("total_minutes: 20"));
+        assert!(md.contains("## Supplies"));
+        assert!(md.contains("- Spare tire"));
+        assert!(md.contains("## Tools"));
+        assert!(md.contains("- Jack"));
+        assert!(md.contains("1. Park safely"));
+        assert!(md.contains("3. Raise the car"));
+    }
+
+    #[test]
     fn parse_iso8601_minutes_handles_compact_form() {
         assert_eq!(parse_iso8601_minutes("PT1H30M"), Some(90));
         assert_eq!(parse_iso8601_minutes("PT45M"), Some(45));
         assert_eq!(parse_iso8601_minutes("PT2H"), Some(120));
         assert_eq!(parse_iso8601_minutes("PT0M"), None);
+    }
+
+    #[test]
+    fn course_extracts_core_fields() {
+        let html = r#"<html><head>
+        <script type="application/ld+json">
+        {
+          "@type": "Course",
+          "name": "Intro to Rust",
+          "description": "Learn ownership and borrowing.",
+          "provider": {"@type": "Organization", "name": "Example U"},
+          "courseCode": "CS-101",
+          "inLanguage": "en",
+          "url": "https://example.com/courses/rust"
+        }
+        </script></head></html>"#;
+        let md = extract_course(html).unwrap().expect("md");
+        assert!(md.contains("title: Intro to Rust"));
+        assert!(md.contains("type: course"));
+        assert!(md.contains("provider: Example U"));
+        assert!(md.contains("course_code: CS-101"));
+        assert!(md.contains("Learn ownership and borrowing."));
+    }
+
+    #[test]
+    fn software_application_extracts_core_fields() {
+        let html = r#"<html><head>
+        <script type="application/ld+json">
+        {
+          "@type": "SoftwareApplication",
+          "name": "web2md",
+          "description": "Web to Markdown converter.",
+          "applicationCategory": "DeveloperApplication",
+          "operatingSystem": "Any",
+          "softwareVersion": "0.1.17",
+          "offers": {"@type": "Offer", "price": "0"},
+          "aggregateRating": {"@type": "AggregateRating", "ratingValue": "4.8"},
+          "url": "https://web2md.net"
+        }
+        </script></head></html>"#;
+        let md = extract_software_application(html).unwrap().expect("md");
+        assert!(md.contains("title: web2md"));
+        assert!(md.contains("type: software"));
+        assert!(md.contains("category: DeveloperApplication"));
+        assert!(md.contains("version: 0.1.17"));
+        assert!(md.contains("price: 0"));
+        assert!(md.contains("rating: 4.8"));
+        assert!(md.contains("Web to Markdown converter."));
     }
 
     #[test]

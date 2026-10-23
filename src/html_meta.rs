@@ -1,5 +1,9 @@
 //! Shared HTML metadata helpers: `<meta>` tag parsing and JSON-LD block iteration.
 
+use std::collections::BTreeMap;
+
+use serde::Serialize;
+
 use crate::html_util::find_ci;
 
 /// Iterate over all JSON-LD blocks in the HTML, parsing each as JSON.
@@ -162,6 +166,75 @@ pub(crate) fn extract_html_lang(html: &str) -> Option<String> {
     extract_attr(tag, "lang")
 }
 
+/// Structured dump of page meta tags for `--format meta`.
+#[derive(Debug, Serialize, Default, PartialEq, Eq)]
+pub struct MetaDump {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub open_graph: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub twitter: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub dublin_core: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub standard: BTreeMap<String, Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub html_lang: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical: Option<String>,
+}
+
+/// Collect Open Graph, Twitter Card, Dublin Core, and standard `<meta>` tags
+/// plus `html lang` and canonical link — no Markdown conversion.
+pub fn extract_meta_dump(html: &str) -> MetaDump {
+    let mut dump = MetaDump {
+        html_lang: extract_html_lang(html),
+        canonical: extract_link_rel(html, "canonical"),
+        ..Default::default()
+    };
+
+    let mut i = 0;
+    while i < html.len() {
+        let Some(pos) = find_ci(&html[i..], "<meta") else {
+            break;
+        };
+        let pos = i + pos;
+        let Some(rel_end) = html[pos..].find('>') else {
+            break;
+        };
+        let tag_end = pos + rel_end;
+        let tag = &html[pos..=tag_end];
+        i = tag_end + 1;
+
+        let Some(content) = extract_attr(tag, "content").filter(|s| !s.is_empty()) else {
+            continue;
+        };
+        if let Some(property) = extract_attr(tag, "property") {
+            let key = property.trim().to_string();
+            let lower = key.to_ascii_lowercase();
+            if lower.starts_with("og:") || lower.starts_with("article:") {
+                dump.open_graph.entry(key).or_default().push(content);
+            } else if lower.starts_with("dc.") || lower.starts_with("dcterms.") {
+                dump.dublin_core.entry(key).or_default().push(content);
+            } else {
+                dump.standard.entry(key).or_default().push(content);
+            }
+            continue;
+        }
+        if let Some(name) = extract_attr(tag, "name") {
+            let key = name.trim().to_string();
+            let lower = key.to_ascii_lowercase();
+            if lower.starts_with("twitter:") {
+                dump.twitter.entry(key).or_default().push(content);
+            } else if lower.starts_with("dc.") || lower.starts_with("dcterms.") {
+                dump.dublin_core.entry(key).or_default().push(content);
+            } else {
+                dump.standard.entry(key).or_default().push(content);
+            }
+        }
+    }
+    dump
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +276,26 @@ mod tests {
             collect_meta_property_values(html, "article:tag"),
             vec!["Rust".to_string(), "Markdown".to_string()]
         );
+    }
+
+    #[test]
+    fn extract_meta_dump_groups_families() {
+        let html = r#"<!doctype html><html lang="en">
+        <head>
+          <link rel="canonical" href="https://example.com/a">
+          <meta property="og:title" content="OG Title">
+          <meta property="og:image" content="https://example.com/i.jpg">
+          <meta name="twitter:card" content="summary">
+          <meta name="DC.creator" content="Ada">
+          <meta name="description" content="A page">
+          <meta name="author" content="Ada">
+        </head></html>"#;
+        let dump = extract_meta_dump(html);
+        assert_eq!(dump.html_lang.as_deref(), Some("en"));
+        assert_eq!(dump.canonical.as_deref(), Some("https://example.com/a"));
+        assert_eq!(dump.open_graph.get("og:title"), Some(&vec!["OG Title".into()]));
+        assert_eq!(dump.twitter.get("twitter:card"), Some(&vec!["summary".into()]));
+        assert_eq!(dump.dublin_core.get("DC.creator"), Some(&vec!["Ada".into()]));
+        assert_eq!(dump.standard.get("description"), Some(&vec!["A page".into()]));
     }
 }

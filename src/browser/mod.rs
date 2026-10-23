@@ -54,6 +54,8 @@ pub struct BrowserOptions {
     pub no_cache: bool,
     /// Only use cached entries younger than this duration (None = use cache_ttl)
     pub cache_max_age: Option<Duration>,
+    /// Accept invalid TLS certificates (corporate MITM / self-signed). Off by default.
+    pub skip_tls_verify: bool,
 }
 
 impl Default for BrowserOptions {
@@ -75,6 +77,7 @@ impl Default for BrowserOptions {
             basic_auth: None,
             no_cache: false,
             cache_max_age: None,
+            skip_tls_verify: false,
         }
     }
 }
@@ -121,6 +124,10 @@ impl Browser {
             let proxy = reqwest::Proxy::all(proxy_url)
                 .context("Failed to parse proxy URL")?;
             builder = builder.proxy(proxy);
+        }
+
+        if options.skip_tls_verify {
+            builder = builder.danger_accept_invalid_certs(true);
         }
 
         let client = builder
@@ -385,20 +392,7 @@ impl Browser {
 
         self.enforce_delay(robots_delay, parsed.host_str().unwrap_or("")).await;
 
-        let mut req = self.client.get(parsed.clone());
-        if !self.options.cookies.is_empty() {
-            req = req.header(reqwest::header::COOKIE, self.options.cookies.join("; "));
-        }
-        for h in &self.options.headers {
-            if let Some((name, value)) = h.split_once(':') {
-                req = req.header(name.trim(), value.trim());
-            }
-        }
-        if let Some(ref auth) = self.options.basic_auth
-            && let Some((user, pass)) = auth.split_once(':') {
-                req = req.basic_auth(user.trim(), Some(pass.trim()));
-            }
-
+        let req = self.decorate_request(self.client.get(parsed.clone()));
         let resp = req.send().await.context("HTTP request failed")?;
         let status = resp.status();
         if !status.is_success() {
@@ -428,16 +422,31 @@ impl Browser {
         Ok(body)
     }
 
-    /// HTTP GET without robots.txt checks (used for robots.txt itself).
-    async fn fetch_raw(&self, url: &str) -> Result<String> {
-        let parsed = Url::parse(url).context("Invalid URL")?;
-
-        let mut req = self.client.get(parsed.clone());
+    /// Attach cookies, stealth-ish defaults, custom headers, and basic auth.
+    fn decorate_request(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if !self.options.cookies.is_empty() {
             req = req.header(
                 reqwest::header::COOKIE,
                 self.options.cookies.join("; "),
             );
+        }
+        // Browser-like defaults (overridable via `--header`). Skip Accept-Encoding
+        // so reqwest keeps transparent decompression.
+        let user_header_names: Vec<String> = self
+            .options
+            .headers
+            .iter()
+            .filter_map(|h| h.split_once(':').map(|(n, _)| n.trim().to_ascii_lowercase()))
+            .collect();
+        let has = |name: &str| user_header_names.iter().any(|n| n == name);
+        if !has("accept") {
+            req = req.header(
+                reqwest::header::ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            );
+        }
+        if !has("accept-language") {
+            req = req.header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9");
         }
         for h in &self.options.headers {
             if let Some((name, value)) = h.split_once(':') {
@@ -445,10 +454,18 @@ impl Browser {
             }
         }
         if let Some(ref auth) = self.options.basic_auth
-            && let Some((user, pass)) = auth.split_once(':') {
-                req = req.basic_auth(user.trim(), Some(pass.trim()));
-            }
+            && let Some((user, pass)) = auth.split_once(':')
+        {
+            req = req.basic_auth(user.trim(), Some(pass.trim()));
+        }
+        req
+    }
 
+    /// HTTP GET without robots.txt checks (used for robots.txt itself).
+    async fn fetch_raw(&self, url: &str) -> Result<String> {
+        let parsed = Url::parse(url).context("Invalid URL")?;
+
+        let req = self.decorate_request(self.client.get(parsed.clone()));
         let resp = req.send().await.context("HTTP request failed")?;
 
         let status = resp.status();

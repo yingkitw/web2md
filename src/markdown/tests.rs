@@ -764,6 +764,32 @@ fn exclude_selector_nested_elements_removed() {
 }
 
 #[test]
+fn exclude_tags_strips_named_elements() {
+    let html = r#"<p>Keep</p><figure><img src="x.jpg" alt="x"><figcaption>Caption</figcaption></figure><p>Also</p><svg><circle/></svg>"#;
+    let opts = ConvertOptions {
+        exclude_tags: vec!["figure".into(), "svg".into()],
+        ..Default::default()
+    };
+    let md = PageToMarkdown::convert_with(html, &opts, &[]).unwrap();
+    assert!(md.contains("Keep"));
+    assert!(md.contains("Also"));
+    assert!(!md.contains("Caption"));
+    assert!(!md.contains("circle"));
+}
+
+#[test]
+fn exclude_tags_ignores_invalid_names() {
+    let html = r#"<p>Keep</p><custom>X</custom>"#;
+    let opts = ConvertOptions {
+        exclude_tags: vec!["custom!".into(), "".into(), "custom".into()],
+        ..Default::default()
+    };
+    let md = PageToMarkdown::convert_with(html, &opts, &[]).unwrap();
+    assert!(md.contains("Keep"));
+    assert!(!md.contains("X"));
+}
+
+#[test]
 fn to_plain_text_strips_markdown_syntax() {
     let md = "# Title\n\nHello **world** with [a link](https://example.com).";
     let text = PageToMarkdown::to_plain_text(md);

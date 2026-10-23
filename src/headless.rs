@@ -25,6 +25,12 @@ pub struct HeadlessOptions {
     /// Custom path to a Chrome / Chromium binary. When `None`,
     /// `headless_chrome` probes standard locations.
     pub chrome_path: Option<String>,
+    /// CSS selector to wait for after navigation (≈ Firecrawl `waitFor`).
+    /// When set, `Tab::wait_for_element` runs before reading HTML.
+    pub wait_for_selector: Option<String>,
+    /// Scroll to the bottom this many times (with a short pause) to trigger
+    /// lazy-loaded content (≈ Firecrawl scroll action). `0` = no scroll.
+    pub scroll: u32,
 }
 
 /// `true` when this build has the `headless` feature compiled in. Used by
@@ -64,6 +70,16 @@ fn render_blocking(url: &str, options: &HeadlessOptions) -> Result<String> {
         .map_err(|e| anyhow!("navigation failed for {url}: {e}"))?;
     tab.wait_until_navigated()
         .map_err(|e| anyhow!("wait_until_navigated failed: {e}"))?;
+    if let Some(ref selector) = options.wait_for_selector {
+        tab.wait_for_element(selector).map_err(|e| {
+            anyhow!("wait_for_selector `{selector}` failed on {url}: {e}")
+        })?;
+    }
+    for i in 0..options.scroll {
+        tab.evaluate("window.scrollTo(0, document.body.scrollHeight)", false)
+            .map_err(|e| anyhow!("scroll {i} failed on {url}: {e}"))?;
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
     if options.wait_ms > 0 {
         std::thread::sleep(std::time::Duration::from_millis(options.wait_ms));
     }

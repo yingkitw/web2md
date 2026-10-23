@@ -125,10 +125,35 @@
 - [x] `--format attributes` + `--attr selector:attribute` — Firecrawl attributes parity
 - [x] Richer `--format video` metadata (`title`, `thumbnail`, `duration`, JSON-LD VideoObject)
 - [x] `--format menu` — JSON-LD Menu / MenuSection / MenuItem → structured JSON
+- [x] Recursive sitemap index expansion (`Browser::expand_sitemap`)
+- [x] `--format audio` — `<audio>` / embeds / JSON-LD AudioObject
+- [x] MCP format parity for attributes / menu / video / audio / breadcrumbs
+- [x] `--respect-robots` CLI opt-in for robots.txt
+- [x] `--type howto` — JSON-LD HowTo → Markdown steps
+- [x] `--format breadcrumbs` — JSON-LD BreadcrumbList as JSON
+- [x] `--max-pages N` crawl cap
+- [x] `--remove-base64-images` — strip `data:` image URIs from Markdown/HTML
+- [x] `reading_time_minutes` on `PageMetadata` (≈ 200 wpm)
+- [x] `--path-prefix` / `--path-exclude` crawl path filters
+- [x] `--skip-tls-verify` — accept invalid TLS certs (corporate MITM)
+- [x] `--format meta` — OG / Twitter / Dublin Core / standard meta JSON dump
+- [x] `--cookie-file` — load Netscape or `name=value` cookie jar
+- [x] `--exclude-tags` — strip named HTML tags (≈ Firecrawl `excludeTags`)
+- [x] Stealth-ish default `Accept` / `Accept-Language` headers (overridable via `--header`)
+- [x] `watch --diff` — unified Markdown diff on content change (persists body under `--cache-dir`)
+- [x] `--include-tags` — keep only named HTML tags (merged with `--include-selector`)
+- [x] `watch --webhook` — POST JSON change events on fingerprint change
+- [x] `--format llms-txt` — single-page llms.txt-style title/description/links summary
+- [x] Multi-page `--format llms-txt --depth` / `--sitemap-only` site index
+- [x] `--wait-for-selector` for headless mode (≈ Firecrawl `waitFor`)
+- [x] `--type qapage` / `--type speakable` JSON-LD extractors
+- [x] Headless `--scroll` for lazy-load content
+- [x] `--type course` / `--type software` JSON-LD extractors
+- [x] `--format atom` (single-page + crawl/sitemap feed)
 
 ## In Progress
 
-_None — v7 cycle complete._
+_None — v15 cycle complete._
 
 ## Brainstorming
 
@@ -301,4 +326,69 @@ Deterministic gaps still open after v6 (no LLM / no SaaS):
 | 48 | MCP tool parity for `attributes` / `menu` / `video` formats | Firecrawl MCP surface | ✅ Done |
 | 49 | Markdown output quality pass: code-block language injection fix, class/id boilerplate stripping, Wikipedia citation/edit-link/File-link cleanup, heading anchor unwrapping | Firecrawl `onlyCleanContent` (deterministic portion) | ✅ Done |
 
+### Brainstorming v9 — Aug/Oct 2026
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 50 | `--respect-robots` CLI opt-in | Trafilatura / polite crawlers | ✅ Done |
+| 51 | `--type howto` JSON-LD HowTo → Markdown | Firecrawl `json` schema (4 cr) | ✅ Done |
+| 52 | `--format breadcrumbs` JSON-LD BreadcrumbList | Firecrawl schema extract | ✅ Done |
+| 53 | `--max-pages N` crawl page cap | Firecrawl crawl `limit` | ✅ Done |
+
+### Brainstorming v10 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 54 | `--remove-base64-images` strip `data:` image URIs from Markdown | Firecrawl `removeBase64Images` | ✅ Done |
+| 55 | Reading-time estimate on `PageMetadata` | Trafilatura metadata parity | ✅ Done |
+| 56 | `--path-prefix` / `--path-exclude` crawl path filters | Firecrawl crawl path filters | ✅ Done |
+
+### Brainstorming v11 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 57 | `--skip-tls-verify` for corporate MITM proxies | Firecrawl `skipTlsVerification` | ✅ Done |
+| 58 | `--format meta` — dump OG/Twitter/Dublin Core as JSON | Firecrawl metadata-only scrape | ✅ Done |
+| 59 | Cookie jar file load (`--cookie-file`) | Session reuse without retyping | ✅ Done |
+
 **Still deferred**: PDF/DOCX (`--format pdf` / `/parse`), screenshots, LLM formats.
+
+### Brainstorming v12 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 60 | `--format change-tracking` / HTML diff annotations for watch | Trafilatura change detection UX | ✅ Done (`watch --diff`) |
+| 61 | Stealth-ish default headers (Accept-Language, Sec-CH-UA lite) | Firecrawl anti-bot headers | ✅ Done |
+| 62 | `--exclude-tags` alias list for common boilerplate tags | Firecrawl `excludeTags` | ✅ Done |
+
+### Brainstorming v13 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 63 | `--include-tags` keep only named tags (inverse of exclude-tags) | Firecrawl `includeTags` tag mode | ✅ Done |
+| 64 | Persist watch webhook on change (`watch --webhook`) | Firecrawl crawl webhook parity | ✅ Done |
+| 65 | `--format llms-txt` site summary for AI crawlers | llms.txt / Context7-style docs index | ✅ Done |
+
+### Brainstorming v14 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 66 | Multi-page `llms-txt` from sitemap / crawl | Full-site llms.txt generators | ✅ Done |
+| 67 | `--wait-for-selector` for headless mode | Firecrawl waitFor | ✅ Done |
+| 68 | JSON-LD `QAPage` / `Speakable` extractors | Schema.org long-tail | ✅ Done |
+
+### Brainstorming v15 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 69 | `--scroll` / lazy-load wait in headless | Firecrawl scroll actions | ✅ Done |
+| 70 | JSON-LD `Course` / `SoftwareApplication` extractors | Schema.org long-tail | ✅ Done |
+| 71 | `--format atom` / RSS feed emit from crawl | Trafilatura feed export | ✅ Done (`--format atom`) |
+
+### Brainstorming v16 — next cycle candidates
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 72 | `--format rss` (RSS 2.0) alongside Atom | Trafilatura feed export | 🔲 Planned |
+| 73 | JSON-LD `Organization` / `Person` profile extractors | Schema.org entity cards | 🔲 Planned |
+| 74 | Headless `--wait-ms` CLI flag (expose existing HeadlessOptions.wait_ms) | Firecrawl wait delay | 🔲 Planned |

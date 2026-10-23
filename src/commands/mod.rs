@@ -15,7 +15,10 @@ pub(crate) mod fetch;
 use crate::cli::{Cli, Commands, CorpusAction};
 use crate::options::build_browser_options;
 use crate::tui::browse_loop;
-use crate::watch::{load_watch_state, poll_once, save_watch_state, unix_secs_string};
+use crate::watch::{
+    load_watch_body, load_watch_state, poll_once, save_watch_body, save_watch_state,
+    unix_secs_string,
+};
 
 pub(crate) async fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -28,18 +31,24 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             }
         }
                 Some(Commands::Browse(args)) => {
+            let mut cookies = args.cookie;
+            if let Some(ref path) = args.cookie_file {
+                cookies.extend(crate::options::load_cookie_file(path)?);
+            }
             let mut options = build_browser_options(
                 args.timeout,
                 args.delay,
                 args.cache_ttl,
-                args.cookie,
+                cookies,
                 args.header,
                 args.no_blacklist,
                 args.no_user_blacklist,
                 args.blacklist_file,
                 args.ignore_robots,
+                args.respect_robots,
             );
             options.no_cache = args.no_cache;
+            options.skip_tls_verify = args.skip_tls_verify;
             if let Some(max_age) = args.cache_max_age {
                 options.cache_max_age = Some(Duration::from_secs(max_age));
             }
@@ -103,6 +112,8 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             cookie,
             header,
             cache_dir,
+            diff,
+            webhook,
             ignore_robots: _,
         }) => {
             use std::time::Duration as StdDuration;
@@ -118,6 +129,11 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             let state_path = cache_dir.as_deref().map(std::path::Path::new);
             let browser = Browser::new(options)?;
             let mut last_fp: Option<String> = load_watch_state(state_path, &url)?;
+            let mut last_body: Option<String> = if diff || webhook.is_some() {
+                load_watch_body(state_path, &url)?
+            } else {
+                None
+            };
             let interval = StdDuration::from_secs(every.max(1));
             // First fetch happens immediately.
             loop {
@@ -125,15 +141,55 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
                     Ok((fp, body)) => {
                         if last_fp.as_deref() != Some(fp.as_str()) {
                             let ts = unix_secs_string();
-                            println!(
-                                "{}\t{}\t{}\t{}",
-                                ts,
-                                url,
-                                fp,
-                                body.chars().take(80).collect::<String>()
-                            );
+                            let patch = last_body.as_ref().map(|prev| {
+                                web2md::diff_markdown(
+                                    &format!("previous ({url})"),
+                                    prev,
+                                    &format!("current ({url})"),
+                                    &body,
+                                )
+                            });
+                            if diff {
+                                if let Some(ref patch) = patch {
+                                    println!("# watch change {}\t{}\t{}", ts, url, fp);
+                                    println!("{}", patch);
+                                } else {
+                                    println!(
+                                        "# watch baseline {}\t{}\t{}\n{}",
+                                        ts, url, fp, body
+                                    );
+                                }
+                            } else {
+                                println!(
+                                    "{}\t{}\t{}\t{}",
+                                    ts,
+                                    url,
+                                    fp,
+                                    body.chars().take(80).collect::<String>()
+                                );
+                            }
+                            if let Some(ref hook) = webhook {
+                                let payload = serde_json::json!({
+                                    "event": "watch.change",
+                                    "url": url,
+                                    "timestamp": ts,
+                                    "fingerprint": fp,
+                                    "snippet": body.chars().take(200).collect::<String>(),
+                                    "diff": patch,
+                                    "baseline": last_body.is_none(),
+                                });
+                                if let Err(e) =
+                                    crate::options::post_webhook(hook, &payload.to_string()).await
+                                {
+                                    eprintln!("watch webhook POST to {} failed: {}", hook, e);
+                                }
+                            }
                             last_fp = Some(fp.clone());
+                            last_body = Some(body.clone());
                             let _ = save_watch_state(state_path, &url, &fp);
+                            if diff || webhook.is_some() {
+                                let _ = save_watch_body(state_path, &url, &body);
+                            }
                         }
                     }
                     Err(e) => eprintln!("watch error: {}", e),

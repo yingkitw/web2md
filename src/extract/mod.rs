@@ -1,9 +1,10 @@
-//! Deterministic page-element extractors: links, images, products, videos, audio, attributes, menus.
+//! Deterministic page-element extractors: links, images, products, videos, audio, attributes, menus, breadcrumbs.
 //!
 //! These mirror Firecrawl's `links`, `images`, `product`, `video`, `audio`, `attributes`, and `menu`
 //! formats but are fully deterministic (no LLM, no SaaS) — they parse HTML and JSON-LD locally.
 
 mod attributes;
+mod breadcrumbs;
 mod images;
 mod links;
 mod media;
@@ -13,6 +14,7 @@ mod product;
 mod tests;
 
 pub use attributes::{extract_attributes, AttributeResult};
+pub use breadcrumbs::{extract_breadcrumbs, BreadcrumbCrumb, BreadcrumbList};
 pub use images::{extract_images, ImageEntry};
 pub use links::{extract_links, LinkEntry};
 pub use media::{extract_audios, extract_videos, AudioEntry, VideoEntry};

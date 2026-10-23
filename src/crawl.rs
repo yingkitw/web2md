@@ -83,9 +83,82 @@ pub fn normalize_crawl_url(href: &str, base_url: &str) -> Option<String> {
     Some(parsed.to_string())
 }
 
+/// Normalize a path filter so comparisons are against URL paths (leading `/`).
+fn normalize_path_filter(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    }
+}
+
+/// Whether `url`'s path is allowed by optional prefix / exclude filters.
+///
+/// - `prefixes`: if non-empty, path must start with at least one prefix
+/// - `excludes`: path must not start with any exclude prefix
+pub fn path_allowed(url: &str, prefixes: &[String], excludes: &[String]) -> bool {
+    let Ok(parsed) = Url::parse(url) else {
+        return false;
+    };
+    let path = parsed.path();
+    if !prefixes.is_empty() {
+        let ok = prefixes.iter().any(|p| {
+            let norm = normalize_path_filter(p);
+            !norm.is_empty() && path.starts_with(&norm)
+        });
+        if !ok {
+            return false;
+        }
+    }
+    for ex in excludes {
+        let norm = normalize_path_filter(ex);
+        if !norm.is_empty() && path.starts_with(&norm) {
+            return false;
+        }
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn path_allowed_requires_prefix_when_set() {
+        assert!(path_allowed(
+            "https://example.com/docs/guide",
+            &["/docs".into()],
+            &[]
+        ));
+        assert!(!path_allowed(
+            "https://example.com/blog/post",
+            &["/docs".into()],
+            &[]
+        ));
+        assert!(path_allowed(
+            "https://example.com/docs/guide",
+            &["docs".into()],
+            &[]
+        ));
+    }
+
+    #[test]
+    fn path_allowed_excludes_prefix() {
+        assert!(!path_allowed(
+            "https://example.com/admin/settings",
+            &[],
+            &["/admin".into()]
+        ));
+        assert!(path_allowed(
+            "https://example.com/docs",
+            &[],
+            &["/admin".into()]
+        ));
+    }
 
     #[test]
     fn extract_page_links_resolves_relative_hrefs() {

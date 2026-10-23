@@ -91,6 +91,48 @@ async fn browser_sends_custom_headers() {
 }
 
 #[tokio::test]
+async fn browser_sends_default_accept_language() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/")
+        .match_header("accept-language", "en-US,en;q=0.9")
+        .match_header(
+            "accept",
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body>OK</body></html>")
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    browser.fetch(&format!("{}/", server.url())).await.unwrap();
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn browser_custom_accept_language_overrides_default() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/")
+        .match_header("accept-language", "fr-FR,fr;q=0.9")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body("<html><body>OK</body></html>")
+        .create_async()
+        .await;
+
+    let opts = BrowserOptions {
+        headers: vec!["Accept-Language: fr-FR,fr;q=0.9".to_string()],
+        ..Default::default()
+    };
+    let browser = Browser::new(opts).unwrap();
+    browser.fetch(&format!("{}/", server.url())).await.unwrap();
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn browser_sends_basic_auth() {
     let mut server = mockito::Server::new_async().await;
     let mock = server

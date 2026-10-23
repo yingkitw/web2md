@@ -123,6 +123,9 @@ pub struct PageMetadata {
     /// Character count of extracted plain text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub char_count: Option<usize>,
+    /// Estimated reading time in minutes (≈ 200 words/minute).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reading_time_minutes: Option<u32>,
 }
 
 impl PageMetadata {
@@ -188,6 +191,9 @@ impl PageMetadata {
         if let Some(cc) = self.char_count {
             lines.push(format!("char_count: {}", cc));
         }
+        if let Some(rt) = self.reading_time_minutes {
+            lines.push(format!("reading_time_minutes: {}", rt));
+        }
 
         if lines.is_empty() {
             None
@@ -205,8 +211,10 @@ impl PageMetadata {
         }
         let plain = PageToMarkdown::to_plain_text(markdown);
         self.fingerprint = Some(content_fingerprint(&plain));
-        self.word_count = Some(plain.split_whitespace().count());
+        let words = plain.split_whitespace().count();
+        self.word_count = Some(words);
         self.char_count = Some(plain.chars().count());
+        self.reading_time_minutes = Some(estimate_reading_time_minutes(words));
         self
     }
 
@@ -671,7 +679,18 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         fingerprint: None,
         word_count: None,
         char_count: None,
+        reading_time_minutes: None,
     }
+}
+
+/// Estimate reading time in minutes at ~200 words/minute.
+/// Returns `0` for empty text; otherwise at least `1`.
+pub fn estimate_reading_time_minutes(word_count: usize) -> u32 {
+    if word_count == 0 {
+        return 0;
+    }
+    let minutes = (word_count as f64 / 200.0).ceil() as u32;
+    minutes.max(1)
 }
 
 /// MCP server wrapping the Browser
@@ -712,6 +731,24 @@ impl McpServer {
                 None => anyhow::bail!("no JSON-LD Product found on this page"),
             },
             Some("branding") => Some(serde_json::to_value(crate::extract_branding(&html))?),
+            Some("breadcrumbs") => match crate::extract_breadcrumbs(&html, &req.url) {
+                Some(list) => Some(serde_json::to_value(list)?),
+                None => anyhow::bail!("no JSON-LD BreadcrumbList found on this page"),
+            },
+            Some("meta") => Some(serde_json::to_value(crate::extract_meta_dump(&html))?),
+            Some("llms-txt") => {
+                let meta = extract_metadata(&html);
+                let links = crate::extract_links(&html, &req.url);
+                let pairs: Vec<(String, String)> =
+                    links.into_iter().map(|l| (l.url, l.text)).collect();
+                let text = crate::to_llms_txt(
+                    &req.url,
+                    meta.title.as_deref(),
+                    meta.description.as_deref(),
+                    &pairs,
+                );
+                Some(serde_json::Value::String(text))
+            }
             Some(other) => anyhow::bail!("unsupported MCP format: {}", other),
             None => None,
         };
@@ -725,6 +762,7 @@ impl McpServer {
             include_comments: req.include_comments,
             include_tables: req.include_tables,
             include_links: req.include_links,
+            ..Default::default()
         };
         let mut markdown = PageToMarkdown::convert_with(&html, &opts, &[])?;
         markdown = PageToMarkdown::absolutize_links(&markdown, &req.url);
@@ -1486,6 +1524,21 @@ mod tests {
         assert!(quality <= 1.0);
         let fp = meta.fingerprint.expect("fingerprint");
         assert_eq!(fp.len(), 16);
+        let words = meta.word_count.expect("word_count");
+        assert!(words > 0);
+        assert_eq!(
+            meta.reading_time_minutes,
+            Some(estimate_reading_time_minutes(words))
+        );
+    }
+
+    #[test]
+    fn estimate_reading_time_rounds_up() {
+        assert_eq!(estimate_reading_time_minutes(0), 0);
+        assert_eq!(estimate_reading_time_minutes(1), 1);
+        assert_eq!(estimate_reading_time_minutes(200), 1);
+        assert_eq!(estimate_reading_time_minutes(201), 2);
+        assert_eq!(estimate_reading_time_minutes(400), 2);
     }
 
     #[test]
@@ -1617,6 +1670,7 @@ mod tests {
             fingerprint: Some("deadbeefcafebabe".to_string()),
             word_count: Some(42),
             char_count: Some(200),
+            reading_time_minutes: Some(1),
         };
         let fm = meta.to_frontmatter(Some("https://example.com/page")).unwrap();
         assert!(fm.starts_with("---\n"));
@@ -1628,6 +1682,7 @@ mod tests {
         assert!(fm.contains("image: \"https://example.com/img.jpg\""));
         assert!(fm.contains("headline: \"Breaking News\""));
         assert!(fm.contains("site_name: \"Tech Blog\""));
+        assert!(fm.contains("reading_time_minutes: 1"));
         assert!(fm.contains("keywords:\n  - \"Rust\"\n  - \"Markdown\""));
         assert!(fm.contains("categories:\n  - \"Technology\"\n  - \"Rust\""));
         assert!(fm.contains("excerpt: \"Short summary\""));
@@ -1705,7 +1760,7 @@ mod tests {
         let result = resp.result.expect("result present");
         let arr = result.as_array().expect("result is array");
         assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["url"].as_str().unwrap().ends_with("/clip.mp4"), true);
+        assert!(arr[0]["url"].as_str().unwrap().ends_with("/clip.mp4"));
         mock.assert_async().await;
     }
 
@@ -1770,6 +1825,49 @@ mod tests {
         assert!(resp.markdown.is_empty());
         let result = resp.result.expect("result present");
         assert_eq!(result["name"].as_str().unwrap(), "Lunch");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn mcp_server_returns_meta_format() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/meta")
+            .with_status(200)
+            .with_header("content-type", "text/html")
+            .with_body(
+                r#"<!DOCTYPE html><html lang="en"><head>
+                <link rel="canonical" href="https://example.com/page"/>
+                <meta property="og:title" content="Hello"/>
+                <meta name="twitter:card" content="summary"/>
+                <meta name="DC.title" content="DC Hello"/>
+                <meta name="description" content="A page"/>
+                </head><body></body></html>"#,
+            )
+            .create_async()
+            .await;
+
+        let mcp = McpServer::new().unwrap();
+        let resp = mcp
+            .handle(McpRequest {
+                url: format!("{}/meta", server.url()),
+                format: Some("meta".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert!(resp.markdown.is_empty());
+        let result = resp.result.expect("result present");
+        assert_eq!(result["html_lang"].as_str().unwrap(), "en");
+        assert_eq!(
+            result["open_graph"]["og:title"][0].as_str().unwrap(),
+            "Hello"
+        );
+        assert_eq!(
+            result["twitter"]["twitter:card"][0].as_str().unwrap(),
+            "summary"
+        );
         mock.assert_async().await;
     }
 }

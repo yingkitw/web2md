@@ -295,3 +295,27 @@ fn extract_menu_from_json_ld() {
 fn extract_menu_returns_none_without_json_ld() {
     assert!(extract_menu("<html><body>No menu</body></html>").is_none());
 }
+
+#[test]
+fn extract_breadcrumbs_from_json_ld() {
+    let html = r#"<html><head>
+        <script type="application/ld+json">
+        {"@type":"BreadcrumbList","itemListElement":[
+          {"@type":"ListItem","position":1,"name":"Home","item":"https://example.com/"},
+          {"@type":"ListItem","position":2,"name":"Docs","item":{"@id":"/docs","name":"Docs"}},
+          {"@type":"ListItem","position":3,"name":"Guide","item":"/docs/guide"}
+        ]}
+        </script></head><body></body></html>"#;
+    let list = extract_breadcrumbs(html, "https://example.com/").unwrap();
+    assert_eq!(list.items.len(), 3);
+    assert_eq!(list.items[0].name, "Home");
+    assert_eq!(list.items[0].url.as_deref(), Some("https://example.com/"));
+    assert_eq!(list.items[1].url.as_deref(), Some("https://example.com/docs"));
+    assert_eq!(list.items[2].name, "Guide");
+    assert_eq!(list.items[2].position, Some(3));
+}
+
+#[test]
+fn extract_breadcrumbs_returns_none_without_json_ld() {
+    assert!(extract_breadcrumbs("<p>No crumbs</p>", "https://example.com/").is_none());
+}

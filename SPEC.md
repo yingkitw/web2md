@@ -24,7 +24,7 @@ Web2MD is a tool that fetches web pages and returns them as Markdown. It is opti
 | Optional regex | `regex` (PII redaction, brand/design extraction) |
 | Conversion pipeline | `markdown/` (`PageToMarkdown`) wraps `html_to_md::parse_html` |
 | Output transforms | `transform.rs` — `--topic`, `--summary`, `--max-tokens`, paragraph splitter |
-| Domain-specific extractors | `structured.rs` — Recipe, FAQPage, JobPosting, Event JSON-LD → Markdown |
+| Domain-specific extractors | `structured.rs` — Recipe, FAQPage, QAPage, JobPosting, Event, HowTo, Speakable → Markdown |
 | Page diffing | `diff_markdown.rs` — LCS-based unified diff for the `diff` subcommand |
 | Persistent cache | `persistent_cache.rs` — JSON files keyed by URL hash; `--cache-dir` |
 | Brand/design extraction | `branding.rs` — top-N colors / fonts / heading sizes from inline `<style>` blocks |
@@ -56,12 +56,14 @@ When URL filtering is enabled, Web2MD also loads `~/.web2md/blacklist.txt` if it
 - Pages at each BFS level are fetched **in parallel** (up to 10 concurrent requests)
 - External links, `mailto:`, fragments, and blacklisted URLs are not followed
 - Output: `--output <dir>` writes one `.md` file per page; without `--output`, pages are printed separated by `---` headers
-- Requires markdown output format (`--format json` / `--format html` are incompatible with `--depth`)
+- Requires `--format markdown` (default), `--format llms-txt`, or `--format atom` (`--format json` / `--format html` are incompatible with `--depth`)
 - **`--sitemap-only`**: with `--depth > 0`, fetch `{origin}/sitemap.xml`, recursively expand any nested `<sitemapindex>` documents, and convert those URLs only — do not follow in-page links (≈ Firecrawl sitemap-only crawl)
+- **`--max-pages N`**: stop after converting N pages (applies to both link-following and sitemap-only crawls)
+- **`--path-prefix` / `--path-exclude`**: restrict crawl targets by URL path prefix (e.g. `--path-prefix /docs --path-exclude /docs/internal`)
 
 ## robots.txt
 
-robots.txt is **off by default**. When enabled via `BrowserOptions { respect_robots_txt: true, .. }`, Web2MD fetches `/robots.txt` once per origin and:
+robots.txt is **off by default**. Enable with `--respect-robots` (or `BrowserOptions { respect_robots_txt: true, .. }`). When enabled, Web2MD fetches `/robots.txt` once per origin and:
 
 - **Blocks** fetches to paths matched by a `Disallow` rule for `*` or the Web2MD user-agent
 - **Waits** the greater of `--delay` and `Crawl-delay` (seconds) between requests to that host
@@ -89,6 +91,7 @@ web2md fetch <URL> [FLAGS]
   --no-tables           Strip HTML tables from output
   --no-links            Emit link text only (strip Markdown [text](url))
   --cookie NAME=VAL    Send cookie (repeatable)
+  --cookie-file PATH   Load cookies from a Netscape or name=value file
   --header "Name: Val" Send custom header (repeatable)
   --format markdown    Output as Markdown (default)
   --format html        Output raw HTML
@@ -105,12 +108,18 @@ web2md fetch <URL> [FLAGS]
   --format audio       Output audio clips as JSON (title/duration when present)
   --format attributes  Output HTML attribute values (requires `--attr selector:attribute`)
   --format menu        Output restaurant menu from JSON-LD Menu (≈ Firecrawl `menu`, deterministic)
-  --type TYPE          Domain extractor: recipe | faq | job | event (LLM-free JSON-LD rendering)
+  --format breadcrumbs Output JSON-LD BreadcrumbList as JSON
+  --format meta        Output Open Graph / Twitter / Dublin Core / standard meta as JSON
+  --format llms-txt    Output single-page llms.txt-style summary (title, description, links)
+  --format atom        Output Atom 1.0 feed (single page, or multi-page with --depth / --sitemap-only)
+  --type TYPE          Domain extractor: recipe | faq | job | event | howto | qapage | speakable | course | software
   --topic QUERY        Keep only paragraphs relevant to this query (LLM-free; ≈ Firecrawl `highlights`)
   --summary N          Return top-N sentences by TF-IDF + positional scoring (LLM-free; ≈ Firecrawl `summary`)
   --readability        Apply Mozilla Readability.js (requires --features readability) before conversion
   --headless           Render the page with a real headless Chrome / Chromium (requires --features headless)
   --chrome-path PATH   Path to a Chrome / Chromium binary (used with --headless)
+  --wait-for-selector SEL  Wait for CSS selector after headless navigation (≈ Firecrawl waitFor)
+  --scroll [N]         Scroll to bottom N times for lazy-load (requires --headless; default 3)
   --lang CODE          Require page language to match ISO 639-1 or 639-3 (e.g. en, eng)
   --precision           Favor extraction precision (less noise, stricter main-content)
   --recall              Favor extraction recall (more text, looser main-content)
@@ -124,20 +133,28 @@ web2md fetch <URL> [FLAGS]
   --cache-max-age N    Only reuse cache entries younger than N seconds (≈ Firecrawl `minAge`)
   --webhook URL        POST result JSON to this webhook URL after fetch (n8n/Make/Zapier)
   --include-selector SEL  Keep only HTML elements matching CSS selector (e.g. article, .content); repeatable
+  --include-tags TAG      Keep only these HTML tag names (repeatable; ≈ Firecrawl includeTags)
   --attr SEL:ATTR      For `--format attributes`: CSS selector + attribute (e.g. a:href); repeatable
   --pii-redact         Redact PII (emails, phones, SSNs, credit cards) from output
   --mobile             Use mobile User-Agent for the request
   --proxy URL          Route requests through HTTP/SOCKS proxy (e.g. http://proxy:8080, socks5://proxy:1080)
   --auth USER:PASS     Basic authentication credentials (format: user:password)
+  --skip-tls-verify    Accept invalid TLS certificates (corporate MITM / self-signed proxies)
   --main-content       Extract only <article>, <main>, or [role=main] content
   -o, --output FILE    Write output to file instead of stdout
   --frontmatter         Prepend YAML frontmatter (metadata) to Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
+  --exclude-tags TAG      Strip HTML tag names before conversion (repeatable; ≈ Firecrawl excludeTags)
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
   --depth N             Recursively crawl same-origin links up to N levels (markdown only, parallel BFS)
   --sitemap-only        With --depth > 0: fetch sitemap.xml URLs only (no page-link following)
+  --max-pages N         Cap crawl at N pages (with --depth / --sitemap-only)
+  --path-prefix PATH    Only crawl URLs under this path prefix (repeatable)
+  --path-exclude PATH   Skip crawl URLs under this path prefix (repeatable)
+  --remove-base64-images  Strip data: (base64) image URIs from output
+  --respect-robots      Honor robots.txt Disallow and Crawl-delay (off by default)
   --ignore-robots       No-op (robots.txt is off by default; kept for backward compatibility)
 
 # Sitemap discovery
@@ -173,6 +190,7 @@ web2md batch <FILE> [FLAGS]
   --timeout SECONDS    Request timeout (default: 30)
   --include-images     Emit Markdown image references
   --cookie NAME=VAL    Send cookie (repeatable)
+  --cookie-file PATH   Load cookies from a Netscape or name=value file
   --header "Name: Val" Send custom header (repeatable)
   --delay MS           Polite delay between requests in milliseconds
   --keep-header        Preserve <header> tags (stripped by default)
@@ -181,6 +199,7 @@ web2md batch <FILE> [FLAGS]
   -o, --output DIR     Write Markdown files to directory (default: stdout)
   --frontmatter         Prepend YAML frontmatter (metadata) to each Markdown output
   --exclude-selector SEL  Strip HTML elements matching .class or #id selector (repeatable)
+  --exclude-tags TAG      Strip HTML tag names before conversion (repeatable; ≈ Firecrawl excludeTags)
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
@@ -190,6 +209,7 @@ web2md batch <FILE> [FLAGS]
   --chunk                Split Markdown by headings for RAG pipelines (sections separated by ---)
   --proxy URL           Route requests through HTTP/SOCKS proxy
   --auth USER:PASS      Basic authentication credentials
+  --skip-tls-verify     Accept invalid TLS certificates
 
 # Build (or rebuild) a BM25 index over a directory of Markdown files
 web2md corpus index <DIR> [--output PATH]
@@ -229,7 +249,9 @@ web2md diff <URL_A> <URL_B> [FLAGS]
 # Poll a URL on an interval and emit whenever the content fingerprint (simhash) changes
 web2md watch <URL> [FLAGS]
   --every SECONDS            Poll interval (default: 300)
-  --cache-dir DIR            Persist seen fingerprints across restarts
+  --cache-dir DIR            Persist fingerprints (and body when --diff/--webhook) across restarts
+  --diff                     On change, emit unified Markdown diff vs previous body
+  --webhook URL              POST JSON change event on fingerprint change
   --timeout SECONDS          Request timeout
   --cookie NAME=VAL          Send cookie (repeatable)
   --header "Name: Val"       Send custom header (repeatable)
@@ -436,8 +458,13 @@ Deterministic rendering of JSON-LD blocks (no LLM, no schema to define):
 
 - `--type recipe`: JSON-LD `Recipe` → ingredient bullet list + numbered `recipeInstructions` + YAML frontmatter (title, description, author, yield, category, cuisine, prep_minutes, cook_minutes, total_minutes).
 - `--type faq`: JSON-LD `FAQPage` `mainEntity` array → Q+A as Markdown headings (each `Question` = heading, `acceptedAnswer`/`suggestedAnswer` = body).
+- `--type qapage`: JSON-LD `QAPage` (falls back to `FAQPage`) → same Q+A Markdown shape.
+- `--type speakable`: JSON-LD `SpeakableSpecification` / `speakable.cssSelector` → scrape matching element text into Markdown sections.
+- `--type course`: JSON-LD `Course` → name, provider, course code, language, description.
+- `--type software`: JSON-LD `SoftwareApplication` / `WebApplication` → category, OS, version, price, rating, description.
 - `--type job`: JSON-LD `JobPosting` → title, company, location, salary (formatted as `amount currency /unit`), date_posted, apply URL, description. Frontmatter + labeled body.
 - `--type event`: JSON-LD `Event` → name, start/end date, venue (name + address), ticket URL, price.
+- `--type howto`: JSON-LD `HowTo` → steps, tools, supplies.
 
 When the JSON-LD is missing or ambiguous (multiple distinct blocks of the same type), the extractor returns `None` or `Err`; the CLI falls back to plain Markdown conversion with a stderr notice.
 
@@ -564,9 +591,81 @@ Uses `scraper` CSS selectors. Values are trimmed, non-empty, and deduplicated in
 
 Deterministic restaurant-menu extraction (≈ Firecrawl `menu` format without LLM). Errors if no Menu JSON-LD is present.
 
+## Breadcrumbs Extraction (`--format breadcrumbs`)
+
+`extract_breadcrumbs` reads JSON-LD `BreadcrumbList` / `ListItem` blocks and emits:
+
+```json
+{
+  "items": [
+    {"name": "Home", "url": "https://example.com/", "position": 1},
+    {"name": "Docs", "url": "https://example.com/docs", "position": 2}
+  ]
+}
+```
+
+Items are sorted by `position` when present. Relative item URLs are resolved against the page URL. Errors if no BreadcrumbList is found.
+
+## Meta Dump (`--format meta`)
+
+`extract_meta_dump` collects page metadata without Markdown conversion:
+
+```json
+{
+  "open_graph": {"og:title": ["Hello"], "article:author": ["Ada"]},
+  "twitter": {"twitter:card": ["summary"]},
+  "dublin_core": {"DC.title": ["Hello"]},
+  "standard": {"description": ["A page"], "keywords": ["a,b"]},
+  "html_lang": "en",
+  "canonical": "https://example.com/page"
+}
+```
+
+Groups: Open Graph (`og:` / `article:` properties), Twitter Cards (`twitter:` name/property), Dublin Core (`DC.` / `dcterms.`), and remaining standard `<meta name>` tags. Duplicate keys accumulate as arrays. Also includes `html lang` and `<link rel="canonical">`.
+
+## Llms.txt Summary (`--format llms-txt`)
+
+`to_llms_txt` emits a single-page [llms.txt](https://llmstxt.org)-style Markdown summary:
+
+```markdown
+# Page Title
+
+> Meta description when present
+
+Source: https://example.com/page
+
+## Links
+
+- [Label](https://example.com/a)
+```
+
+Uses page title / description from metadata and up to 50 extracted links. Available via CLI and MCP (`format: "llms-txt"`).
+
+With `--depth N` (or `--sitemap-only`), emits a **multi-page site index** instead: each crawled page becomes a `## Pages` entry (`title` + optional description from meta). Writes `llms.txt` under `--output DIR` when set; otherwise prints to stdout. Metadata-only (no full Markdown conversion) for speed.
+
+## Atom Feed (`--format atom`)
+
+Emits an Atom 1.0 XML feed. Single-page mode creates one `<entry>` from page title/description/`published_date`. With `--depth` / `--sitemap-only`, each crawled page becomes an entry (metadata-only). Writes `feed.atom` under `--output DIR` when set.
+
+## Cookie File (`--cookie-file`)
+
+`--cookie-file PATH` loads cookies from a simple `name=value` file or a Netscape cookie jar. Lines starting with `#` are ignored (except Netscape `#HttpOnly_` rows). Merged with repeatable `--cookie` flags. Available on `fetch`, `browse`, and `batch`.
+
+## Skip TLS Verify (`--skip-tls-verify`)
+
+When set, `reqwest` is built with `danger_accept_invalid_certs(true)` so corporate MITM / self-signed proxies work. Available on `fetch`, `browse`, and `batch`. Prefer installing the corporate CA when possible.
+
 ## Include Selector (`--include-selector`)
 
 `--include-selector <SEL>` keeps only HTML elements matching the given CSS selector(s) before conversion. Multiple selectors can be given (repeatable). Uses `scraper`'s CSS selector engine (html5ever). If no matches are found, the original HTML is used unchanged. Complements `--exclude-selector` (≈ Firecrawl `includeTags`).
+
+## Include Tags (`--include-tags`)
+
+`--include-tags <TAG>` keeps only matching HTML elements (e.g. `article`, `main`) before conversion — tag-name form of Firecrawl `includeTags`. Repeatable; alphanumeric names only. Merged with `--include-selector` into the same keep-filter.
+
+## Exclude Tags (`--exclude-tags`)
+
+`--exclude-tags <TAG>` strips matching HTML element pairs (e.g. `figure`, `svg`) before conversion — ≈ Firecrawl `excludeTags`. Repeatable. Only alphanumeric tag names are accepted. Complements built-in noise-tag stripping (`nav`/`footer`/`aside`/…) and `--exclude-selector` (class/id).
 
 ## PII Redaction (`--pii-redact`)
 
@@ -596,6 +695,15 @@ Configured at the `reqwest::ClientBuilder` level via `reqwest::Proxy::all()`, so
 ## Basic Authentication (`--auth`)
 
 When `--auth user:password` is set, HTTP Basic Auth credentials are sent with every request via `reqwest::RequestBuilder::basic_auth()`. Applied per-request in `fetch_raw()` so it covers all fetches including iframes and robots.txt. Available on `fetch`, `peek`, and `batch` commands.
+
+## Default request headers
+
+Every fetch sends browser-like defaults unless overridden with `--header`:
+
+- `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8`
+- `Accept-Language: en-US,en;q=0.9`
+
+`Accept-Encoding` is left to `reqwest` so transparent decompression keeps working.
 
 ## URL Discovery (`map` subcommand)
 
@@ -633,12 +741,15 @@ No API key, no subscription, fully local HTTP (≈ Firecrawl `/search`, free).
 
 ## Watch Mode (`watch` subcommand)
 
-`watch <URL> [--every SECONDS] [--cache-dir DIR]` polls a URL in a loop and emits a tab-separated line whenever the content fingerprint (simhash) changes:
+`watch <URL> [--every SECONDS] [--cache-dir DIR] [--diff] [--webhook URL]` polls a URL in a loop and emits whenever the content fingerprint (simhash) changes:
 
 1. Fetch + convert → compute `content_fingerprint(text)`.
 2. Compare with the previously-seen fingerprint.
-3. If different, print `timestamp\turl\tfingerprint\tsnippet` to stdout.
-4. `--cache-dir DIR` persists the last-seen fingerprint across restarts so reboots don't re-fire.
+3. If different:
+   - default: print `timestamp\turl\tfingerprint\tsnippet` to stdout
+   - `--diff`: print a unified Markdown diff vs the previous body (first change without a prior body dumps the baseline)
+   - `--webhook URL`: POST `{event:"watch.change", url, timestamp, fingerprint, snippet, diff, baseline}`
+4. `--cache-dir DIR` persists the last-seen fingerprint (and body when `--diff` / `--webhook`) across restarts so reboots don't re-fire.
 5. Failures (timeouts, non-2xx) are printed to stderr but do not stop the loop.
 
 Emits nothing while the page is unchanged — agents can `tail -f` it as a firehose.
@@ -655,11 +766,11 @@ When `--readability` is passed to `fetch` (and the crate is built with `--featur
 
 ## Headless Browser (`--headless`, `--features headless`)
 
-When `web2md` is built with `--features headless`, the [`headless_chrome`] DevTools client is compiled in and `fetch --headless [--chrome-path PATH]` routes the page through a real headless Chrome / Chromium. The launch helper:
+When `web2md` is built with `--features headless`, the [`headless_chrome`] DevTools client is compiled in and `fetch --headless [--chrome-path PATH] [--wait-for-selector SEL]` routes the page through a real headless Chrome / Chromium. The launch helper:
 
 1. Sets `LaunchOptions::path` from `--chrome-path` when given, otherwise relies on `headless_chrome::default_executable()` (system install or `CHROME` env var).
 2. Disables the OS sandbox by default — most CI / container hosts lack the user-namespace setup Chrome's sandbox needs; users who want it can re-enable it via `CHROME_DEVEL_SANDBOX`.
-3. Calls `Browser::new`, opens a new tab, navigates, waits for navigation to settle, and returns the rendered HTML.
+3. Calls `Browser::new`, opens a new tab, navigates, waits for navigation to settle, optionally `wait_for_element(selector)` when `--wait-for-selector` is set (≈ Firecrawl `waitFor`), optionally scrolls to bottom `--scroll N` times (400ms between) for lazy-load, and returns the rendered HTML.
 
 The work is run on a `tokio::task::spawn_blocking` thread because `headless_chrome` is a synchronous library. Without the feature compiled in, `render_url` returns a clear "rebuild with `--features headless`" error so the CLI fails fast with an actionable message.
 
