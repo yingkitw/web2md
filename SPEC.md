@@ -69,7 +69,6 @@ robots.txt is **off by default**. Enable with `--respect-robots` (or `BrowserOpt
 - **Waits** the greater of `--delay` and `Crawl-delay` (seconds) between requests to that host
 - Missing or unreadable robots.txt → all paths allowed
 - `/robots.txt` itself is always fetchable (no circular check)
-- The `--ignore-robots` flag is a no-op (kept for backward compatibility)
 
 ## CLI
 
@@ -155,7 +154,6 @@ web2md fetch <URL> [FLAGS]
   --path-exclude PATH   Skip crawl URLs under this path prefix (repeatable)
   --remove-base64-images  Strip data: (base64) image URIs from output
   --respect-robots      Honor robots.txt Disallow and Crawl-delay (off by default)
-  --ignore-robots       No-op (robots.txt is off by default; kept for backward compatibility)
 
 # Sitemap discovery
 web2md sitemap <URL> [FLAGS]
@@ -172,7 +170,6 @@ web2md map <URL> [FLAGS]
   --header "Name: Val" Send custom header (repeatable)
   --same-origin        Only list URLs on the same origin as the target
   --json               Output as JSON array instead of one URL per line
-  --ignore-robots      No-op (robots.txt is off by default; kept for backward compatibility)
 
 # Web search via DuckDuckGo (no API key required; ≈ Firecrawl /search, free)
 web2md search <QUERY> [FLAGS]
@@ -203,7 +200,6 @@ web2md batch <FILE> [FLAGS]
   --no-blacklist        Disable URL blacklist filtering for ads/tracking pixels
   --blacklist-file PATH Additional blacklist pattern file (repeatable)
   --no-user-blacklist   Do not load ~/.web2md/blacklist.txt
-  --ignore-robots       No-op (robots.txt is off by default; kept for backward compatibility)
   --links-summary        Append deduplicated link list at end of Markdown output
   --images-summary       Append deduplicated image list at end of Markdown output
   --chunk                Split Markdown by headings for RAG pipelines (sections separated by ---)
@@ -233,7 +229,6 @@ web2md peek <URL> [FLAGS]
   --cookie NAME=VAL          Send cookie (repeatable)
   --header "Name: Val"       Send custom header (repeatable)
   --delay MS                 Polite delay between requests
-  --ignore-robots            No-op (robots.txt is off by default)
   --no-blacklist             Disable URL blacklist filtering
   --proxy URL                Route requests through HTTP/SOCKS proxy
   --auth USER:PASS           Basic authentication credentials
@@ -255,7 +250,6 @@ web2md watch <URL> [FLAGS]
   --timeout SECONDS          Request timeout
   --cookie NAME=VAL          Send cookie (repeatable)
   --header "Name: Val"       Send custom header (repeatable)
-  --ignore-robots            No-op (robots.txt is off by default)
 ```
 
 ### MCP JSON-RPC Request
@@ -712,7 +706,6 @@ Every fetch sends browser-like defaults unless overridden with `--header`:
 - URLs are resolved to absolute and deduplicated.
 - `--same-origin` filters to only URLs on the same scheme + host as the target.
 - `--json` outputs a JSON array of URL strings; default is one URL per line.
-- `--ignore-robots` is a no-op (robots.txt is off by default).
 
 No LLM, fully deterministic (≈ Firecrawl `/map` endpoint, free).
 

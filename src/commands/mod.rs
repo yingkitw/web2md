@@ -13,7 +13,7 @@ pub(crate) mod batch;
 pub(crate) mod fetch;
 
 use crate::cli::{Cli, Commands, CorpusAction};
-use crate::options::build_browser_options;
+use crate::options::base_options;
 use crate::tui::browse_loop;
 use crate::watch::{
     load_watch_body, load_watch_state, poll_once, save_watch_body, save_watch_state,
@@ -31,28 +31,8 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             }
         }
                 Some(Commands::Browse(args)) => {
-            let mut cookies = args.cookie;
-            if let Some(ref path) = args.cookie_file {
-                cookies.extend(crate::options::load_cookie_file(path)?);
-            }
-            let mut options = build_browser_options(
-                args.timeout,
-                args.delay,
-                args.cache_ttl,
-                cookies,
-                args.header,
-                args.no_blacklist,
-                args.no_user_blacklist,
-                args.blacklist_file,
-                args.ignore_robots,
-                args.respect_robots,
-            );
-            options.no_cache = args.no_cache;
-            options.skip_tls_verify = args.skip_tls_verify;
-            if let Some(max_age) = args.cache_max_age {
-                options.cache_max_age = Some(Duration::from_secs(max_age));
-            }
-            browse_loop(args.url, options, args.include_images, args.keep_header, args.main_content).await?;
+            let options = args.common.browser_options()?;
+            browse_loop(args.url, options, args.common.include_images, args.common.keep_header, args.common.main_content).await?;
         }
         Some(Commands::Mcp) => {
             let server = McpServer::new()?;
@@ -68,12 +48,7 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             json,
         }) => {
             use web2md::diff_markdown;
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
+            let options = base_options(timeout, cookie, header);
             let browser = Browser::new(options)?;
             let html_a = browser.fetch(&url_a).await?;
             let html_a = browser.prepare_html(&html_a, &url_a).await?;
@@ -114,15 +89,9 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             cache_dir,
             diff,
             webhook,
-            ignore_robots: _,
         }) => {
             use std::time::Duration as StdDuration;
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
+            let options = base_options(timeout, cookie, header);
             // For watch, we deliberately bypass the persistent cache during the
             // comparison fetch so each tick sees the live page, then store the
             // resulting fingerprint in a sibling state file.
@@ -203,21 +172,15 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             cookie,
             header,
             delay,
-            ignore_robots: _,
             no_blacklist,
             json,
             proxy,
             auth,
         }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
+            let mut options = base_options(timeout, cookie, header);
             if let Some(ms) = delay {
                 options.request_delay = Duration::from_millis(ms);
             }
-            options.cookies = cookie;
-            options.headers = header;
             options.filter_blacklisted_urls = !no_blacklist;
             if let Some(ref p) = proxy {
                 options.proxy = Some(p.clone());
@@ -274,12 +237,7 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             cookie,
             header,
         }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
+            let options = base_options(timeout, cookie, header);
             let browser = Browser::new(options)?;
 
             let parsed = Url::parse(&url).context("Invalid URL")?;
@@ -307,14 +265,8 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             header,
             same_origin,
             json,
-            ignore_robots: _,
         }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
+            let options = base_options(timeout, cookie, header);
             let browser = Browser::new(options)?;
             let html = browser.fetch(&url).await?;
             let html = browser.prepare_html(&html, &url).await?;
@@ -352,12 +304,7 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             cookie,
             header,
         }) => {
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
-            options.cookies = cookie;
-            options.headers = header;
+            let options = base_options(timeout, cookie, header);
             let browser = Browser::new(options)?;
 
             let search_url = web2md::ddg_search_url(&query, limit);
@@ -431,10 +378,7 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
         }) => {
             let reg = web2md::Registry::parse(&registry)
                 .with_context(|| format!("Unknown registry '{}'. Use: crates, npm, or pypi", registry))?;
-            let mut options = BrowserOptions::default();
-            if let Some(secs) = timeout {
-                options.timeout = Duration::from_secs(secs);
-            }
+            let options = base_options(timeout, Vec::new(), Vec::new());
             let browser = Browser::new(options)?;
 
             let api_url = web2md::registry_api_url(reg, &name);
@@ -495,5 +439,23 @@ pub(crate) fn domain_matches_any(url: &str, domains: &[String]) -> bool {
         let d = d.trim_start_matches("www.");
         host == d || host.ends_with(&format!(".{d}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn domain_matches_exact_and_subdomain() {
+        assert!(domain_matches_any("https://github.com/repo", &["github.com".to_string()]));
+        assert!(domain_matches_any("https://docs.github.com/page", &["github.com".to_string()]));
+        assert!(!domain_matches_any("https://example.com", &["github.com".to_string()]));
+    }
+
+    #[test]
+    fn domain_matches_strips_www_prefix() {
+        assert!(domain_matches_any("https://www.rust-lang.org", &["rust-lang.org".to_string()]));
+        assert!(domain_matches_any("https://rust-lang.org", &["www.rust-lang.org".to_string()]));
+    }
 }
 

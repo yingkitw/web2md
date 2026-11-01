@@ -4,7 +4,6 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashSet;
-use std::time::Duration;
 use url::Url;
 use web2md::{
     extract_course, extract_event, extract_faq, extract_howto, extract_job, extract_metadata,
@@ -15,48 +14,20 @@ use web2md::{
 };
 
 use crate::ansi::render_markdown_ansi;
-use crate::cli::{format_label, CliJsonOutput, FetchArgs, OutputFormat};
-use crate::cli::url_to_filename;
+use crate::cli::{url_to_filename, CliJsonOutput, FetchArgs, OutputFormat};
 use crate::options::{
-    build_browser_options, filter_by_include_selectors, load_cookie_file, merge_include_selectors,
-    post_webhook, MOBILE_USER_AGENT,
+    filter_by_include_selectors, merge_include_selectors, post_webhook, MOBILE_USER_AGENT,
 };
+use clap::ValueEnum;
 
 pub(crate) async fn handle(args: FetchArgs) -> Result<()> {
-let mut cookies = args.cookie;
-if let Some(ref path) = args.cookie_file {
-    cookies.extend(load_cookie_file(path)?);
-}
-let options = build_browser_options(
-    args.timeout,
-    args.delay,
-    args.cache_ttl,
-    cookies,
-    args.header,
-    args.no_blacklist,
-    args.no_user_blacklist,
-    args.blacklist_file,
-    args.ignore_robots,
-    args.respect_robots,
-);
-let mut options = options;
+let mut options = args.common.browser_options()?;
 if let Some(dir) = args.cache_dir {
     options.cache_dir = Some(std::path::PathBuf::from(dir));
 }
-options.no_cache = args.no_cache;
-if let Some(max_age) = args.cache_max_age {
-    options.cache_max_age = Some(Duration::from_secs(max_age));
-}
 options.host_rate_limit = args.rate;
-options.skip_tls_verify = args.skip_tls_verify;
 if args.mobile {
     options.user_agent = MOBILE_USER_AGENT.to_string();
-}
-if let Some(ref p) = args.proxy {
-    options.proxy = Some(p.clone());
-}
-if let Some(ref a) = args.auth {
-    options.basic_auth = Some(a.clone());
 }
 let browser = Browser::new(options)?;
 
@@ -84,9 +55,9 @@ if args.depth > 0 {
         &args.path_prefix,
         &args.path_exclude,
         args.max_length,
-        args.include_images,
-        args.keep_header,
-        args.main_content,
+        args.common.include_images,
+        args.common.keep_header,
+        args.common.main_content,
         args.frontmatter,
         &args.exclude_selector,
         &args.exclude_tags,
@@ -149,9 +120,9 @@ if args.depth > 0 {
             html
         };
         let convert_opts = ConvertOptions {
-            include_images: args.include_images,
-            keep_header: args.keep_header,
-            main_content: args.main_content,
+            include_images: args.common.include_images,
+            keep_header: args.common.keep_header,
+            main_content: args.common.main_content,
             favor_precision: args.precision,
             favor_recall: args.recall,
             include_comments: !args.no_comments,
@@ -198,7 +169,7 @@ if args.depth > 0 {
         html
     };
 
-    let format_label_value = format_label(&args.format);
+    let format_label_value = args.format.to_possible_value().unwrap();
     let (mut result, frontmatter_meta) = match args.format {
         OutputFormat::Branding => {
             let profile = web2md::extract_branding(&html);
@@ -229,7 +200,7 @@ if args.depth > 0 {
         OutputFormat::Attributes => {
             if args.attr.is_empty() {
                 anyhow::bail!(
-                    "--args.format attributes requires at least one --args.attr selector:attribute (e.g. --args.attr a:href)"
+                    "--format attributes requires at least one --attr selector:attribute (e.g. --attr a:href)"
                 );
             }
             let results = web2md::extract_attributes(&html, &args.attr);
@@ -284,15 +255,15 @@ if args.depth > 0 {
         }
         OutputFormat::Html => {
             if args.lang.is_some() {
-                anyhow::bail!("--args.lang requires a converted output args.format (not html)");
+                anyhow::bail!("--lang requires a converted output format (not html)");
             }
             if args.only_with_metadata {
                 anyhow::bail!(
-                    "--only-with-metadata requires a converted output args.format (not html)"
+                    "--only-with-metadata requires a converted output format (not html)"
                 );
             }
             if args.r#type.is_some() {
-                anyhow::bail!("--type requires a converted output args.format (not html)");
+                anyhow::bail!("--type requires a converted output format (not html)");
             }
             (html.clone(), None)
         }
@@ -385,9 +356,9 @@ if args.depth > 0 {
                 Some(md) => md,
                 None => {
                     let convert_opts = ConvertOptions {
-                        include_images: args.include_images,
-                        keep_header: args.keep_header,
-                        main_content: args.main_content,
+                        include_images: args.common.include_images,
+                        keep_header: args.common.keep_header,
+                        main_content: args.common.main_content,
                         favor_precision: args.precision,
                         favor_recall: args.recall,
                         include_comments: !args.no_comments,
@@ -407,7 +378,7 @@ if args.depth > 0 {
             if let Some(ref target) = args.lang
                 && !language_matches(meta.language.as_deref(), target) {
                     anyhow::bail!(
-                        "page language {:?} does not match --args.lang {}",
+                        "page language {:?} does not match --lang {}",
                         meta.language.as_deref().unwrap_or("(unknown)"),
                         target
                     );
@@ -426,7 +397,7 @@ if args.depth > 0 {
                     md = match extract_topic(&md, t, None) {
                         Some(f) => PageToMarkdown::absolutize_links(&f, &args.url),
                         None => anyhow::bail!(
-                            "--args.topic: no paragraphs matched query {:?}",
+                            "--topic: no paragraphs matched query {:?}",
                             t
                         ),
                     };
@@ -537,8 +508,8 @@ if args.depth > 0 {
     if let Some(hook) = args.webhook.as_deref() {
         let payload = serde_json::json!({
             "event": "fetch.completed",
-            "args.url": args.url,
-            "args.format": format_label_value,
+            "url": args.url,
+            "format": format_label_value.get_name(),
             "result": result,
         });
         if let Err(e) = post_webhook(hook, &payload.to_string()).await {
@@ -870,4 +841,26 @@ pub(crate) fn chunk_markdown_by_headings(md: &str) -> String {
     }
 
     chunks.join("\n---\n\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chunk_markdown_splits_by_headings() {
+        let md = "# Title\n\nIntro text\n\n## Section A\n\nContent A\n\n## Section B\n\nContent B";
+        let chunked = chunk_markdown_by_headings(md);
+        assert!(chunked.contains("---"));
+        assert!(chunked.contains("# Title"));
+        assert!(chunked.contains("## Section A"));
+        assert!(chunked.contains("## Section B"));
+    }
+
+    #[test]
+    fn chunk_markdown_single_heading_no_separator() {
+        let md = "# Only Heading\n\nContent here";
+        let chunked = chunk_markdown_by_headings(md);
+        assert!(!chunked.contains("---"));
+    }
 }

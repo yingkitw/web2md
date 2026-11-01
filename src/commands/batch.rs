@@ -2,11 +2,10 @@
 //! per-URL blacklist/robots checks and optional per-page file output.
 
 use anyhow::{Context, Result};
-use std::time::Duration;
+
 use web2md::{extract_page_metadata, Browser, ConvertOptions, PageToMarkdown};
 
 use crate::cli::{url_to_filename, BatchArgs};
-use crate::options::build_browser_options;
 
 pub(crate) async fn handle(args: BatchArgs) -> Result<()> {
 let content = std::fs::read_to_string(&args.file)
@@ -23,34 +22,7 @@ if urls.is_empty() {
     return Ok(());
 }
 
-let mut cookies = args.cookie;
-if let Some(ref path) = args.cookie_file {
-    cookies.extend(crate::options::load_cookie_file(path)?);
-}
-let options = build_browser_options(
-    args.timeout,
-    args.delay,
-    args.cache_ttl,
-    cookies,
-    args.header,
-    args.no_blacklist,
-    args.no_user_blacklist,
-    args.blacklist_file,
-    args.ignore_robots,
-    args.respect_robots,
-);
-let mut options = options;
-options.no_cache = args.no_cache;
-options.skip_tls_verify = args.skip_tls_verify;
-if let Some(max_age) = args.cache_max_age {
-    options.cache_max_age = Some(Duration::from_secs(max_age));
-}
-if let Some(ref p) = args.proxy {
-    options.proxy = Some(p.clone());
-}
-if let Some(ref a) = args.auth {
-    options.basic_auth = Some(a.clone());
-}
+let options = args.common.browser_options()?;
 let browser = Browser::new(options)?;
 
 // Create output directory if specified
@@ -85,9 +57,9 @@ for (i, url) in urls.iter().enumerate() {
                 Err(_) => html,
             };
             let convert_opts = ConvertOptions {
-                include_images: args.include_images,
-                keep_header: args.keep_header,
-                main_content: args.main_content,
+                include_images: args.common.include_images,
+                keep_header: args.common.keep_header,
+                main_content: args.common.main_content,
                 exclude_tags: args.exclude_tags.clone(),
                 ..Default::default()
             };

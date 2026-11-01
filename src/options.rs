@@ -10,7 +10,6 @@ pub(crate) const MOBILE_USER_AGENT: &str = concat!(
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1 Web2MD/",
     env!("CARGO_PKG_VERSION")
 );
-
 pub(crate) fn apply_blacklist_options(
     options: &mut BrowserOptions,
     no_blacklist: bool,
@@ -27,14 +26,14 @@ pub(crate) fn apply_blacklist_options(
 /// Supports:
 /// - simple `name=value` lines (`#` comments / blank lines ignored)
 /// - Netscape cookie jar lines (`domain\tflag\tpath\tsecure\texpiry\tname\tvalue`)
-pub(crate) fn load_cookie_file(path: &str) -> anyhow::Result<Vec<String>> {
+fn load_cookie_file(path: &str) -> anyhow::Result<Vec<String>> {
     let data = std::fs::read_to_string(path)
         .with_context(|| format!("reading cookie file {}", path))?;
     Ok(parse_cookie_file(&data))
 }
 
 /// Parse cookie file contents into `name=value` pairs.
-pub(crate) fn parse_cookie_file(data: &str) -> Vec<String> {
+fn parse_cookie_file(data: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in data.lines() {
         let trimmed = line.trim();
@@ -130,34 +129,60 @@ pub(crate) fn filter_by_include_selectors(html: &str, selectors: &[String]) -> S
     }
 }
 
-/// Build [`BrowserOptions`] from common CLI flags shared by fetch/browse/batch.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_browser_options(
+impl crate::cli::CommonArgs {
+    /// Merge `--cookie` values with any cookies from `--cookie-file`.
+    pub(crate) fn cookies(&self) -> anyhow::Result<Vec<String>> {
+        let mut cookies = self.cookie.clone();
+        if let Some(ref path) = self.cookie_file {
+            cookies.extend(load_cookie_file(path)?);
+        }
+        Ok(cookies)
+    }
+
+    /// Build [`BrowserOptions`] from the shared flag group.
+    pub(crate) fn browser_options(&self) -> anyhow::Result<BrowserOptions> {
+        let mut options = BrowserOptions::default();
+        if let Some(secs) = self.timeout {
+            options.timeout = Duration::from_secs(secs);
+        }
+        if let Some(ms) = self.delay {
+            options.request_delay = Duration::from_millis(ms);
+        }
+        if let Some(secs) = self.cache_ttl {
+            options.cache_ttl = Duration::from_secs(secs);
+        }
+        options.cookies = self.cookies()?;
+        options.headers = self.header.clone();
+        options.proxy = self.proxy.clone();
+        options.basic_auth = self.auth.clone();
+        options.skip_tls_verify = self.skip_tls_verify;
+        options.no_cache = self.no_cache;
+        if let Some(max_age) = self.cache_max_age {
+            options.cache_max_age = Some(Duration::from_secs(max_age));
+        }
+        options.respect_robots_txt = self.respect_robots;
+        apply_blacklist_options(
+            &mut options,
+            self.no_blacklist,
+            self.no_user_blacklist,
+            self.blacklist_file.clone(),
+        );
+        Ok(options)
+    }
+}
+
+/// Minimal `BrowserOptions` for commands that only take timeout/cookies/headers.
+pub(crate) fn base_options(
     timeout: Option<u64>,
-    delay: Option<u64>,
-    cache_ttl: Option<u64>,
     cookies: Vec<String>,
     headers: Vec<String>,
-    no_blacklist: bool,
-    no_user_blacklist: bool,
-    blacklist_file: Vec<String>,
-    _ignore_robots: bool,
-    respect_robots: bool,
 ) -> BrowserOptions {
     let mut options = BrowserOptions::default();
     if let Some(secs) = timeout {
         options.timeout = Duration::from_secs(secs);
     }
-    if let Some(ms) = delay {
-        options.request_delay = Duration::from_millis(ms);
-    }
-    if let Some(secs) = cache_ttl {
-        options.cache_ttl = Duration::from_secs(secs);
-    }
     options.cookies = cookies;
     options.headers = headers;
-    options.respect_robots_txt = respect_robots;
-    apply_blacklist_options(&mut options, no_blacklist, no_user_blacklist, blacklist_file);
     options
 }
 

@@ -67,14 +67,9 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Commands>,
 }
 
-/// Arguments for `web2md fetch`.
+/// Flags shared by `fetch`, `browse`, and `batch`.
 #[derive(clap::Args)]
-pub(crate) struct FetchArgs {
-    /// Target URL
-    pub(crate) url: String,
-    /// Maximum output length
-    #[arg(short, long)]
-    pub(crate) max_length: Option<usize>,
+pub(crate) struct CommonArgs {
     /// Request timeout in seconds
     #[arg(short, long)]
     pub(crate) timeout: Option<u64>,
@@ -90,7 +85,58 @@ pub(crate) struct FetchArgs {
     /// Custom HTTP header (format: "Name: Value"); can be given multiple times
     #[arg(short = 'H', long)]
     pub(crate) header: Vec<String>,
-    /// Output format: markdown, html, json, text, csv, tei, or xml
+    /// Polite delay between consecutive requests in milliseconds
+    #[arg(long)]
+    pub(crate) delay: Option<u64>,
+    /// Keep <header> tags in output (stripped by default)
+    #[arg(long)]
+    pub(crate) keep_header: bool,
+    /// Cache TTL in seconds (0 = disabled, default: 0)
+    #[arg(long)]
+    pub(crate) cache_ttl: Option<u64>,
+    /// Bypass cache for this request (always fetch live URL)
+    #[arg(long)]
+    pub(crate) no_cache: bool,
+    /// Only use cache entries younger than N seconds (overrides --cache-ttl for lookup)
+    #[arg(long)]
+    pub(crate) cache_max_age: Option<u64>,
+    /// Extract only main content from <article>, <main>, or [role=main] elements
+    #[arg(long)]
+    pub(crate) main_content: bool,
+    /// Disable URL blacklist filtering for ads/tracking pixels
+    #[arg(long)]
+    pub(crate) no_blacklist: bool,
+    /// Honor robots.txt Disallow and Crawl-delay (off by default)
+    #[arg(long)]
+    pub(crate) respect_robots: bool,
+    /// Additional blacklist pattern file (one host or path pattern per line)
+    #[arg(long)]
+    pub(crate) blacklist_file: Vec<String>,
+    /// Do not load ~/.web2md/blacklist.txt
+    #[arg(long)]
+    pub(crate) no_user_blacklist: bool,
+    /// Route requests through an HTTP/SOCKS proxy (e.g. "http://proxy:8080", "socks5://proxy:1080")
+    #[arg(long)]
+    pub(crate) proxy: Option<String>,
+    /// Basic authentication credentials (format: "user:password")
+    #[arg(long)]
+    pub(crate) auth: Option<String>,
+    /// Accept invalid TLS certificates (corporate MITM / self-signed proxies)
+    #[arg(long)]
+    pub(crate) skip_tls_verify: bool,
+}
+
+/// Arguments for `web2md fetch`.
+#[derive(clap::Args)]
+pub(crate) struct FetchArgs {
+    /// Target URL
+    pub(crate) url: String,
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
+    /// Maximum output length
+    #[arg(short, long)]
+    pub(crate) max_length: Option<usize>,
+    /// Output format
     #[arg(short, long, value_enum, default_value = "markdown")]
     pub(crate) format: OutputFormat,
     /// Render Markdown with ANSI colors and formatting in the terminal
@@ -117,24 +163,6 @@ pub(crate) struct FetchArgs {
     /// Only output when title and published_date metadata are present
     #[arg(long)]
     pub(crate) only_with_metadata: bool,
-    /// Polite delay between consecutive requests in milliseconds
-    #[arg(long)]
-    pub(crate) delay: Option<u64>,
-    /// Keep <header> tags in output (stripped by default)
-    #[arg(long)]
-    pub(crate) keep_header: bool,
-    /// Cache TTL in seconds (0 = disabled, default: 0)
-    #[arg(long)]
-    pub(crate) cache_ttl: Option<u64>,
-    /// Bypass cache for this request (always fetch live URL)
-    #[arg(long)]
-    pub(crate) no_cache: bool,
-    /// Only use cache entries younger than N seconds (overrides --cache-ttl for lookup)
-    #[arg(long)]
-    pub(crate) cache_max_age: Option<u64>,
-    /// Extract only main content from <article>, <main>, or [role=main] elements
-    #[arg(long)]
-    pub(crate) main_content: bool,
     /// Write output to file instead of stdout (or directory when --depth > 0)
     #[arg(short, long)]
     pub(crate) output: Option<String>,
@@ -150,9 +178,6 @@ pub(crate) struct FetchArgs {
     /// Keep only these HTML tag names before conversion (e.g. `article`, `main`); can be given multiple times
     #[arg(long)]
     pub(crate) include_tags: Vec<String>,
-    /// Disable URL blacklist filtering for ads/tracking pixels
-    #[arg(long)]
-    pub(crate) no_blacklist: bool,
     /// Recursively crawl same-origin links up to N levels deep (markdown output only)
     #[arg(long, default_value = "0")]
     pub(crate) depth: u32,
@@ -171,18 +196,6 @@ pub(crate) struct FetchArgs {
     /// Strip `data:` (base64) image URIs from Markdown / HTML image tags
     #[arg(long)]
     pub(crate) remove_base64_images: bool,
-    /// Honor robots.txt Disallow and Crawl-delay (off by default)
-    #[arg(long)]
-    pub(crate) respect_robots: bool,
-    /// No-op (robots.txt is off by default; kept for backward compatibility)
-    #[arg(long)]
-    pub(crate) ignore_robots: bool,
-    /// Additional blacklist pattern file (one host or path pattern per line)
-    #[arg(long)]
-    pub(crate) blacklist_file: Vec<String>,
-    /// Do not load ~/.web2md/blacklist.txt
-    #[arg(long)]
-    pub(crate) no_user_blacklist: bool,
     /// Keep only paragraphs relevant to this natural-language query (≈ Firecrawl `highlights`)
     #[arg(long)]
     pub(crate) topic: Option<String>,
@@ -216,15 +229,6 @@ pub(crate) struct FetchArgs {
     /// Use a mobile User-Agent string for the request
     #[arg(long)]
     pub(crate) mobile: bool,
-    /// Route requests through an HTTP/SOCKS proxy (e.g. "http://proxy:8080", "socks5://proxy:1080")
-    #[arg(long)]
-    pub(crate) proxy: Option<String>,
-    /// Basic authentication credentials (format: "user:password")
-    #[arg(long)]
-    pub(crate) auth: Option<String>,
-    /// Accept invalid TLS certificates (corporate MITM / self-signed proxies)
-    #[arg(long)]
-    pub(crate) skip_tls_verify: bool,
     /// Apply Mozilla Readability.js (via readabilityrs) before conversion
     /// to strip chrome and isolate the article body.
     /// Requires building with --features readability.
@@ -263,57 +267,8 @@ pub(crate) struct FetchArgs {
 pub(crate) struct BrowseArgs {
     /// Starting URL
     pub(crate) url: String,
-    /// Request timeout in seconds
-    #[arg(short, long)]
-    pub(crate) timeout: Option<u64>,
-    /// Include image references in Markdown output
-    #[arg(short, long)]
-    pub(crate) include_images: bool,
-    /// Cookie to send with the request (format: name=value); can be given multiple times
-    #[arg(short, long)]
-    pub(crate) cookie: Vec<String>,
-    /// Load cookies from a file (`name=value` lines or Netscape cookie jar)
-    #[arg(long)]
-    pub(crate) cookie_file: Option<String>,
-    /// Custom HTTP header (format: "Name: Value"); can be given multiple times
-    #[arg(short = 'H', long)]
-    pub(crate) header: Vec<String>,
-    /// Polite delay between consecutive requests in milliseconds
-    #[arg(long)]
-    pub(crate) delay: Option<u64>,
-    /// Keep <header> tags in output (stripped by default)
-    #[arg(long)]
-    pub(crate) keep_header: bool,
-    /// Cache TTL in seconds (0 = disabled, default: 0)
-    #[arg(long)]
-    pub(crate) cache_ttl: Option<u64>,
-    /// Bypass cache for this request (always fetch live URL)
-    #[arg(long)]
-    pub(crate) no_cache: bool,
-    /// Only use cache entries younger than N seconds (overrides --cache-ttl for lookup)
-    #[arg(long)]
-    pub(crate) cache_max_age: Option<u64>,
-    /// Extract only main content from <article>, <main>, or [role=main] elements
-    #[arg(long)]
-    pub(crate) main_content: bool,
-    /// Disable URL blacklist filtering for ads/tracking pixels
-    #[arg(long)]
-    pub(crate) no_blacklist: bool,
-    /// Honor robots.txt Disallow and Crawl-delay (off by default)
-    #[arg(long)]
-    pub(crate) respect_robots: bool,
-    /// No-op (robots.txt is off by default; kept for backward compatibility)
-    #[arg(long)]
-    pub(crate) ignore_robots: bool,
-    /// Additional blacklist pattern file (one host or path pattern per line)
-    #[arg(long)]
-    pub(crate) blacklist_file: Vec<String>,
-    /// Do not load ~/.web2md/blacklist.txt
-    #[arg(long)]
-    pub(crate) no_user_blacklist: bool,
-    /// Accept invalid TLS certificates (corporate MITM / self-signed proxies)
-    #[arg(long)]
-    pub(crate) skip_tls_verify: bool,
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
 }
 
 /// Arguments for `web2md batch`.
@@ -321,39 +276,8 @@ pub(crate) struct BrowseArgs {
 pub(crate) struct BatchArgs {
     /// File containing one URL per line (lines starting with # are ignored)
     pub(crate) file: String,
-    /// Request timeout in seconds
-    #[arg(short, long)]
-    pub(crate) timeout: Option<u64>,
-    /// Include image references in Markdown output
-    #[arg(short, long)]
-    pub(crate) include_images: bool,
-    /// Cookie to send with the request (format: name=value); can be given multiple times
-    #[arg(short, long)]
-    pub(crate) cookie: Vec<String>,
-    /// Load cookies from a file (`name=value` lines or Netscape cookie jar)
-    #[arg(long)]
-    pub(crate) cookie_file: Option<String>,
-    /// Custom HTTP header (format: "Name: Value"); can be given multiple times
-    #[arg(short = 'H', long)]
-    pub(crate) header: Vec<String>,
-    /// Polite delay between consecutive requests in milliseconds
-    #[arg(long)]
-    pub(crate) delay: Option<u64>,
-    /// Keep <header> tags in output (stripped by default)
-    #[arg(long)]
-    pub(crate) keep_header: bool,
-    /// Cache TTL in seconds (0 = disabled, default: 0)
-    #[arg(long)]
-    pub(crate) cache_ttl: Option<u64>,
-    /// Bypass cache for this request (always fetch live URL)
-    #[arg(long)]
-    pub(crate) no_cache: bool,
-    /// Only use cache entries younger than N seconds (overrides --cache-ttl for lookup)
-    #[arg(long)]
-    pub(crate) cache_max_age: Option<u64>,
-    /// Extract only main content from <article>, <main>, or [role=main] elements
-    #[arg(long)]
-    pub(crate) main_content: bool,
+    #[command(flatten)]
+    pub(crate) common: CommonArgs,
     /// Output directory to write Markdown files (default: stdout)
     #[arg(short, long)]
     pub(crate) output: Option<String>,
@@ -366,30 +290,6 @@ pub(crate) struct BatchArgs {
     /// HTML tag names to strip before conversion (e.g. `figure`, `svg`); can be given multiple times
     #[arg(long)]
     pub(crate) exclude_tags: Vec<String>,
-    /// Disable URL blacklist filtering for ads/tracking pixels
-    #[arg(long)]
-    pub(crate) no_blacklist: bool,
-    /// Honor robots.txt Disallow and Crawl-delay (off by default)
-    #[arg(long)]
-    pub(crate) respect_robots: bool,
-    /// No-op (robots.txt is off by default; kept for backward compatibility)
-    #[arg(long)]
-    pub(crate) ignore_robots: bool,
-    /// Additional blacklist pattern file (one host or path pattern per line)
-    #[arg(long)]
-    pub(crate) blacklist_file: Vec<String>,
-    /// Do not load ~/.web2md/blacklist.txt
-    #[arg(long)]
-    pub(crate) no_user_blacklist: bool,
-    /// Route requests through an HTTP/SOCKS proxy (e.g. "http://proxy:8080", "socks5://proxy:1080")
-    #[arg(long)]
-    pub(crate) proxy: Option<String>,
-    /// Basic authentication credentials (format: "user:password")
-    #[arg(long)]
-    pub(crate) auth: Option<String>,
-    /// Accept invalid TLS certificates (corporate MITM / self-signed proxies)
-    #[arg(long)]
-    pub(crate) skip_tls_verify: bool,
 }
 
 #[derive(Subcommand)]
@@ -413,9 +313,6 @@ pub(crate) enum Commands {
         /// Polite delay between consecutive requests in milliseconds
         #[arg(long)]
         delay: Option<u64>,
-        /// Ignore robots.txt disallow rules and crawl-delay
-        #[arg(long)]
-        ignore_robots: bool,
         /// Disable URL blacklist filtering
         #[arg(long)]
         no_blacklist: bool,
@@ -480,9 +377,6 @@ pub(crate) enum Commands {
         /// POST JSON change event to this URL whenever the fingerprint changes
         #[arg(long)]
         webhook: Option<String>,
-        /// Ignore robots.txt for this fetch
-        #[arg(long)]
-        ignore_robots: bool,
     },
     /// Discover URLs from a website's sitemap.xml
     Sitemap {
@@ -517,9 +411,6 @@ pub(crate) enum Commands {
         /// Output as JSON array instead of one URL per line
         #[arg(long)]
         json: bool,
-        /// Ignore robots.txt disallow rules and crawl-delay
-        #[arg(long)]
-        ignore_robots: bool,
     },
     /// Web search via DuckDuckGo (no API key required; ≈ Firecrawl /search, free)
     Search {
@@ -599,31 +490,6 @@ pub(crate) enum CorpusAction {
     },
 }
 
-/// Map a CLI `OutputFormat` to a lowercase identifier for use in webhook payloads.
-pub(crate) fn format_label(format: &OutputFormat) -> &'static str {
-    match format {
-        OutputFormat::Markdown => "markdown",
-        OutputFormat::Html => "html",
-        OutputFormat::Json => "json",
-        OutputFormat::Text => "text",
-        OutputFormat::Csv => "csv",
-        OutputFormat::Tei => "tei",
-        OutputFormat::Xml => "xml",
-        OutputFormat::Branding => "branding",
-        OutputFormat::Links => "links",
-        OutputFormat::Images => "images",
-        OutputFormat::Product => "product",
-        OutputFormat::Video => "video",
-        OutputFormat::Audio => "audio",
-        OutputFormat::Attributes => "attributes",
-        OutputFormat::Menu => "menu",
-        OutputFormat::Breadcrumbs => "breadcrumbs",
-        OutputFormat::Meta => "meta",
-        OutputFormat::LlmsTxt => "llms-txt",
-        OutputFormat::Atom => "atom",
-    }
-}
-
 /// Convert a URL to a safe filename for batch output.
 /// e.g. "https://example.com/blog/post" → "example.com_blog_post.md"
 pub(crate) fn url_to_filename(url: &str) -> String {
@@ -636,4 +502,28 @@ pub(crate) fn url_to_filename(url: &str) -> String {
     let path = if path.is_empty() { "index" } else { path };
     let path = path.replace(['/', '?', '=', '&'], "_");
     format!("{}_{}.md", host, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_to_filename_basic() {
+        let name = url_to_filename("https://example.com/blog/post");
+        assert_eq!(name, "example.com_blog_post.md");
+    }
+
+    #[test]
+    fn url_to_filename_root() {
+        let name = url_to_filename("https://example.com/");
+        assert_eq!(name, "example.com_index.md");
+    }
+
+    #[test]
+    fn url_to_filename_with_query() {
+        let name = url_to_filename("https://example.com/search?q=rust&page=2");
+        assert!(name.starts_with("example.com_search"));
+        assert!(name.ends_with(".md"));
+    }
 }

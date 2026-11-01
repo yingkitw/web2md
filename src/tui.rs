@@ -367,3 +367,98 @@ pub(crate) fn resolve_url(base: &str, relative: &str) -> String {
         }
     relative.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_url_absolute_unchanged() {
+        assert_eq!(resolve_url("https://ibm.com", "https://example.com"), "https://example.com");
+    }
+
+    #[test]
+    fn resolve_url_relative_joined() {
+        assert_eq!(resolve_url("https://ibm.com/page", "/about"), "https://ibm.com/about");
+        assert_eq!(resolve_url("https://ibm.com/page/", "about"), "https://ibm.com/page/about");
+    }
+
+    #[test]
+    fn resolve_url_protocol_relative() {
+        assert_eq!(resolve_url("https://ibm.com", "//cdn.com/file.js"), "https://cdn.com/file.js");
+    }
+
+    #[test]
+    fn viewport_window_basic() {
+        assert_eq!(viewport_window(100, 0, 20), (0, 20));
+        assert_eq!(viewport_window(100, 40, 20), (40, 60));
+        assert_eq!(viewport_window(100, 90, 20), (90, 100));
+    }
+
+    #[test]
+    fn viewport_window_edge_cases() {
+        assert_eq!(viewport_window(0, 0, 20), (0, 0));
+        assert_eq!(viewport_window(5, 0, 20), (0, 5));
+        assert_eq!(viewport_window(100, 999, 20), (99, 100));
+        assert_eq!(viewport_window(10, 0, 0), (0, 1));
+    }
+
+    fn search_lines() -> Vec<String> {
+        vec![
+            "alpha introduction".into(),
+            "beta section".into(),
+            "gamma alpha again".into(),
+        ]
+    }
+
+    #[test]
+    fn find_match_forward_from_top() {
+        let lines = search_lines();
+        assert_eq!(find_match_forward(&lines, "beta", 0), Some(1));
+        assert_eq!(find_match_forward(&lines, "alpha", 0), Some(2));
+    }
+
+    #[test]
+    fn find_match_forward_wraps_around() {
+        let lines = search_lines();
+        assert_eq!(find_match_forward(&lines, "beta", 1), Some(1));
+        assert_eq!(find_match_forward(&lines, "intro", 2), Some(0));
+    }
+
+    #[test]
+    fn find_match_backward_search() {
+        let lines = search_lines();
+        assert_eq!(find_match_backward(&lines, "alpha", 2), Some(0));
+        assert_eq!(find_match_backward(&lines, "gamma", 0), Some(2));
+    }
+
+    #[test]
+    fn find_match_case_insensitive_and_empty() {
+        let lines = vec!["Hello World".to_string()];
+        assert_eq!(find_match_forward(&lines, "WORLD", 0), Some(0));
+        assert_eq!(find_match_forward(&lines, "", 0), None);
+        assert_eq!(find_match_backward(&lines, "nope", 0), None);
+    }
+
+    #[test]
+    fn b64_known_vectors() {
+        assert_eq!(b64(b""), "");
+        assert_eq!(b64(b"f"), "Zg==");
+        assert_eq!(b64(b"fo"), "Zm8=");
+        assert_eq!(b64(b"foo"), "Zm9v");
+        assert_eq!(b64(b"foob"), "Zm9vYg==");
+        assert_eq!(b64(b"https://example.com"), "aHR0cHM6Ly9leGFtcGxlLmNvbQ==");
+    }
+
+    #[test]
+    fn bookmark_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("web2md_bm_test_{}", std::process::id()));
+        let path = dir.join("bookmarks.txt");
+        let _ = std::fs::remove_file(&path);
+        assert!(load_bookmarks(&path).is_empty());
+        add_bookmark(&path, "https://a.com").unwrap();
+        add_bookmark(&path, "https://b.com").unwrap();
+        assert_eq!(load_bookmarks(&path), vec!["https://a.com", "https://b.com"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -12,7 +12,6 @@ pub(crate) struct AnsiRenderer {
     current_row: Vec<String>,
     current_cell: String,
     col_alignments: Vec<pulldown_cmark::Alignment>,
-    _in_header: bool,
 }
 
 impl AnsiRenderer {
@@ -28,7 +27,6 @@ impl AnsiRenderer {
             current_row: Vec::new(),
             current_cell: String::new(),
             col_alignments: Vec::new(),
-            _in_header: false,
         }
     }
 
@@ -75,7 +73,6 @@ impl AnsiRenderer {
                         self.in_table = true;
                         self.col_alignments = aligns.to_vec();
                     }
-                    Tag::TableHead => self._in_header = true,
                     Tag::TableRow => self.current_row = Vec::new(),
                     Tag::TableCell => self.current_cell.clear(),
                     _ => {}
@@ -117,7 +114,6 @@ impl AnsiRenderer {
                         self.table_rows.push(std::mem::take(&mut self.current_row));
                     }
                     TagEnd::TableHead => {
-                        self._in_header = false;
                         if !self.current_row.is_empty() {
                             self.table_rows.push(std::mem::take(&mut self.current_row));
                         }
@@ -417,4 +413,109 @@ pub(crate) fn fix_raw_links(
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fix_raw_links_renders_multiline_links() {
+        let input = "[\nExplore IBM\n~90%\nfaster\n](https://ibm.com)";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, false, &mut counter, &mut links);
+        assert!(output.contains("Explore IBM"));
+        assert!(output.contains("~90%"));
+        assert!(output.contains("faster"));
+        assert!(!output.contains("]("));
+        assert!(!output.contains("https://ibm.com"));
+        assert!(output.contains("\x1b[4;36m"));
+    }
+
+    #[test]
+    fn fix_raw_links_numbers_raw_links() {
+        let input = "[\nExplore IBM\n](https://ibm.com)";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, true, &mut counter, &mut links);
+        assert_eq!(counter, 1);
+        assert_eq!(links, vec!["https://ibm.com"]);
+        assert!(output.contains("\x1b[33m[1]\x1b[0m"));
+        assert!(output.contains("\x1b[4;36m"));
+    }
+
+    #[test]
+    fn fix_raw_links_skips_plain_brackets() {
+        let input = "Some [text] without a link";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, false, &mut counter, &mut links);
+        assert_eq!(output, "Some [text] without a link");
+    }
+
+    #[test]
+    fn fix_raw_links_labels_empty_url_links() {
+        let input = "[](https://example.com/case-studies/wimbledon)";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, true, &mut counter, &mut links);
+        assert_eq!(counter, 1);
+        assert_eq!(links, vec!["https://example.com/case-studies/wimbledon"]);
+        assert!(output.contains("wimbledon"));
+    }
+
+    #[test]
+    fn fix_raw_links_skips_empty_href() {
+        let input = "[not a url]()";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, false, &mut counter, &mut links);
+        assert_eq!(output, "[not a url]()");
+    }
+
+    #[test]
+    fn fix_raw_links_skips_images() {
+        let input = "![alt text](https://example.com/img.png)";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, true, &mut counter, &mut links);
+        assert_eq!(counter, 0);
+        assert_eq!(output, "![alt text](https://example.com/img.png)");
+    }
+
+    #[test]
+    fn fix_raw_links_skips_digit_only_text() {
+        let input = "[1](https://example.com) [42](https://ibm.com)";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, true, &mut counter, &mut links);
+        assert_eq!(counter, 0);
+        assert_eq!(output, "[1](https://example.com) [42](https://ibm.com)");
+    }
+
+    #[test]
+    fn fix_raw_links_skips_non_url() {
+        let input = "[note](see below)";
+        let mut counter = 0;
+        let mut links = Vec::new();
+        let output = fix_raw_links(input, true, &mut counter, &mut links);
+        assert_eq!(counter, 0);
+        assert_eq!(output, "[note](see below)");
+    }
+
+    #[test]
+    fn render_markdown_ansi_table() {
+        let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
+        let (output, _) = render_markdown_ansi(md, false);
+        assert!(output.contains("┌"), "missing top-left corner");
+        assert!(output.contains("┐"), "missing top-right corner");
+        assert!(output.contains("└"), "missing bottom-left corner");
+        assert!(output.contains("┘"), "missing bottom-right corner");
+        assert!(output.contains("│"), "missing vertical bar");
+        assert!(output.contains("Name"), "missing Name header");
+        assert!(output.contains("Age"), "missing Age header");
+        assert!(output.contains("Alice"), "missing Alice");
+        assert!(output.contains("Bob"), "missing Bob");
+    }
 }

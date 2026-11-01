@@ -8,6 +8,14 @@ fn simple_paragraph() {
 }
 
 #[test]
+fn sup_sub_converted_to_markdown() {
+    let html = "<p>H<sub>2</sub>O and E=mc<sup>2</sup></p>";
+    let md = PageToMarkdown::convert(html, false, false, false, &[]).unwrap();
+    assert!(md.contains("~(2)"), "sub should be ~(2), got: {md}");
+    assert!(md.contains("^(2)"), "sup should be ^(2), got: {md}");
+}
+
+#[test]
 fn convert_progressive_emits_blocks() {
     let html = "<body><div><h1>Title</h1><p>One</p><p>Two</p></div></body>";
     let mut blocks = Vec::new();
