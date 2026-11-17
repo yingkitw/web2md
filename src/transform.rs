@@ -581,9 +581,104 @@ pub fn to_atom_feed(
     out
 }
 
+/// One RSS feed entry — same shape as [`AtomEntry`] (alias for `--format rss`).
+pub type RssEntry = AtomEntry;
+
+/// Emit an RSS 2.0 feed document from crawled (or single-page) entries.
+///
+/// Dates are echoed verbatim from page metadata (like the Atom emitter), not
+/// reformatted to RFC 2822 — no date parsing dependency.
+pub fn to_rss_feed(feed_url: &str, title: Option<&str>, entries: &[RssEntry]) -> String {
+    let title = title
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(feed_url);
+    let mut out = String::from(r#"<?xml version="1.0" encoding="utf-8"?>"#);
+    out.push('\n');
+    out.push_str(r#"<rss version="2.0">"#);
+    out.push('\n');
+    out.push_str("  <channel>\n");
+    out.push_str(&format!("    <title>{}</title>\n", xml_escape(title)));
+    out.push_str(&format!("    <link>{}</link>\n", xml_escape(feed_url)));
+    for entry in entries.iter().take(500) {
+        let entry_title = {
+            let t = entry.title.trim();
+            if t.is_empty() {
+                entry.url.as_str()
+            } else {
+                t
+            }
+        };
+        out.push_str("    <item>\n");
+        out.push_str(&format!(
+            "      <title>{}</title>\n",
+            xml_escape(entry_title)
+        ));
+        out.push_str(&format!("      <link>{}</link>\n", xml_escape(&entry.url)));
+        out.push_str(&format!("      <guid>{}</guid>\n", xml_escape(&entry.url)));
+        if let Some(published) = entry
+            .updated
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            out.push_str(&format!(
+                "      <pubDate>{}</pubDate>\n",
+                xml_escape(published)
+            ));
+        }
+        if let Some(summary) = entry
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            out.push_str(&format!(
+                "      <description>{}</description>\n",
+                xml_escape(summary)
+            ));
+        }
+        out.push_str("    </item>\n");
+    }
+    out.push_str("  </channel>\n");
+    out.push_str("</rss>\n");
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_rss_feed_emits_items() {
+        let entries = vec![
+            RssEntry {
+                url: "https://example.com/a".into(),
+                title: "Alpha & Co".into(),
+                summary: Some("First <post>".into()),
+                updated: Some("2026-01-01T00:00:00Z".into()),
+            },
+            RssEntry {
+                url: "https://example.com/b".into(),
+                title: "  ".into(),
+                summary: None,
+                updated: None,
+            },
+        ];
+        let out = to_rss_feed("https://example.com/", Some("Example Feed"), &entries);
+        assert!(out.starts_with("<?xml"));
+        assert!(out.contains(r#"<rss version="2.0">"#));
+        assert!(out.contains("<channel>"));
+        assert!(out.contains("<title>Example Feed</title>"));
+        assert!(out.contains("<link>https://example.com/</link>"));
+        assert!(out.contains("<title>Alpha &amp; Co</title>"));
+        assert!(out.contains("<pubDate>2026-01-01T00:00:00Z</pubDate>"));
+        assert!(out.contains("<description>First &lt;post&gt;</description>"));
+        assert_eq!(out.matches("<pubDate>").count(), 1);
+        // Blank title falls back to the URL.
+        assert!(out.contains("<title>https://example.com/b</title>"));
+        assert!(out.ends_with("</rss>\n"));
+    }
 
     #[test]
     fn to_llms_txt_renders_title_desc_and_links() {

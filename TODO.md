@@ -150,10 +150,104 @@
 - [x] Headless `--scroll` for lazy-load content
 - [x] `--type course` / `--type software` JSON-LD extractors
 - [x] `--format atom` (single-page + crawl/sitemap feed)
+- [x] `--format rss` — RSS 2.0 feed alongside Atom (single-page + crawl/sitemap, writes `rss.xml`)
+- [x] `--type organization` / `--type person` — JSON-LD entity cards (Organization + subtypes, Person)
+- [x] `--wait-ms` headless CLI flag — expose existing `HeadlessOptions.wait_ms` (Firecrawl wait delay)
+- [x] Crawl-mode fixture tests — mockito site + tempdir asserts over Atom/RSS/llms.txt aggregate surface (CI-safe)
+- [x] `map --search QUERY` — case-insensitive URL/link-text filter (Firecrawl `/map?search=` parity)
+- [x] Image dedup across `<img>` / inline `style` / `<style>` blocks — verified + regression tests (Trafilatura #946)
+- [x] Inline-code escaping in link text — verified + regression test (Trafilatura 2.3.1 #954)
+- [x] GitHub boilerplate: `hidden`-attribute strip, `flash` keyword, skip-link noise rule (#79)
+- [x] `srcset` extraction in `--format images` — `<img srcset>` + `<picture><source srcset>` as own entries (#80)
+- [x] `license` on `PageMetadata` — `rel="license"` link/anchor href, JSON + YAML frontmatter (#82)
+- [x] MathML TeX annotation → `$$…$$` display math in Markdown conversion (#81)
+- [x] `map --limit` + `map --sitemap` (Firecrawl `/map` parity) + sitemap-URL port bug fix (Sitemap/crawl/map shared)
+- [x] CommonMark escaping fixes: `1.`/`123)` line-start markers escaped, `>` single-escaped (#85)
 
 ## In Progress
 
-_None — v15 cycle complete._
+_None — v16 cycle complete._
+
+### Scorecard — 2026-10, v16 cycle
+
+| Dimension | Score | Evidence |
+|-----------|-------|----------|
+| Correctness & coverage | 4 | 428 tests green; fixture regression cases for converter/extractors; parse tests for CLI gating |
+| Extraction fidelity | 4 | Extractors verified against live fixtures (org/person/rss end-to-end smokes) |
+| Conversion quality | 4 | RSS/Atom feeds + entity cards render clean Markdown |
+| CLI ergonomics | 4 | `--format rss` and `--wait-ms` gated/help-documented; SPEC synced |
+| Maintainability | 4 | 0 clippy warnings; extractors follow `structured.rs` conventions |
+| Docs alignment | 5 | README/SPEC/TODO/MEMORY updated in same change set |
+| Footprint | 5 | No new dependencies; RSS emitter is std-only string building |
+| Performance | 4 | Crawl-mode RSS reuses the metadata-only path (no conversion) |
+
+Weakest: coverage of the streaming/crawl surface → next cycle, prefer fixture tests over live smokes. → ✅ Done (crawl fixture tests, #75)
+
+### Scorecard — v17 cycle
+
+| Dimension | Score | Evidence |
+|-----------|-------|----------|
+| Correctness & coverage | 5 | 436 tests; parity probes first, regression tests lock in verified behavior (dedup, inline-code, hidden-attr, flash, skip links) |
+| Extraction fidelity | 4 | GitHub release pages now clean end-to-end; `srcset` gap found while probing #77 |
+| Conversion quality | 4 | No regressions; noise rules extended deterministically |
+| CLI ergonomics | 4 | `map --search` parity; help text stays lean |
+| Maintainability | 4 | 0 clippy warnings; `filter_map_links` extracted as pure helper |
+| Docs alignment | 5 | README/SPEC/TODO/MEMORY updated in the same change set |
+| Footprint | 5 | No new dependencies |
+| Performance | 4 | Unchanged; dedup shares one pass |
+
+Weakest: image extraction completeness (`srcset`/`<picture>` sources missing) → #80. → ✅ Done (#80)
+
+### Scorecard — v18 cycle
+
+| Dimension | Score | Evidence |
+|-----------|-------|----------|
+| Correctness & coverage | 5 | 443 tests; fixture tests for srcset/picture, license link+anchor, TeX vs non-TeX annotation; live smokes green |
+| Extraction fidelity | 5 | GitHub release pages clean end-to-end; `srcset`/`<picture>` closed the image-inventory gap |
+| Conversion quality | 4 | `$$…$$` math added; no regressions in fixture outputs |
+| CLI ergonomics | 4 | `license` in JSON + frontmatter; unchanged command surface |
+| Maintainability | 4 | 0 clippy warnings; guarded match arm documented |
+| Docs alignment | 5 | SPEC/README/TODO/MEMORY updated in the same change set |
+| Footprint | 5 | No new dependencies |
+| Performance | 4 | One extra linear `<source>` scan pass only |
+
+Weakest: `map` subcommand lacks Firecrawl `/map` `limit`/`sitemap` params; CommonMark escaping edge cases unprobed → #83–#85.
+
+### Brainstorming v19 — competitive intelligence (dogfooded research)
+
+Researched via web2md itself: Firecrawl `/map` docs (limit, sitemap params confirmed). Jina docs unreachable this cycle (connection closed) — surface fully mined in v5.
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 83 | `map --limit N` — cap discovered URLs | Firecrawl `/map?limit=` | ✅ Done |
+| 84 | `map --sitemap` — merge sitemap.xml URLs with page-discovered links (deduped) | Firecrawl `/map` `sitemap="include"` | ✅ Done |
+| 85 | CommonMark escaping quality pass — fixture-probe `1.` list starts, leading `-`/`>` in text, backslash-before-punctuation | Trafilatura 2.3.0 CommonMark escaping (#915/#924) | ✅ Done (ordered-list escape + `>` single-escape fixes) |
+
+### Brainstorming v18 — competitive intelligence (dogfooded research)
+
+Researched via web2md itself: Trafilatura 2.3.0 release notes (GitHub). Firecrawl v2.11 and Jina fully mined in v3/v5.
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 80 | `srcset` extraction in `--format images` (`<img srcset>` + `<picture><source srcset>`) | Trafilatura #904 image-preservation spirit; Jina full-asset inventory | ✅ Done |
+| 81 | LaTeX math in Markdown — `<annotation encoding="application/x-tex">` → `$$…$$` | Trafilatura 2.3.0 LaTeX math | ✅ Done |
+| 82 | License metadata — `rel="license"` links on `PageMetadata` | Trafilatura 2.3.0 license links | ✅ Done |
+
+**Skipped**: forms/infinite-scroll extraction (browser/UX semantics, not Markdown content); link-farm rework (already covered by link-heavy boilerplate stripping).
+
+### Brainstorming v17 — competitive intelligence (dogfooded research)
+
+Researched via web2md itself: Trafilatura 2.3.1 releases (GitHub), Firecrawl v2.11 (already mined in v3), Jina reader (no releases).
+
+| # | Feature | Beats | Status |
+|---|---|---|---|
+| 75 | Crawl-mode fixture tests (Atom/RSS/llms.txt aggregate surface, mockito + tempdir) | CI-safe coverage of our own weakest scorecard dimension | ✅ Done |
+| 76 | `map --search QUERY` — filter discovered URLs by keyword/substring | Firecrawl `/map?search=` | ✅ Done |
+| 77 | Image dedup — same `src` emitted once across `<img>` + CSS background sources | Trafilatura 2.3 #946 (repeat image paragraphs) | ✅ Verified (dedup already correct) + regression tests |
+| 78 | Inline-code escaping precision — Markdown chars inside `<code>` in link text left unescaped | Trafilatura 2.3.1 #954 | ✅ Verified (already correct) + regression test |
+| 79 | GitHub-style boilerplate keywords (skip-to-content, dismiss-alert chrome leaked on release pages) | Extraction fidelity on JS-heavy portals | ✅ Done (`hidden`-attr rule + `flash` keyword + skip-link regex) |
+
+**Skipped**: Jina has no GitHub releases to mine; Firecrawl v2.11 gaps fully mined in v3.
 
 ## Brainstorming
 
@@ -389,6 +483,6 @@ Deterministic gaps still open after v6 (no LLM / no SaaS):
 
 | # | Feature | Beats | Status |
 |---|---|---|---|
-| 72 | `--format rss` (RSS 2.0) alongside Atom | Trafilatura feed export | 🔲 Planned |
-| 73 | JSON-LD `Organization` / `Person` profile extractors | Schema.org entity cards | 🔲 Planned |
-| 74 | Headless `--wait-ms` CLI flag (expose existing HeadlessOptions.wait_ms) | Firecrawl wait delay | 🔲 Planned |
+| 72 | `--format rss` (RSS 2.0) alongside Atom | Trafilatura feed export | ✅ Done |
+| 73 | JSON-LD `Organization` / `Person` profile extractors | Schema.org entity cards | ✅ Done |
+| 74 | Headless `--wait-ms` CLI flag (expose existing HeadlessOptions.wait_ms) | Firecrawl wait delay | ✅ Done |

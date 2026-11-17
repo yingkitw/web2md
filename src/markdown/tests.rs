@@ -878,6 +878,43 @@ fn strip_boilerplate_preserves_content_divs() {
     assert!(result.contains("Important text"));
 }
 
+/// GitHub-style flash banners (error/status chrome) are boilerplate (#79).
+#[test]
+fn strip_boilerplate_removes_flash_banner() {
+    let html = r#"<div class="flash flash-error"><button class="flash-close">Dismiss</button>You signed in with another tab or window. Reload to refresh your session.</div><p>Real content</p>"#;
+    let result = PageToMarkdown::strip_boilerplate_elements(html);
+    assert!(!result.contains("You signed in"));
+    assert!(result.contains("Real content"));
+}
+
+/// The HTML `hidden` attribute marks never-rendered chrome (#79) — not `aria-hidden`.
+#[test]
+fn strip_boilerplate_removes_hidden_elements() {
+    let html = r#"<span class="js-stale-session-flash-signed-in" hidden>You signed in with another tab or window. Reload to refresh your session.</span><p>Real content</p>"#;
+    let result = PageToMarkdown::strip_boilerplate_elements(html);
+    assert!(!result.contains("You signed in"));
+    assert!(result.contains("Real content"));
+
+    // aria-hidden must NOT trigger the hidden-attribute rule.
+    let aria = r#"<div aria-hidden="true"><p>Aria visible content remains</p></div>"#;
+    assert!(PageToMarkdown::strip_boilerplate_elements(aria)
+        .contains("Aria visible content remains"));
+}
+
+/// GitHub-style skip links are accessibility chrome, not content (#79).
+#[test]
+fn clean_markdown_noise_removes_skip_links() {
+    let md = "[Skip to content](#start-of-content)\n\n# Title\n\nBody.";
+    let result = PageToMarkdown::clean_markdown_noise(md);
+    assert!(!result.contains("Skip to content"));
+    assert!(result.contains("# Title"));
+
+    let md2 = "[SKIP TO MAIN CONTENT](#main)\n\nBody here.";
+    let result2 = PageToMarkdown::clean_markdown_noise(md2);
+    assert!(!result2.to_lowercase().contains("skip to"));
+    assert!(result2.contains("Body here."));
+}
+
 #[test]
 fn strip_boilerplate_handles_nested_elements() {
     let html = r#"<div class="cookie-consent"><div><p>Cookie text</p></div></div><p>Real content</p>"#;

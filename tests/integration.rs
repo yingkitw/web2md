@@ -6,8 +6,8 @@ use web2md::{
     build_index, corpus_results_to_markdown, extract_audios, extract_event, extract_faq,
     extract_job, extract_metadata, extract_page_metadata, extract_recipe, extract_summary,
     extract_topic, index_path_for, normalize_crawl_url, parse_sitemap_urls, query_index,
-    same_origin_links, truncate_by_tokens, Browser, BrowserOptions, McpRequest, McpServer,
-    PageToMarkdown,
+    same_origin_links, truncate_by_tokens, to_rss_feed, Browser, BrowserOptions, McpRequest,
+    McpServer, PageToMarkdown, RssEntry,
 };
 
 #[tokio::test]
@@ -328,6 +328,44 @@ async fn json_output_format_emits_structured_json() {
     assert!(json_str.contains("\"language\":\"en\""));
     assert!(json_str.contains("Testing"));
     assert!(json_str.contains("Body content for JSON"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn rss_feed_emits_channel_and_item() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", "/rss")
+        .with_status(200)
+        .with_header("content-type", "text/html")
+        .with_body(
+            r#"<html><head><title>RSS Page</title></head><body><article><h1>RSS Page</h1>
+            <p>Body for the RSS feed test.</p></article></body></html>"#,
+        )
+        .create_async()
+        .await;
+
+    let browser = Browser::new(BrowserOptions::default()).unwrap();
+    let url = format!("{}/rss", server.url());
+    let html = browser.fetch(&url).await.unwrap();
+    let meta = extract_page_metadata(&html, "");
+    let entry = RssEntry {
+        url: url.clone(),
+        title: meta.title.clone().unwrap_or_else(|| url.clone()),
+        summary: meta.description.clone(),
+        updated: meta.published_date.clone(),
+    };
+    let feed = to_rss_feed(
+        &url,
+        meta.site_name.as_deref().or(meta.title.as_deref()),
+        &[entry],
+    );
+
+    assert!(feed.contains(r#"<rss version="2.0">"#));
+    assert!(feed.contains("<channel>"));
+    assert!(feed.contains("<title>RSS Page</title>"));
+    assert!(feed.contains(&format!("<link>{}</link>", url)));
+    assert!(feed.contains("<guid>"));
     mock.assert_async().await;
 }
 

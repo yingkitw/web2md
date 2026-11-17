@@ -7,7 +7,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::time::Duration;
 use url::Url;
-use web2md::{Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown, extract_page_metadata};
+use web2md::{
+    Browser, BrowserOptions, McpRequest, McpServer, PageToMarkdown, extract_page_metadata,
+    parse_sitemap_urls,
+};
 
 pub(crate) mod batch;
 pub(crate) mod fetch;
@@ -241,7 +244,10 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             let browser = Browser::new(options)?;
 
             let parsed = Url::parse(&url).context("Invalid URL")?;
-            let sitemap_url = format!("{}://{}/sitemap.xml", parsed.scheme(), parsed.host_str().unwrap_or(""));
+            let sitemap_url = format!(
+                "{}/sitemap.xml",
+                parsed.origin().unicode_serialization()
+            );
 
             match browser.fetch(&sitemap_url).await {
                 Ok(xml) => {
@@ -264,6 +270,9 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
             cookie,
             header,
             same_origin,
+            search,
+            limit,
+            sitemap,
             json,
         }) => {
             let options = base_options(timeout, cookie, header);
@@ -284,7 +293,32 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
                     });
                 }
             }
-            let urls: Vec<&str> = links.iter().map(|l| l.url.as_str()).collect();
+            if let Some(q) = &search {
+                filter_map_links(&mut links, q);
+            }
+            if sitemap {
+                let base = Url::parse(&url).ok();
+                if let Some(base) = &base {
+                    let sitemap_url = format!(
+                        "{}/sitemap.xml",
+                        base.origin().unicode_serialization()
+                    );
+                    if let Ok(xml) = browser.fetch(&sitemap_url).await {
+                        for u in parse_sitemap_urls(&xml) {
+                            if !links.iter().any(|l| l.url == u) {
+                                links.push(web2md::LinkEntry {
+                                    url: u,
+                                    text: String::new(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            let mut urls: Vec<&str> = links.iter().map(|l| l.url.as_str()).collect();
+            if let Some(max) = limit {
+                urls.truncate(max);
+            }
             if json {
                 println!("{}", serde_json::to_string_pretty(&urls)?);
             } else {
@@ -441,6 +475,13 @@ pub(crate) fn domain_matches_any(url: &str, domains: &[String]) -> bool {
     })
 }
 
+/// Filter map links by a case-insensitive substring over URL or link text
+/// (≈ Firecrawl /map?search=).
+fn filter_map_links(links: &mut Vec<web2md::LinkEntry>, query: &str) {
+    let q = query.to_lowercase();
+    links.retain(|l| l.url.to_lowercase().contains(&q) || l.text.to_lowercase().contains(&q));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -456,6 +497,29 @@ mod tests {
     fn domain_matches_strips_www_prefix() {
         assert!(domain_matches_any("https://www.rust-lang.org", &["rust-lang.org".to_string()]));
         assert!(domain_matches_any("https://rust-lang.org", &["www.rust-lang.org".to_string()]));
+    }
+
+    #[test]
+    fn map_search_filters_url_or_text_case_insensitively() {
+        use web2md::LinkEntry;
+        let mut links = vec![
+            LinkEntry {
+                url: "https://example.com/docs/rust-guide".into(),
+                text: "Guide".into(),
+            },
+            LinkEntry {
+                url: "https://example.com/blog".into(),
+                text: "Rust 101".into(),
+            },
+            LinkEntry {
+                url: "https://example.com/about".into(),
+                text: "About".into(),
+            },
+        ];
+        filter_map_links(&mut links, "RUST");
+        assert_eq!(links.len(), 2);
+        filter_map_links(&mut links, "about");
+        assert!(links.is_empty());
     }
 }
 

@@ -1146,6 +1146,175 @@ pub fn extract_software_application(html: &str) -> Result<Option<String>, Struct
     Ok(Some(md))
 }
 
+/// Render an Organization JSON-LD block as Markdown (entity card).
+///
+/// Matches `Organization` plus common subtypes (`Corporation`, `NGO`,
+/// `EducationalOrganization`); ambiguous pages (multiple blocks) error.
+pub fn extract_organization(html: &str) -> Result<Option<String>, StructuredError> {
+    const ORG_TYPES: [&str; 4] = ["Organization", "Corporation", "NGO", "EducationalOrganization"];
+    let Some(org_type) = ORG_TYPES
+        .iter()
+        .find(|t| !find_blocks_of_type(html, t).is_empty())
+        .copied()
+    else {
+        return Ok(None);
+    };
+    let blocks = find_blocks_of_type(html, org_type);
+    if blocks.len() > 1 {
+        return Err(StructuredError::Ambiguous(format!(
+            "found {} {} blocks",
+            blocks.len(),
+            org_type
+        )));
+    }
+    let org = &blocks[0];
+    let name =
+        first_nonempty_string(org, &["name"]).unwrap_or_else(|| "Organization".to_string());
+    let description = first_nonempty_string(org, &["description"]).unwrap_or_default();
+    let url = first_nonempty_string(org, &["url"]).unwrap_or_default();
+    let logo = org
+        .get("logo")
+        .and_then(|l| {
+            l.as_str()
+                .map(str::to_string)
+                .or_else(|| l.get("url").and_then(|u| u.as_str()).map(str::to_string))
+        })
+        .unwrap_or_default();
+    let email = first_nonempty_string(org, &["email"]).unwrap_or_default();
+    let phone = first_nonempty_string(org, &["telephone"]).unwrap_or_default();
+    let founded = first_nonempty_string(org, &["foundingDate"]).unwrap_or_default();
+    let address = build_event_addr(org.get("address"));
+    let employees = org
+        .get("numberOfEmployees")
+        .and_then(|v| v.as_u64().map(|n| n.to_string()).or_else(|| quant_item_text(v)))
+        .unwrap_or_default();
+    let same_as = extract_named_list(org, "sameAs");
+
+    let mut fm: Vec<(&str, String)> =
+        vec![("title", name.clone()), ("type", "organization".into())];
+    if !url.is_empty() {
+        fm.push(("url", url.clone()));
+    }
+    if !logo.is_empty() {
+        fm.push(("logo", logo.clone()));
+    }
+    if !email.is_empty() {
+        fm.push(("email", email.clone()));
+    }
+    if !founded.is_empty() {
+        fm.push(("founded", founded.clone()));
+    }
+
+    let mut md = frontmatter_block(&fm);
+    md.push_str(&format!("# {}\n\n", name));
+    if !url.is_empty() {
+        md.push_str(&format!("- **URL:** <{}>\n", url));
+    }
+    if !logo.is_empty() {
+        md.push_str(&format!("- **Logo:** <{}>\n", logo));
+    }
+    if !email.is_empty() {
+        md.push_str(&format!("- **Email:** {}\n", email));
+    }
+    if !phone.is_empty() {
+        md.push_str(&format!("- **Phone:** {}\n", phone));
+    }
+    if !address.is_empty() {
+        md.push_str(&format!("- **Address:** {}\n", address));
+    }
+    if !founded.is_empty() {
+        md.push_str(&format!("- **Founded:** {}\n", founded));
+    }
+    if !employees.is_empty() {
+        md.push_str(&format!("- **Employees:** {}\n", employees));
+    }
+    if !same_as.is_empty() {
+        md.push_str(&format!(
+            "- **Also at:** {}\n",
+            same_as
+                .iter()
+                .map(|u| format!("<{}>", u))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !description.is_empty() {
+        md.push('\n');
+        md.push_str(&strip_simple_html(&description));
+        md.push('\n');
+    }
+    Ok(Some(md))
+}
+
+/// Render a Person JSON-LD block as Markdown (entity card).
+pub fn extract_person(html: &str) -> Result<Option<String>, StructuredError> {
+    let blocks = find_blocks_of_type(html, "Person");
+    if blocks.is_empty() {
+        return Ok(None);
+    }
+    if blocks.len() > 1 {
+        return Err(StructuredError::Ambiguous(format!(
+            "found {} Person blocks",
+            blocks.len()
+        )));
+    }
+    let person = &blocks[0];
+    let name = first_nonempty_string(person, &["name"]).unwrap_or_else(|| "Person".to_string());
+    let description = first_nonempty_string(person, &["description"]).unwrap_or_default();
+    let url = first_nonempty_string(person, &["url"]).unwrap_or_default();
+    let job_title = first_nonempty_string(person, &["jobTitle"]).unwrap_or_default();
+    let works_for = first_nonempty_string(person, &["worksFor", "name"])
+        .or_else(|| first_nonempty_string(person, &["worksFor"]))
+        .unwrap_or_default();
+    let email = first_nonempty_string(person, &["email"]).unwrap_or_default();
+    let same_as = extract_named_list(person, "sameAs");
+
+    let mut fm: Vec<(&str, String)> = vec![("title", name.clone()), ("type", "person".into())];
+    if !job_title.is_empty() {
+        fm.push(("job_title", job_title.clone()));
+    }
+    if !works_for.is_empty() {
+        fm.push(("works_for", works_for.clone()));
+    }
+    if !url.is_empty() {
+        fm.push(("url", url.clone()));
+    }
+    if !email.is_empty() {
+        fm.push(("email", email.clone()));
+    }
+
+    let mut md = frontmatter_block(&fm);
+    md.push_str(&format!("# {}\n\n", name));
+    if !job_title.is_empty() {
+        md.push_str(&format!("- **Job title:** {}\n", job_title));
+    }
+    if !works_for.is_empty() {
+        md.push_str(&format!("- **Works for:** {}\n", works_for));
+    }
+    if !url.is_empty() {
+        md.push_str(&format!("- **URL:** <{}>\n", url));
+    }
+    if !email.is_empty() {
+        md.push_str(&format!("- **Email:** {}\n", email));
+    }
+    if !same_as.is_empty() {
+        md.push_str(&format!(
+            "- **Also at:** {}\n",
+            same_as
+                .iter()
+                .map(|u| format!("<{}>", u))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !description.is_empty() {
+        md.push('\n');
+        md.push_str(&strip_simple_html(&description));
+        md.push('\n');
+    }
+    Ok(Some(md))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1188,6 +1357,76 @@ mod tests {
         assert!(md.contains("## Instructions"));
         assert!(md.contains("1. Mix dry ingredients."));
         assert!(md.contains("3. Cook on a hot griddle."));
+    }
+
+    #[test]
+    fn organization_extracts_entity_card() {
+        let html = r#"<html><head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Corporation",
+          "name": "Acme Corp &amp; Sons",
+          "description": "<p>We make anvil launchers.</p>",
+          "url": "https://acme.example",
+          "logo": {"@type": "ImageObject", "url": "https://acme.example/logo.png"},
+          "email": "info@acme.example",
+          "telephone": "+1-555-0100",
+          "foundingDate": "1962-01-01",
+          "numberOfEmployees": 1200,
+          "address": {"@type": "PostalAddress", "streetAddress": "1 Anvil Way", "addressLocality": "Desert"},
+          "sameAs": ["https://mastodon.social/@acme", "https://linkedin.com/company/acme"]
+        }
+        </script>
+        </head></html>"#;
+        let md = extract_organization(html).unwrap().expect("md");
+        assert!(md.contains("title: Acme Corp &amp; Sons"));
+        assert!(md.contains("type: organization"));
+        assert!(md.contains(r#"logo: "https://acme.example/logo.png""#));
+        assert!(md.contains("- **Founded:** 1962-01-01"));
+        assert!(md.contains("- **Employees:** 1200"));
+        assert!(md.contains("- **Address:** 1 Anvil Way, Desert"));
+        assert!(md.contains("<https://mastodon.social/@acme>"));
+        assert!(md.contains("We make anvil launchers."));
+    }
+
+    #[test]
+    fn organization_missing_returns_none() {
+        let html = "<html><body><p>No structured data here.</p></body></html>";
+        assert!(matches!(extract_organization(html), Ok(None)));
+    }
+
+    #[test]
+    fn person_extracts_entity_card() {
+        let html = r#"<html><head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "Person",
+          "name": "Ada Lovelace",
+          "jobTitle": "Chief Anvil Officer",
+          "worksFor": {"@type": "Organization", "name": "Acme Corp"},
+          "url": "https://acme.example/ada",
+          "email": "ada@acme.example",
+          "sameAs": "https://example.com/@ada"
+        }
+        </script>
+        </head></html>"#;
+        let md = extract_person(html).unwrap().expect("md");
+        assert!(md.contains("title: Ada Lovelace"));
+        assert!(md.contains("type: person"));
+        assert!(md.contains("job_title: Chief Anvil Officer"));
+        assert!(md.contains("works_for: Acme Corp"));
+        assert!(md.contains("- **Job title:** Chief Anvil Officer"));
+        assert!(md.contains("- **Works for:** Acme Corp"));
+        assert!(md.contains("- **Email:** ada@acme.example"));
+        assert!(md.contains("<https://example.com/@ada>"));
+    }
+
+    #[test]
+    fn person_missing_returns_none() {
+        let html = "<html><body><p>No structured data here.</p></body></html>";
+        assert!(matches!(extract_person(html), Ok(None)));
     }
 
     #[test]

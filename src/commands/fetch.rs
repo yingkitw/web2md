@@ -7,10 +7,12 @@ use std::collections::HashSet;
 use url::Url;
 use web2md::{
     extract_course, extract_event, extract_faq, extract_howto, extract_job, extract_metadata,
-    extract_page_metadata, extract_qapage, extract_recipe, extract_software_application,
-    extract_speakable, extract_summary, extract_topic, language_matches, normalize_crawl_url,
-    path_allowed, remove_base64_images, to_atom_feed, to_llms_txt_site, truncate_by_tokens,
-    truncate_with_marker, AtomEntry, Browser, ConvertOptions, LlmsPageEntry, PageToMarkdown,
+    extract_organization, extract_page_metadata, extract_person, extract_qapage,
+    extract_recipe, extract_software_application, extract_speakable, extract_summary,
+    extract_topic, language_matches, normalize_crawl_url,
+    path_allowed, remove_base64_images, to_atom_feed, to_llms_txt_site, to_rss_feed,
+    truncate_by_tokens, truncate_with_marker, AtomEntry, Browser, ConvertOptions, LlmsPageEntry,
+    PageToMarkdown, RssEntry,
 };
 
 use crate::ansi::render_markdown_ansi;
@@ -37,13 +39,14 @@ if args.sitemap_only && args.depth == 0 {
 if args.depth > 0 {
     if !matches!(
         args.format,
-        OutputFormat::Markdown | OutputFormat::LlmsTxt | OutputFormat::Atom
+        OutputFormat::Markdown | OutputFormat::LlmsTxt | OutputFormat::Atom | OutputFormat::Rss
     ) {
-        anyhow::bail!("--depth requires markdown, llms-txt, or atom output format");
+        anyhow::bail!("--depth requires markdown, llms-txt, atom, or rss output format");
     }
     let crawl_mode = match args.format {
         OutputFormat::LlmsTxt => CrawlMode::LlmsTxt,
         OutputFormat::Atom => CrawlMode::Atom,
+        OutputFormat::Rss => CrawlMode::Rss,
         _ => CrawlMode::Markdown,
     };
     crawl_fetch(
@@ -98,7 +101,7 @@ if args.depth > 0 {
         browser.prepare_html(&html, &args.url).await?
     } else if args.headless {
         let opts = web2md::HeadlessOptions {
-            wait_ms: 0,
+            wait_ms: args.wait_ms.unwrap_or(0),
             chrome_path: args.chrome_path.clone(),
             wait_for_selector: args.wait_for_selector.clone(),
             scroll: args.scroll.unwrap_or(0),
@@ -253,6 +256,21 @@ if args.depth > 0 {
             );
             (out, None)
         }
+        OutputFormat::Rss => {
+            let meta = web2md::extract_metadata(&html);
+            let entry = RssEntry {
+                url: args.url.clone(),
+                title: meta.title.clone().unwrap_or_else(|| args.url.clone()),
+                summary: meta.description.clone(),
+                updated: meta.published_date.clone(),
+            };
+            let out = to_rss_feed(
+                &args.url,
+                meta.site_name.as_deref().or(meta.title.as_deref()),
+                &[entry],
+            );
+            (out, None)
+        }
         OutputFormat::Html => {
             if args.lang.is_some() {
                 anyhow::bail!("--lang requires a converted output format (not html)");
@@ -343,9 +361,25 @@ if args.depth > 0 {
                         }
                     }
                 }
+                Some("organization") => match extract_organization(&html) {
+                    Ok(Some(md)) => Some(md),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!("--type organization: {}, falling back", e);
+                        None
+                    }
+                },
+                Some("person") => match extract_person(&html) {
+                    Ok(Some(md)) => Some(md),
+                    Ok(None) => None,
+                    Err(e) => {
+                        eprintln!("--type person: {}, falling back", e);
+                        None
+                    }
+                }
                 Some(other) => {
                     anyhow::bail!(
-                        "unsupported --type {}; expected one of: recipe, faq, job, event, howto, qapage, speakable, course, software",
+                        "unsupported --type {}; expected one of: recipe, faq, job, event, howto, qapage, speakable, course, software, organization, person",
                         other
                     );
                 }
@@ -452,6 +486,7 @@ if args.depth > 0 {
                 OutputFormat::Meta => unreachable!(),
                 OutputFormat::LlmsTxt => unreachable!(),
                 OutputFormat::Atom => unreachable!(),
+                OutputFormat::Rss => unreachable!(),
             };
             (out, fm_meta)
         }
@@ -533,6 +568,7 @@ enum CrawlMode {
     Markdown,
     LlmsTxt,
     Atom,
+    Rss,
 }
 
 /// Recursively fetch and convert same-origin pages up to `depth` link hops.
@@ -573,17 +609,19 @@ async fn crawl_fetch(
     let sem = Arc::new(Semaphore::new(CONCURRENCY));
     let mut visited = HashSet::new();
     let mut llms_pages: Vec<LlmsPageEntry> = Vec::new();
-    let mut atom_entries: Vec<AtomEntry> = Vec::new();
+    let mut feed_entries: Vec<RssEntry> = Vec::new();
     let mut site_title: Option<String> = None;
     let mut site_description: Option<String> = None;
-    let aggregate = matches!(mode, CrawlMode::LlmsTxt | CrawlMode::Atom);
+    let aggregate = matches!(
+        mode,
+        CrawlMode::LlmsTxt | CrawlMode::Atom | CrawlMode::Rss
+    );
 
     // For sitemap-only mode, fetch sitemap.xml and use those URLs as the initial set.
     let mut current_level: Vec<String> = if sitemap_only {
         let sitemap_url = format!(
-            "{}://{}/sitemap.xml",
-            root.scheme(),
-            root.host_str().unwrap_or("")
+            "{}/sitemap.xml",
+            root.origin().unicode_serialization()
         );
         eprintln!("Fetching sitemap: {}", sitemap_url);
         match browser.fetch(&sitemap_url).await {
@@ -719,8 +757,8 @@ async fn crawl_fetch(
                                     description: meta.description,
                                 });
                             }
-                            CrawlMode::Atom => {
-                                atom_entries.push(AtomEntry {
+                            CrawlMode::Atom | CrawlMode::Rss => {
+                                feed_entries.push(AtomEntry {
                                     url: url.clone(),
                                     title,
                                     summary: meta.description,
@@ -804,9 +842,19 @@ async fn crawl_fetch(
             }
         }
         CrawlMode::Atom => {
-            let out = to_atom_feed(start_url, site_title.as_deref(), &atom_entries);
+            let out = to_atom_feed(start_url, site_title.as_deref(), &feed_entries);
             if let Some(dir) = output_dir {
                 let path = format!("{}/feed.atom", dir);
+                std::fs::write(&path, &out)?;
+                eprintln!("  → {}", path);
+            } else {
+                println!("{}", out);
+            }
+        }
+        CrawlMode::Rss => {
+            let out = to_rss_feed(start_url, site_title.as_deref(), &feed_entries);
+            if let Some(dir) = output_dir {
+                let path = format!("{}/rss.xml", dir);
                 std::fs::write(&path, &out)?;
                 eprintln!("  → {}", path);
             } else {
@@ -846,6 +894,7 @@ pub(crate) fn chunk_markdown_by_headings(md: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use web2md::BrowserOptions;
 
     #[test]
     fn chunk_markdown_splits_by_headings() {
@@ -862,5 +911,84 @@ mod tests {
         let md = "# Only Heading\n\nContent here";
         let chunked = chunk_markdown_by_headings(md);
         assert!(!chunked.contains("---"));
+    }
+
+    /// CI-safe fixture test for the crawl aggregate surface: one mock site,
+    /// three aggregate modes, assert the written files end to end.
+    #[tokio::test]
+    async fn crawl_fixture_writes_atom_rss_llms_aggregates() {
+        let mut server = mockito::Server::new_async().await;
+        for (path, body) in [
+            (
+                "/",
+                r#"<html><head><title>Root</title></head><body><a href="/a">Alpha</a> <a href="/b">Beta</a></body></html>"#,
+            ),
+            (
+                "/a",
+                r#"<html><head><title>Alpha</title></head><body><p>Alpha page.</p></body></html>"#,
+            ),
+            (
+                "/b",
+                r#"<html><head><title>Beta</title></head><body><p>Beta page.</p></body></html>"#,
+            ),
+        ] {
+            server
+                .mock("GET", path)
+                .with_status(200)
+                .with_header("content-type", "text/html")
+                .with_body(body)
+                .create_async()
+                .await;
+        }
+
+        let browser = Browser::new(BrowserOptions::default()).unwrap();
+        let base = format!("{}/", server.url());
+        let dir = std::env::temp_dir().join(format!(
+            "web2md-crawl-fixture-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        for mode in [CrawlMode::Atom, CrawlMode::Rss, CrawlMode::LlmsTxt] {
+            crawl_fetch(
+                &browser,
+                &base,
+                1,
+                false,
+                None,
+                &[],
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &[],
+                Some(dir.to_str().unwrap()),
+                false,
+                false,
+                mode,
+            )
+            .await
+            .unwrap();
+        }
+
+        let atom = std::fs::read_to_string(dir.join("feed.atom")).unwrap();
+        assert!(atom.contains(r#"<feed xmlns="http://www.w3.org/2005/Atom">"#));
+        assert!(atom.contains("<title>Alpha</title>"));
+        assert!(atom.contains("<title>Beta</title>"));
+        let rss = std::fs::read_to_string(dir.join("rss.xml")).unwrap();
+        assert!(rss.contains(r#"<rss version="2.0">"#));
+        assert!(rss.contains("<title>Alpha</title>"));
+        assert!(rss.contains("<guid>"));
+        let llms = std::fs::read_to_string(dir.join("llms.txt")).unwrap();
+        assert!(llms.contains("Alpha"));
+        assert!(llms.contains("Beta"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -47,14 +47,15 @@ pub use mcp::{
 #[cfg(feature = "readability")]
 pub use readability::{apply_readability, is_readerable};
 pub use structured::{
-    extract_course, extract_event, extract_faq, extract_howto, extract_job, extract_qapage,
-    extract_recipe, extract_software_application, extract_speakable, StructuredError,
+    extract_course, extract_event, extract_faq, extract_howto, extract_job, extract_organization,
+    extract_person, extract_qapage, extract_recipe, extract_software_application,
+    extract_speakable, StructuredError,
 };
 pub use redact::redact_pii;
 pub use search::{ddg_search_url, parse_ddg_results, results_to_markdown, SearchResult};
 pub use transform::{
     extract_summary, extract_topic, remove_base64_images, to_atom_feed, to_llms_txt,
-    to_llms_txt_site, truncate_by_tokens, AtomEntry, LlmsPageEntry,
+    to_llms_txt_site, to_rss_feed, truncate_by_tokens, AtomEntry, LlmsPageEntry, RssEntry,
 };
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);

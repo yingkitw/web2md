@@ -16,6 +16,21 @@ pub struct ImageEntry {
     pub title: Option<String>,
 }
 
+/// Split a `srcset` attribute into its candidate URLs (drop density descriptors).
+/// `data:` URLs are skipped — their embedded commas break the split.
+fn srcset_candidates(raw: &str) -> Vec<String> {
+    raw
+        .split(',')
+        .map(|part| {
+            part.split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_string()
+        })
+        .filter(|s| !s.is_empty() && !s.starts_with("data:"))
+        .collect()
+}
+
 /// Extract all `<img>` image URLs and CSS `background-image: url(...)` URLs from HTML,
 /// resolving relative URLs against `base_url`. Returns deduplicated images in document order.
 pub fn extract_images(html: &str, base_url: &str) -> Vec<ImageEntry> {
@@ -49,7 +64,49 @@ pub fn extract_images(html: &str, base_url: &str) -> Vec<ImageEntry> {
                         title,
                     });
                 }
+        // `srcset` variants (responsive images) — each distinct URL is an entry.
+        if let Some(srcset) = extract_attr(tag, "srcset") {
+            for url in srcset_candidates(&srcset) {
+                if let Some(resolved) = resolve_url(&url, base_url)
+                    && seen.insert(resolved.clone())
+                {
+                    images.push(ImageEntry {
+                        src: resolved,
+                        alt: None,
+                        title: None,
+                    });
+                }
+            }
+        }
         pos = tag_end;
+    }
+
+    // `<picture><source srcset="...">` image sources (video/audio sources use `src` instead).
+    pos = 0;
+    while pos < html.len() {
+        let Some(start) = find_ci(&html[pos..], "<source") else {
+            break;
+        };
+        let start = pos + start;
+        let Some(end) = html[start..].find('>') else {
+            break;
+        };
+        let tag = &html[start..=start + end];
+        pos = start + end + 1;
+        let Some(srcset) = extract_attr(tag, "srcset") else {
+            continue;
+        };
+        for url in srcset_candidates(&srcset) {
+            if let Some(resolved) = resolve_url(&url, base_url)
+                && seen.insert(resolved.clone())
+            {
+                images.push(ImageEntry {
+                    src: resolved,
+                    alt: None,
+                    title: None,
+                });
+            }
+        }
     }
 
     // Extract background-image URLs from inline style="..." attributes
@@ -166,5 +223,82 @@ fn extract_bg_urls_from_style(style: &str) -> Vec<String> {
         search_from = abs + 4 + trim_len + consumed_after_trim;
     }
     urls
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trafilatura 2.3 #946 parity: one URL across `<img>`, inline `style`,
+    /// and `<style>` blocks must appear exactly once (cross-source dedup).
+    #[test]
+    fn images_dedup_across_img_inline_style_and_style_block() {
+        let html = r#"<html><body>
+        <img src="hero.png" alt="Hero">
+        <div style="background-image: url('hero.png')"></div>
+        <style>footer { background: url("hero.png") }</style>
+        <style>.banner { background-image: url(banner.png) }</style>
+        <img src="./hero.png" alt="Hero again">
+        <img src="banner.png">
+        </body></html>"#;
+        let imgs = extract_images(html, "https://example.com/page");
+        let srcs: Vec<&str> = imgs.iter().map(|i| i.src.as_str()).collect();
+        assert_eq!(imgs.len(), 2, "got: {srcs:?}");
+        assert!(srcs.contains(&"https://example.com/hero.png"));
+        assert!(srcs.contains(&"https://example.com/banner.png"));
+        // Alt preserved from the first <img> that introduced the URL.
+        let hero = imgs
+            .iter()
+            .find(|i| i.src.ends_with("hero.png"))
+            .expect("hero entry");
+        assert_eq!(hero.alt.as_deref(), Some("Hero"));
+    }
+
+    /// Distinct URLs must not be collapsed by the dedup.
+    #[test]
+    fn images_keep_distinct_urls() {
+        let html = r#"<html><body>
+        <img src="a.png"><img src="b.png">
+        </body></html>"#;
+        let imgs = extract_images(html, "https://example.com/page");
+        assert_eq!(imgs.len(), 2);
+    }
+
+    /// #80: `srcset` density variants and `<picture><source>` sources are extracted.
+    #[test]
+    fn images_extract_srcset_and_picture_sources() {
+        let html = r#"<html><body>
+        <img src="base.png" srcset="small.png 480w, large.png 1080w">
+        <picture>
+          <source srcset="photo.webp" type="image/webp">
+          <img src="photo.png" alt="Photo">
+        </picture>
+        <img src="data:image/png;base64,AAAA,BBBB">
+        </body></html>"#;
+        let imgs = extract_images(html, "https://example.com/page");
+        let srcs: Vec<&str> = imgs.iter().map(|i| i.src.as_str()).collect();
+        assert!(srcs.contains(&"https://example.com/base.png"));
+        assert!(srcs.contains(&"https://example.com/small.png"));
+        assert!(srcs.contains(&"https://example.com/large.png"));
+        assert!(srcs.contains(&"https://example.com/photo.webp"));
+        assert!(srcs.contains(&"https://example.com/photo.png"));
+        assert_eq!(imgs.len(), 5, "got: {srcs:?}");
+        // data: URLs skipped (comma-split artifacts), alt taken from the <img>.
+        assert!(!srcs.iter().any(|s| s.starts_with("data:")));
+        assert_eq!(
+            imgs.iter().find(|i| i.src.ends_with("photo.png")).and_then(|i| i.alt.clone()).as_deref(),
+            Some("Photo")
+        );
+    }
+
+    /// A srcset URL identical to `src` is deduplicated, not emitted twice.
+    #[test]
+    fn images_srcset_dedupes_against_src() {
+        let html = r#"<img src="hero.png" srcset="hero.png 1x, hero@2x.png 2x">"#;
+        let imgs = extract_images(html, "https://example.com/page");
+        assert_eq!(imgs.len(), 2);
+        assert!(imgs[0].src.ends_with("hero.png"));
+        assert!(imgs[1].src.ends_with("hero@2x.png"));
+    }
 }
 

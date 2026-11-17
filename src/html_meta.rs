@@ -149,13 +149,36 @@ pub(crate) fn extract_link_rel(html: &str, rel: &str) -> Option<String> {
     None
 }
 
-fn link_rel_matches(tag: &str, rel: &str) -> bool {
-    let Some(rel_attr) = extract_attr(tag, "rel") else {
+fn link_rel_matches(tag: &str, rel: &str) -> bool {    let Some(rel_attr) = extract_attr(tag, "rel") else {
         return false;
     };
     rel_attr
         .split_whitespace()
         .any(|part| part.eq_ignore_ascii_case(rel))
+}
+
+/// Extract the `href` of the first `<a rel="…rel…">` anchor (license links etc.).
+pub(crate) fn extract_anchor_rel(html: &str, rel: &str) -> Option<String> {
+    let rel_lower = rel.to_ascii_lowercase();
+    let mut i = 0;
+    while i < html.len() {
+        if let Some(pos) = find_ci(&html[i..], "<a ") {
+            let pos = i + pos;
+            let Some(tag_end) = html[pos..].find('>') else {
+                break;
+            };
+            let tag_end = pos + tag_end;
+            let tag = &html[pos..=tag_end];
+            if link_rel_matches(tag, &rel_lower)
+                && let Some(href) = extract_attr(tag, "href") {
+                    return Some(href);
+                }
+            i = tag_end + 1;
+        } else {
+            break;
+        }
+    }
+    None
 }
 
 /// Extract `lang` from the opening `<html>` tag.

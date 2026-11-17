@@ -56,7 +56,7 @@ When URL filtering is enabled, Web2MD also loads `~/.web2md/blacklist.txt` if it
 - Pages at each BFS level are fetched **in parallel** (up to 10 concurrent requests)
 - External links, `mailto:`, fragments, and blacklisted URLs are not followed
 - Output: `--output <dir>` writes one `.md` file per page; without `--output`, pages are printed separated by `---` headers
-- Requires `--format markdown` (default), `--format llms-txt`, or `--format atom` (`--format json` / `--format html` are incompatible with `--depth`)
+- Requires `--format markdown` (default), `--format llms-txt`, `--format atom`, or `--format rss` (`--format json` / `--format html` are incompatible with `--depth`)
 - **`--sitemap-only`**: with `--depth > 0`, fetch `{origin}/sitemap.xml`, recursively expand any nested `<sitemapindex>` documents, and convert those URLs only — do not follow in-page links (≈ Firecrawl sitemap-only crawl)
 - **`--max-pages N`**: stop after converting N pages (applies to both link-following and sitemap-only crawls)
 - **`--path-prefix` / `--path-exclude`**: restrict crawl targets by URL path prefix (e.g. `--path-prefix /docs --path-exclude /docs/internal`)
@@ -111,6 +111,7 @@ web2md fetch <URL> [FLAGS]
   --format meta        Output Open Graph / Twitter / Dublin Core / standard meta as JSON
   --format llms-txt    Output single-page llms.txt-style summary (title, description, links)
   --format atom        Output Atom 1.0 feed (single page, or multi-page with --depth / --sitemap-only)
+  --format rss         Output RSS 2.0 feed (single page, or multi-page with --depth / --sitemap-only)
   --type TYPE          Domain extractor: recipe | faq | job | event | howto | qapage | speakable | course | software
   --topic QUERY        Keep only paragraphs relevant to this query (LLM-free; ≈ Firecrawl `highlights`)
   --summary N          Return top-N sentences by TF-IDF + positional scoring (LLM-free; ≈ Firecrawl `summary`)
@@ -118,6 +119,7 @@ web2md fetch <URL> [FLAGS]
   --headless           Render the page with a real headless Chrome / Chromium (requires --features headless)
   --chrome-path PATH   Path to a Chrome / Chromium binary (used with --headless)
   --wait-for-selector SEL  Wait for CSS selector after headless navigation (≈ Firecrawl waitFor)
+  --wait-ms MS         Wait this many milliseconds after headless navigation before rendering
   --scroll [N]         Scroll to bottom N times for lazy-load (requires --headless; default 3)
   --lang CODE          Require page language to match ISO 639-1 or 639-3 (e.g. en, eng)
   --precision           Favor extraction precision (less noise, stricter main-content)
@@ -296,7 +298,7 @@ When a `format` is requested, the response includes a `result` field containing 
 }
 ```
 
-`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `categories`, `excerpt`, `canonical_url`, `language`, `extraction_quality`, `page_type`, and `fingerprint` are optional — omitted when the page has no corresponding meta tags or structured data. Title falls back to Dublin Core `DC.title` / `dcterms.title` when `<title>` is absent. `author` is extracted from `<meta name="author">`, JSON-LD `author` (string or `{"name":"..."}` object), or Dublin Core `DC.creator` / `dcterms.creator`. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, JSON-LD `datePublished`, or Dublin Core `DC.date` / `dcterms.date` (in priority order). `description` also falls back to `DC.description` / `dcterms.description`. `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `categories` is extracted from multiple `<meta property="article:section">` tags or JSON-LD `articleSection` (string or array). `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`; when those are absent, a stopword heuristic detects an ISO 639-3 code from extracted text (minimum length and score gates). `extraction_quality` is a 0.0–1.0 confidence score from Markdown length, structure, semantic HTML, metadata, and link density. `page_type` is one of `article`, `forum`, `product`, or `page`. `fingerprint` is a 64-bit simhash of extracted plain text (16 hex chars) for near-duplicate detection. CLI `--lang CODE` rejects pages whose language does not match the requested ISO 639-1 or 639-3 code.
+`description`, `author`, `published_date`, `image`, `headline`, `site_name`, `keywords`, `categories`, `excerpt`, `canonical_url`, `language`, `extraction_quality`, `page_type`, and `fingerprint` are optional — omitted when the page has no corresponding meta tags or structured data. Title falls back to Dublin Core `DC.title` / `dcterms.title` when `<title>` is absent. `author` is extracted from `<meta name="author">`, JSON-LD `author` (string or `{"name":"..."}` object), or Dublin Core `DC.creator` / `dcterms.creator`. `published_date` is extracted from `<meta property="article:published_time">`, `<time datetime="...">`, JSON-LD `datePublished`, or Dublin Core `DC.date` / `dcterms.date` (in priority order). `description` also falls back to `DC.description` / `dcterms.description`. `image` is extracted from `<meta property="og:image">` or JSON-LD `image` (string, `{"url":"..."}` object, or array — first item used). `headline` is extracted from JSON-LD `headline`. `site_name` is extracted from `<meta property="og:site_name">`. `keywords` is extracted from multiple `<meta property="article:tag">` tags, `<meta name="keywords">` (comma-separated), or JSON-LD `keywords` (string or array), in priority order. `categories` is extracted from multiple `<meta property="article:section">` tags or JSON-LD `articleSection` (string or array). `excerpt` is generated from the first substantive `<p>` paragraph (≥40 chars, truncated to ~160). `canonical_url` comes from `<meta property="og:url">` or `<link rel="canonical">`. `license` comes from `<link rel="license">` or `<a rel="license">` (link preferred; Trafilatura 2.3 license-links parity). `language` comes from `<html lang>`, `og:locale`, or JSON-LD `inLanguage`; when those are absent, a stopword heuristic detects an ISO 639-3 code from extracted text (minimum length and score gates). `extraction_quality` is a 0.0–1.0 confidence score from Markdown length, structure, semantic HTML, metadata, and link density. `page_type` is one of `article`, `forum`, `product`, or `page`. `fingerprint` is a 64-bit simhash of extracted plain text (16 hex chars) for near-duplicate detection. CLI `--lang CODE` rejects pages whose language does not match the requested ISO 639-1 or 639-3 code.
 
 ### CLI `--format json` Output
 
@@ -314,6 +316,7 @@ When a `format` is requested, the response includes a `result` field containing 
   "categories": ["Technology", "Open Source"],
   "excerpt": "Opening paragraph text truncated to ~160 characters…",
   "canonical_url": "https://example.com/article",
+  "license": "https://creativecommons.org/licenses/by/4.0/",
   "language": "en",
   "extraction_quality": 0.86,
   "page_type": "article",
@@ -405,14 +408,16 @@ Trafilatura-style plain XML:
    - Extract main content if `main_content` is true or the profile prefers it (Trafilatura-style fallback: score semantic tags with bonus, top-level blocks, paragraph clusters; pick best candidate; strip boilerplate; fall back to JSON-LD `articleBody` / `description` or Open Graph description when heuristics score ≤ 100)
    - Strip `<script>`, `<style>`, `<iframe>`
    - Strip `<nav>`, `<footer>`, `<aside>`, `<noscript>`, `<form>`, `<header>` (unless `keep_header`), HTML comments
-   - Strip boilerplate elements by `class`/`id` keywords (cookie, consent, gdpr, social, share, breadcrumb, newsletter, subscribe, popup, modal, overlay, toolbar, advert, related-posts, etc.)
+   - Strip boilerplate elements by `class`/`id` keywords (cookie, consent, gdpr, social, share, breadcrumb, newsletter, subscribe, popup, modal, overlay, toolbar, flash, advert, related-posts, etc.); strip any element with the HTML `hidden` attribute (never-rendered chrome)
    - Strip elements matching `--exclude-selector` (`.class` or `#id`)
    - Extract code languages from `<code class="language-xxx">`
    - Strip `<img>` unless `include_images` is true or the product profile prefers images
+   - MathML TeX annotations (`<annotation encoding="application/x-tex">`) render as `$$…$$` display math (Trafilatura 2.3 parity; non-TeX annotations stay plain text)
    - **html_to_md::parse_html()** — DOM walk via `scraper`/html5ever:
      - Headings, paragraphs, links, images, lists, tables, blockquotes, inline bold/italic
      - HTML entity decoding (`&amp;`, `&#169;`, etc.)
      - Markdown control-character escaping in plain text (`*`, `#`, `_`, etc.)
+     - Ordered-list markers at line start (`1.`, `123)`) are escaped so numbered paragraphs stay paragraphs (1–9 digits, CommonMark rule); `>` is single-escaped everywhere
      - Tolerant of malformed/unclosed tags (html5ever tree repair)
    - Inject languages into opening fenced code blocks only (` ```rust `; closing fences stay bare)
    - Deduplicate repeated paragraph-level blocks (>20 chars, first occurrence kept)
@@ -459,6 +464,8 @@ Deterministic rendering of JSON-LD blocks (no LLM, no schema to define):
 - `--type job`: JSON-LD `JobPosting` → title, company, location, salary (formatted as `amount currency /unit`), date_posted, apply URL, description. Frontmatter + labeled body.
 - `--type event`: JSON-LD `Event` → name, start/end date, venue (name + address), ticket URL, price.
 - `--type howto`: JSON-LD `HowTo` → steps, tools, supplies.
+- `--type organization`: JSON-LD `Organization` (`Corporation` / `NGO` / `EducationalOrganization` subtypes) → entity card: name, URL, logo, email, phone, address, founding date, employee count, `sameAs` links, description.
+- `--type person`: JSON-LD `Person` → entity card: name, job title, employer (`worksFor`), URL, email, `sameAs` links, description.
 
 When the JSON-LD is missing or ambiguous (multiple distinct blocks of the same type), the extractor returns `None` or `Err`; the CLI falls back to plain Markdown conversion with a stderr notice.
 
@@ -501,6 +508,7 @@ No LLM, fully deterministic (≈ Firecrawl `links` format, free).
 `extract_images` walks all `<img>` tags and CSS `background-image` / `background: url(...)` references (inline `style` attributes and `<style>` blocks) and emits a JSON array of `{src, alt?, title?}` objects:
 
 - Relative `src` URLs are resolved to absolute using the page URL as base.
+- `<img srcset>` density variants and `<picture><source srcset>` image sources are extracted as their own entries (descriptors dropped; `data:` candidates skipped — their embedded commas break the split).
 - `data:` URLs are skipped.
 - Images are deduplicated by `src` (first occurrence kept) in document order.
 - `alt` and `title` are included when present and non-empty (CSS backgrounds have neither).
@@ -641,6 +649,10 @@ With `--depth N` (or `--sitemap-only`), emits a **multi-page site index** instea
 
 Emits an Atom 1.0 XML feed. Single-page mode creates one `<entry>` from page title/description/`published_date`. With `--depth` / `--sitemap-only`, each crawled page becomes an entry (metadata-only). Writes `feed.atom` under `--output DIR` when set.
 
+## RSS Feed (`--format rss`)
+
+Emits an RSS 2.0 XML feed (`<rss version="2.0">` with one `<channel>`). Single-page mode creates one `<item>` (title / link / guid / optional `pubDate` + `description`) from page metadata; multi-page mode (`--depth` / `--sitemap-only`) emits one item per crawled page. Writes `rss.xml` under `--output DIR` when set. Dates are echoed verbatim from page metadata (no RFC 2822 reformatting).
+
 ## Cookie File (`--cookie-file`)
 
 `--cookie-file PATH` loads cookies from a simple `name=value` file or a Netscape cookie jar. Lines starting with `#` are ignored (except Netscape `#HttpOnly_` rows). Merged with repeatable `--cookie` flags. Available on `fetch`, `browse`, and `batch`.
@@ -705,6 +717,9 @@ Every fetch sends browser-like defaults unless overridden with `--header`:
 
 - URLs are resolved to absolute and deduplicated.
 - `--same-origin` filters to only URLs on the same scheme + host as the target.
+- `--search QUERY` keeps only URLs (or link text) containing `QUERY` case-insensitively (≈ Firecrawl `/map?search=`).
+- `--limit N` caps the number of returned URLs (≈ Firecrawl `/map?limit=`).
+- `--sitemap` merges `sitemap.xml` URLs from the same origin into the result (deduped; ≈ Firecrawl `/map` `sitemap="include"`).
 - `--json` outputs a JSON array of URL strings; default is one URL per line.
 
 No LLM, fully deterministic (≈ Firecrawl `/map` endpoint, free).
@@ -763,7 +778,7 @@ When `web2md` is built with `--features headless`, the [`headless_chrome`] DevTo
 
 1. Sets `LaunchOptions::path` from `--chrome-path` when given, otherwise relies on `headless_chrome::default_executable()` (system install or `CHROME` env var).
 2. Disables the OS sandbox by default — most CI / container hosts lack the user-namespace setup Chrome's sandbox needs; users who want it can re-enable it via `CHROME_DEVEL_SANDBOX`.
-3. Calls `Browser::new`, opens a new tab, navigates, waits for navigation to settle, optionally `wait_for_element(selector)` when `--wait-for-selector` is set (≈ Firecrawl `waitFor`), optionally scrolls to bottom `--scroll N` times (400ms between) for lazy-load, and returns the rendered HTML.
+3. Calls `Browser::new`, opens a new tab, navigates, waits for navigation to settle, optionally `wait_for_element(selector)` when `--wait-for-selector` is set (≈ Firecrawl `waitFor`), optionally sleeps `--wait-ms` milliseconds before rendering, optionally scrolls to bottom `--scroll N` times (400ms between) for lazy-load, and returns the rendered HTML.
 
 The work is run on a `tokio::task::spawn_blocking` thread because `headless_chrome` is a synchronous library. Without the feature compiled in, `render_url` returns a clear "rebuild with `--features headless`" error so the CLI fails fast with an actionable message.
 

@@ -5,6 +5,7 @@ use serde_json::Value as JsonValue;
 use crate::html_meta::{
     collect_meta_property_values, extract_attr, extract_html_lang, extract_json_ld_field,
     extract_json_ld_string_list, extract_link_rel, extract_meta_content, iter_json_ld_blocks,
+    extract_anchor_rel,
 };
 use crate::html_util::{find_ci, strip_html_tags};
 use crate::{Browser, BrowserOptions, ConvertOptions, PageToMarkdown};
@@ -106,6 +107,9 @@ pub struct PageMetadata {
     pub excerpt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canonical_url: Option<String>,
+    /// License link from `rel="license"` (`<link>` or `<a>` href).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
     /// Extraction confidence in `0.0..=1.0` (set when Markdown is available).
@@ -172,6 +176,9 @@ impl PageMetadata {
         }
         if let Some(ref canonical) = self.canonical_url {
             lines.push(format!("canonical_url: \"{}\"", escape_yaml_string(canonical)));
+        }
+        if let Some(ref license) = self.license {
+            lines.push(format!("license: \"{}\"", escape_yaml_string(license)));
         }
         if let Some(ref language) = self.language {
             lines.push(format!("language: \"{}\"", escape_yaml_string(language)));
@@ -660,6 +667,8 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
     let excerpt = extract_excerpt(html);
     let canonical_url = extract_meta_content(html, "property", "og:url")
         .or_else(|| extract_link_rel(html, "canonical"));
+    let license = extract_link_rel(html, "license")
+        .or_else(|| extract_anchor_rel(html, "license"));
     let language = extract_language(html);
     PageMetadata {
         title,
@@ -673,6 +682,7 @@ pub fn extract_metadata(html: &str) -> PageMetadata {
         categories,
         excerpt,
         canonical_url,
+        license,
         language,
         extraction_quality: None,
         page_type: None,
@@ -1462,6 +1472,30 @@ mod tests {
         );
     }
 
+    /// #82: `rel="license"` resolves from `<link>` or `<a>` hrefs (link preferred).
+    #[test]
+    fn extract_metadata_license_from_link_or_anchor() {
+        let link = r#"<html><head><link rel="license" href="https://example.com/license"></head><body></body></html>"#;
+        let meta = extract_metadata(link);
+        assert_eq!(meta.license, Some("https://example.com/license".to_string()));
+
+        let anchor = r#"<html><head></head><body><a rel="license" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a><p>Content follows here.</p></body></html>"#;
+        let meta2 = extract_metadata(anchor);
+        assert_eq!(
+            meta2.license,
+            Some("https://creativecommons.org/licenses/by/4.0/".to_string())
+        );
+    }
+
+    /// License reaches YAML frontmatter.
+    #[test]
+    fn frontmatter_includes_license() {
+        let html = r#"<html><head><title>Licensed</title><link rel="license" href="https://example.com/license"></head><body></body></html>"#;
+        let meta = extract_metadata(html);
+        let fm = meta.to_frontmatter(None).expect("frontmatter");
+        assert!(fm.contains("license: \"https://example.com/license\""));
+    }
+
     #[test]
     fn extract_metadata_language_from_html_lang() {
         let html = r#"<html lang="en"><body><p>Hello world with enough text to become an excerpt field here today.</p></body></html>"#;
@@ -1664,6 +1698,7 @@ mod tests {
             categories: Some(vec!["Technology".to_string(), "Rust".to_string()]),
             excerpt: Some("Short summary".to_string()),
             canonical_url: Some("https://example.com/page".to_string()),
+            license: Some("https://creativecommons.org/licenses/by/4.0/".to_string()),
             language: Some("en".to_string()),
             extraction_quality: Some(0.85),
             page_type: Some("article".to_string()),

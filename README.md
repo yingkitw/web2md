@@ -139,12 +139,12 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 - **In-house HTML-to-Markdown** converter via `scraper`/html5ever
 - **Real-time streaming** — download progress on stderr + incremental Markdown blocks to stdout as they are converted
 - **Optional Mozilla Readability.js** article isolation (`--features readability --readability`)
-- **Optional headless Chrome** for SPAs (`--features headless`, `--wait-for-selector`, `--scroll`)
+- **Optional headless Chrome** for SPAs (`--features headless`, `--wait-for-selector`, `--wait-ms`, `--scroll`)
 - **Main-content extraction**, noise stripping, content deduplication
 - **Boilerplate element stripping** — removes cookie banners, social-share widgets, breadcrumbs, newsletter popups, and related-posts blocks by `class`/`id` keyword matching (deterministic, no LLM)
 - **Markdown noise cleanup** — strips Wikipedia citation markers, `[edit]` section links, `[File:…]` links, and unwraps heading self-anchor links for cleaner output
 - **Query-focused extraction** (`--topic`), extractive summarization (`--summary`), token-budget truncation (`--max-tokens`)
-- **Recipe/FAQ/QAPage/Course/Software/Job/Event/HowTo/Speakable** JSON-LD extractors (`--type`)
+- **Recipe/FAQ/QAPage/Course/Software/Job/Event/HowTo/Speakable/Organization/Person** JSON-LD extractors (`--type`)
 - **Persistent file cache**, per-host rate limiting, optional `robots.txt` respect
 - **Recursive crawl** (parallel BFS, up to 10 concurrent), sitemap discovery, recursive sitemap index expansion
 - **Links**, **images**, **product**, and **branding** extraction (`--format`)
@@ -160,6 +160,7 @@ web2md fetch https://example.com --frontmatter   # YAML frontmatter on Markdown
 - **Meta dump** (`--format meta`) — Open Graph / Twitter / Dublin Core / standard meta as JSON
 - **llms.txt summary** (`--format llms-txt`) — title, description, and links; with `--depth` / `--sitemap-only` builds a multi-page site index
 - **Atom feed** (`--format atom`) — single-page or crawl/sitemap Atom 1.0 feed
+- **RSS feed** (`--format rss`) — single-page or crawl/sitemap RSS 2.0 feed
 - **Exclude tags** (`--exclude-tags`) — strip named HTML elements before conversion (≈ Firecrawl `excludeTags`)
 - **Include tags** (`--include-tags`) — keep only named HTML elements (≈ Firecrawl `includeTags`)
 - **Links/images summary** (`--links-summary`, `--images-summary`) — append deduplicated lists to Markdown

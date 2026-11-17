@@ -46,6 +46,8 @@ pub(crate) enum OutputFormat {
     LlmsTxt,
     /// Emit an Atom 1.0 feed (single page, or multi-page with --depth / --sitemap-only)
     Atom,
+    /// Emit an RSS 2.0 feed (single page, or multi-page with --depth / --sitemap-only)
+    Rss,
 }
 
 /// Structured JSON output for `--format json` CLI flag.
@@ -205,7 +207,7 @@ pub(crate) struct FetchArgs {
     /// Extract an extactive summary of this many sentences (≈ Firecrawl `summary`)
     #[arg(long)]
     pub(crate) summary: Option<usize>,
-    /// Force structured extractor: `recipe` / `faq` / `job` / `event` / `howto` (LLM-free)
+    /// Force structured extractor: `recipe` / `faq` / `job` / `event` / `howto` / `organization` / `person` (LLM-free)
     #[arg(long = "type")]
     pub(crate) r#type: Option<String>,
     /// Persist fetched pages as JSON files under this directory; survives restarts
@@ -248,6 +250,9 @@ pub(crate) struct FetchArgs {
     /// Wait for this CSS selector after headless navigation (≈ Firecrawl waitFor)
     #[arg(long, requires = "headless")]
     pub(crate) wait_for_selector: Option<String>,
+    /// Wait this many milliseconds after headless navigation before rendering (requires --headless)
+    #[arg(long, requires = "headless")]
+    pub(crate) wait_ms: Option<u64>,
     /// Scroll to bottom N times to trigger lazy-load (requires --headless; default 3 if flag alone)
     #[arg(long, requires = "headless", num_args = 0..=1, default_missing_value = "3")]
     pub(crate) scroll: Option<u32>,
@@ -408,6 +413,15 @@ pub(crate) enum Commands {
         /// Only list URLs on the same origin as the target
         #[arg(long)]
         same_origin: bool,
+        /// Only include URLs (or link text) containing this query, case-insensitive (≈ Firecrawl /map?search=)
+        #[arg(long)]
+        search: Option<String>,
+        /// Cap the number of discovered URLs returned (≈ Firecrawl /map limit)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Merge sitemap.xml URLs from the same origin into the result (≈ Firecrawl /map sitemap="include")
+        #[arg(long)]
+        sitemap: bool,
         /// Output as JSON array instead of one URL per line
         #[arg(long)]
         json: bool,
@@ -525,5 +539,25 @@ mod tests {
         let name = url_to_filename("https://example.com/search?q=rust&page=2");
         assert!(name.starts_with("example.com_search"));
         assert!(name.ends_with(".md"));
+    }
+
+    #[test]
+    fn wait_ms_parses_with_headless() {
+        let cli = Cli::try_parse_from([
+            "web2md", "fetch", "https://example.com", "--headless", "--wait-ms", "750",
+        ])
+        .expect("parse");
+        let Some(Commands::Fetch(fetch)) = cli.command else {
+            panic!("expected fetch command");
+        };
+        assert_eq!(fetch.wait_ms, Some(750));
+    }
+
+    #[test]
+    fn wait_ms_requires_headless() {
+        let result = Cli::try_parse_from([
+            "web2md", "fetch", "https://example.com", "--wait-ms", "750",
+        ]);
+        assert!(result.is_err(), "--wait-ms without --headless must fail to parse");
     }
 }

@@ -144,6 +144,7 @@ impl PageToMarkdown {
             "overlay",
             "toolbar",
             "scrollbar",
+            "flash",
             "advert",
             "ad-block",
             "adsense",
@@ -181,7 +182,12 @@ impl PageToMarkdown {
                                 || tag_content.contains(&format!("class=\"{kw}-"))
                                 || tag_content.contains(&format!("class='{kw}-"))
                                 || tag_content.contains(&format!("id=\"{kw}-"))
-                                || tag_content.contains(&format!("id='{kw}-")));
+                                || tag_content.contains(&format!("id='{kw}-")))
+                            // The HTML `hidden` attribute means never-rendered content
+                            // (space prefix avoids matching `aria-hidden`).
+                            || tag_content.contains(" hidden>")
+                            || tag_content.contains(" hidden ")
+                            || tag_content.contains(" hidden=");
                         if is_boilerplate {
                             found_pos = Some(start);
                             break;
@@ -219,6 +225,13 @@ impl PageToMarkdown {
     /// - `[File:...]` links (Wikipedia file description pages)
     pub(super) fn clean_markdown_noise(md: &str) -> String {
         let mut result = md.to_string();
+
+        // Skip-to-content navigation links (GitHub-style accessibility chrome):
+        // [Skip to content](#start-of-content)
+        let skip_link_re = regex::Regex::new(
+            r"(?i)\[\s*skip to (main )?content\s*\]\(#[^)]*\)"
+        ).unwrap();
+        result = skip_link_re.replace_all(&result, "").to_string();
 
         // Remove Wikipedia-style citation markers: ^([[ N ]](#cite_note-...))
         // The pattern is: ^ ( [[ N ]] (#cite_note-...) )

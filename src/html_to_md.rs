@@ -157,6 +157,18 @@ fn convert_element(
             convert_children(element, out, in_pre, in_code, in_anchor);
             out.push_str("\n\n");
         }
+        // MathML TeX annotation → `$$…$$` (Trafilatura 2.3 LaTeX-math parity).
+        // Without `encoding="application/x-tex"`, falls through to plain text.
+        "annotation" | "annotation-xml"
+            if element.value().attr("encoding").is_some_and(|e| e.eq_ignore_ascii_case("application/x-tex")) =>
+        {
+            ensure_inline_break(out);
+            let mut inner = String::new();
+            convert_children(element, &mut inner, in_pre, true, in_anchor);
+            out.push_str("$$");
+            out.push_str(inner.trim());
+            out.push_str("$$");
+        }
         "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
             out.push_str("\n\n");
             let mut inner = String::new();
@@ -417,7 +429,8 @@ fn at_line_start(out: &str) -> bool {
 
 /// Escape characters that would be interpreted as Markdown syntax in plain text.
 fn escape_markdown_text(text: &str, at_line_start: bool) -> String {
-    let line_start_special = ['=', '>', '+', '-', '#'];
+    // `>` is escaped by the main loop below — including it here would double it.
+    let line_start_special = ['=', '+', '-', '#'];
     let mut result = String::with_capacity(text.len() + 4);
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
@@ -429,6 +442,15 @@ fn escape_markdown_text(text: &str, at_line_start: bool) -> String {
         }
         if i < chars.len() && line_start_special.contains(&chars[i]) {
             result.push('\\');
+        } else if let Some(marker_len) = ordered_list_marker(&chars[i..]) {
+            // `1.` / `1)` at line start begins an ordered list in CommonMark —
+            // escape the delimiter so numbered paragraphs stay paragraphs.
+            for &d in &chars[i..i + marker_len - 1] {
+                result.push(d);
+            }
+            result.push('\\');
+            result.push(chars[i + marker_len - 1]);
+            i += marker_len;
         }
     }
 
@@ -441,6 +463,27 @@ fn escape_markdown_text(text: &str, at_line_start: bool) -> String {
         i += 1;
     }
     result
+}
+
+/// If `chars` starts with an ordered-list marker (1–9 digits then `.` or `)`
+/// followed by whitespace or end of text), return the marker's length.
+fn ordered_list_marker(chars: &[char]) -> Option<usize> {
+    let mut n = 0;
+    while n < chars.len() && chars[n].is_ascii_digit() {
+        n += 1;
+    }
+    if n == 0 || n > 9 {
+        return None;
+    }
+    let delimiter = *chars.get(n)?;
+    if delimiter != '.' && delimiter != ')' {
+        return None;
+    }
+    match chars.get(n + 1) {
+        None => Some(n + 1),
+        Some(&c) if c.is_whitespace() => Some(n + 1),
+        _ => None,
+    }
 }
 
 fn collapse_whitespace(text: &str) -> String {
@@ -599,6 +642,25 @@ mod tests {
         assert!(md.contains(r"\# not a heading"));
     }
 
+    /// #85: numbered paragraphs stay paragraphs (CommonMark ordered-list escape).
+    #[test]
+    fn escapes_ordered_list_marker_at_line_start() {
+        let md = parse_html("<p>1. First step</p><p>123) Fourth variant</p><p>3.5 decimals stay</p><p>mid 1. text ok</p><p>1234567890. ten digits stay</p>");
+        assert!(md.contains(r"1\. First step"));
+        assert!(md.contains(r"123\) Fourth variant"));
+        assert!(md.contains("3.5 decimals stay"));
+        assert!(md.contains("mid 1. text ok"));
+        assert!(md.contains("1234567890. ten digits stay"));
+    }
+
+    /// #85: `>` at line start is single-escaped, not doubled.
+    #[test]
+    fn single_escapes_greater_than_at_line_start() {
+        let md = parse_html("<p>&gt; quote start</p>");
+        assert!(md.contains(r"\> quote start"));
+        assert!(!md.contains(r"\\>"));
+    }
+
     #[test]
     fn escapes_underscores_in_text() {
         let md = parse_html("<p>use __init__ method</p>");
@@ -619,6 +681,37 @@ mod tests {
         assert!(!md.contains(r"\*args"));
     }
 
+    /// Trafilatura 2.3.1 #954 parity: brackets inside inline code in **link text**
+    /// stay unescaped so the surrounding link renders correctly.
+    #[test]
+    fn link_text_with_inline_code_keeps_brackets() {
+        let md = parse_html(r#"<a href="/x">see <code>[1]</code> note</a>"#);
+        assert!(md.contains("`[1]`"));
+        assert!(md.contains("[see `[1]` note](/x)"));
+        assert!(!md.contains(r"\[1\]"));
+    }
+
+    /// Trafilatura 2.3 LaTeX-math parity: TeX annotations render as `$$…$$`.
+    #[test]
+    fn tex_annotation_renders_as_display_math() {
+        let md = parse_html(
+            r#"<p>Velocity: <math><semantics><annotation encoding="application/x-tex">v = s/t</annotation></semantics></math> done.</p>"#,
+        );
+        assert!(md.contains("$$v = s/t$$"));
+        assert!(md.contains("Velocity:"));
+        assert!(md.contains("done."));
+    }
+
+    /// Non-TeX annotations stay plain text.
+    #[test]
+    fn plain_annotation_stays_plain_text() {
+        let md = parse_html(
+            r#"<p>Value: <math><semantics><annotation encoding="application/mathml-content">x</annotation></semantics></math>.</p>"#,
+        );
+        assert!(md.contains("Value: x"));
+        assert!(!md.contains("$$"));
+    }
+
     #[test]
     fn handles_unclosed_tags() {
         let md = parse_html("<div><p>First paragraph<p>Second paragraph</div>");
@@ -626,6 +719,7 @@ mod tests {
         assert!(md.contains("Second paragraph"));
     }
 
+    #[test]
     #[test]
     fn handles_mismatched_close_tags() {
         let md = parse_html("<p>Content</div><p>More content</p>");
